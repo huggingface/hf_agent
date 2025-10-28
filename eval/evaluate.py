@@ -1,9 +1,14 @@
-import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict
 
 import litellm
-from models import Correctness, JudgementResult
+from models import (
+    Correctness,
+    EvaluatedQuestionAndSolution,
+    JudgementResult,
+    QuestionAndSolution,
+)
 
 # from: https://github.com/centerforaisafety/hle/blob/7b6be5aad6f9b43af3857de7867f3b52f6e4acb3/hle_eval/run_judge_results.py#L16-L33
 GRADER_TEMPLATE = """
@@ -30,12 +35,11 @@ confidence: The extracted confidence score between 0|%| and 100|%| from [respons
 CHOICE_STRINGS = ["yes", "no"]
 
 
-async def evaluate_single_response(
+def evaluate_single_response(
     question: str,
     response: str,
     correct_answer: str,
     model: str = "gpt-4o-mini",
-    semaphore: asyncio.Semaphore = None,
 ) -> Dict[str, Any]:
     """
     Evaluate a single response against the ground truth using LLM as judge.
@@ -45,33 +49,16 @@ async def evaluate_single_response(
         response: The response to evaluate
         correct_answer: The ground truth answer
         model: The LLM model to use for judging
-        semaphore: Semaphore for rate limiting
 
     Returns:
         Dictionary containing the judgement result and metadata
     """
-    if semaphore:
-        async with semaphore:
-            return await _evaluate_single_response_impl(
-                question, response, correct_answer, model
-            )
-    else:
-        return await _evaluate_single_response_impl(
-            question, response, correct_answer, model
-        )
-
-
-async def _evaluate_single_response_impl(
-    question: str, response: str, correct_answer: str, model: str
-) -> Dict[str, Any]:
-    """Internal implementation of single response evaluation"""
-
     prompt = GRADER_TEMPLATE.format(
         question=question, response=response, correct_answer=correct_answer
     )
 
     # Use litellm with structured output
-    response = await litellm.acompletion(
+    llm_response = litellm.completion(
         model=model,
         messages=[
             {
@@ -86,12 +73,12 @@ async def _evaluate_single_response_impl(
 
     # Parse structured output
     result: JudgementResult = JudgementResult.model_validate_json(
-        response.choices[0].message.content
+        llm_response.choices[0].message.content
     )
     return result
 
 
-async def evaluate_dataset(
+def evaluate_dataset(
     input_file: str,
     eval_file: str,
     output_file: str = "evaluation_results.jsonl",
@@ -106,65 +93,77 @@ async def evaluate_dataset(
         input_file: Path to input JSONL file with QA pairs
         output_file: Path to output JSONL file for results
         model: The LLM model to use for judging
-        max_concurrent: Maximum number of concurrent API calls
+        max_concurrent: Maximum number of concurrent threads
         limit: Optional limit on number of examples to evaluate
     """
-    to_evaluate = [json.loads(line) for line in open(input_file, "r")]
+    # Load input data as proper models
+    to_evaluate = [
+        QuestionAndSolution.model_validate_json(line) for line in open(input_file, "r")
+    ]
     if limit:
         to_evaluate = to_evaluate[:limit]
 
     print(f"Loaded {len(to_evaluate)} QA pairs to evaluate")
 
-    # Load dataset
+    # Load ground truth dataset
     print(f"Loading ground truth from {eval_file}...")
     with open(eval_file, "r") as f:
-        ground_truths = [json.loads(line) for line in f]
+        ground_truths = [QuestionAndSolution.model_validate_json(line) for line in f]
 
     print(f"Loaded {len(ground_truths)} ground truths")
 
-    # Create semaphore for rate limiting
-    semaphore = asyncio.Semaphore(max_concurrent)
-
-    # Create evaluation tasks
-    tasks = []
-    for qa_pair, ground_truth in zip(to_evaluate, ground_truths):
-        question = ground_truth.get("question", "")
-        ground_truth = ground_truth.get("solution", "")
-        response = qa_pair.get("solution", "")
-
-        task = evaluate_single_response(
-            response=response,
-            question=question,
-            correct_answer=ground_truth,
-            model=model,
-            semaphore=semaphore,
-        )
-        tasks.append(task)
-
-    # Run evaluations in parallel
+    # Run evaluations in parallel using ThreadPoolExecutor
     print(f"Running evaluations with {max_concurrent} parallel workers...")
-    results = await asyncio.gather(*tasks)
+    results = []
 
-    # Combine results with original data
-    output_data = []
+    with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+        # Submit all tasks
+        future_to_idx = {}
+        for idx, (qa_pair, ground_truth) in enumerate(zip(to_evaluate, ground_truths)):
+            question = ground_truth.question
+            ground_truth_answer = ground_truth.solution
+            response = qa_pair.solution
+
+            future = executor.submit(
+                evaluate_single_response,
+                response=response,
+                question=question,
+                correct_answer=ground_truth_answer,
+                model=model,
+            )
+            future_to_idx[future] = idx
+
+        # Collect results in order
+        results = [None] * len(to_evaluate)
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results[idx] = future.result()
+
+    # Combine results with original data using proper models
+    output_data: list[EvaluatedQuestionAndSolution] = []
     correct_count = 0
     error_count = 0
 
     for qa_pair, result in zip(to_evaluate, results):
         print(result.model_dump_json())
-        # output_entry = {**qa_pair, "evaluation": result}
-        # output_data.append(output_entry)
+
+        # Create proper evaluated model
+        output_entry = EvaluatedQuestionAndSolution(
+            **qa_pair.model_dump(),
+            evaluation=result
+        )
+        output_data.append(output_entry)
 
         if result.correct == Correctness.yes:
             correct_count += 1
         else:
             error_count += 1
 
-    # # Write results
-    # print(f"Writing results to {output_file}...")
-    # with open(output_file, "w") as f:
-    #     for entry in output_data:
-    #         f.write(entry.model_dump_json() + "\n")
+    # Write results using proper model serialization
+    print(f"Writing results to {output_file}...")
+    with open(output_file, "w") as f:
+        for entry in output_data:
+            f.write(entry.model_dump_json() + "\n")
 
     # Print summary
     total = len(to_evaluate)
@@ -186,17 +185,17 @@ async def evaluate_dataset(
 #
 
 
-async def main():
+def main():
     """Main entry point for the evaluation script"""
-    await evaluate_dataset(
-        input_file="qa_pairs.jsonl",
-        eval_file="qa_pairs.jsonl",
+    evaluate_dataset(
+        input_file="eval/qa_pairs.jsonl",
+        eval_file="eval/qa_pairs.jsonl",
         output_file="evaluation_results.jsonl",
         model="gpt-4o-mini",
         max_concurrent=30,
-        limit=100,  # Set to None to evaluate all, or a number to limit
+        limit=10,  # Set to None to evaluate all, or a number to limit
     )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

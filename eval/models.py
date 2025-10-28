@@ -55,3 +55,9 @@ class EvaluationResult(BaseModel):
     success: bool
     judgement: JudgementResult | None = None
     error: str | None = None
+
+
+class EvaluatedQuestionAndSolution(QuestionAndSolution):
+    """Model for a QA pair with its evaluation result"""
+
+    evaluation: JudgementResult
