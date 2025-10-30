@@ -1,201 +1,334 @@
+"""
+Rubric-based evaluation following the "Rubrics as Rewards" paper.
+
+Implements RaR-Explicit: Weighted sum of individual criterion scores (Equation 1)
+"""
+
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict
+from typing import Dict, List, Optional
 
 import litellm
-from models import (
-    Correctness,
-    EvaluatedQuestionAndSolution,
-    JudgementResult,
-    QuestionAndSolution,
-)
-
-# from: https://github.com/centerforaisafety/hle/blob/7b6be5aad6f9b43af3857de7867f3b52f6e4acb3/hle_eval/run_judge_results.py#L16-L33
-GRADER_TEMPLATE = """
-Judge whether the following [response] to [question] is correct or not based on if the [response] includes the precise and unambiguous [correct_answer] below.
-
-[question]: {question}
-
-[response]: {response}
-
-Your judgement must be in the format and criteria specified below:
-
-extracted_final_answer: The final exact answer extracted from the [response]. Put the extracted answer as 'None' if there is no exact, final answer to extract from the response.
-
-[correct_answer]: {correct_answer}
-
-reasoning: Explain why the [correct_answer] is included or not included in the extracted_final_answer, focusing only on if there are meaningful differences between [correct_answer] and the extracted_final_answer. Do not comment on any background to the problem, do not attempt to solve the problem, do not argue for any answer different than [correct_answer], focus only on whether the answers match.
-
-correct: Answer 'yes' if [correct_answer] is included in the extracted_final_answer given above, or is within a small margin of error for numerical problems. Answer 'no' otherwise, i.e. if there if there is any inconsistency, ambiguity, non-equivalency, or if the extracted answer is incorrect.
+from pydantic import BaseModel
 
 
-confidence: The extracted confidence score between 0|%| and 100|%| from [response]. Put 100 if there is no confidence score available.
-""".strip()
+class CriterionCheck(BaseModel):
+    """Result of checking a single rubric criterion."""
 
-CHOICE_STRINGS = ["yes", "no"]
+    title: str
+    description: str
+    weight: int
+    satisfied: bool
+    reasoning: Optional[str] = None
 
 
-def evaluate_single_response(
-    question: str,
-    response: str,
-    correct_answer: str,
-    model: str = "gpt-4o-mini",
-) -> Dict[str, Any]:
+class RubricEvaluation(BaseModel):
+    """Complete rubric-based evaluation result."""
+
+    criterion_checks: List[CriterionCheck]
+    raw_score: float  # Unnormalized score
+    normalized_score: float  # Score normalized to [0, 1]
+
+
+class EvaluatedResponse(BaseModel):
+    """Complete evaluated response with rubric scores."""
+
+    discussion_title: str
+    discussion_url: str
+    question: str
+    response: str
+    reference_answer: str
+    evaluation: RubricEvaluation
+
+
+CRITERION_PROMPT = """You are evaluating whether a response satisfies a specific evaluation criterion.
+
+Question: {question}
+
+Response to evaluate: {response}
+
+Evaluation Criterion:
+{criterion_description}
+
+Your task: Determine if the response satisfies this criterion.
+
+Output a JSON object with:
+- "satisfied": true or false
+- "reasoning": Brief explanation (1-2 sentences) of why it does or doesn't satisfy the criterion
+
+Be strict but fair. The criterion must be clearly satisfied for you to answer true."""
+
+
+class RubricData(BaseModel):
+    """Rubric data loaded from file."""
+
+    title: str
+    description: str
+    weight: int
+
+
+def load_rubrics_from_file(rubric_file: str) -> Dict[str, List[RubricData]]:
     """
-    Evaluate a single response against the ground truth using LLM as judge.
+    Load rubrics from JSONL file and index by question.
+
+    Args:
+        rubric_file: Path to rubric JSONL file
+
+    Returns:
+        Dictionary mapping questions to their rubrics
+    """
+    rubrics_by_question = {}
+
+    with open(rubric_file, "r") as f:
+        for line in f:
+            entry = json.loads(line)
+            question = entry["question"]
+
+            # Parse rubric JSON string
+            rubric_data = json.loads(entry["rubric"])
+            rubrics = [RubricData(**r) for r in rubric_data["rubrics"]]
+
+            rubrics_by_question[question] = rubrics
+
+    return rubrics_by_question
+
+
+def check_criterion(
+    question: str, response: str, criterion: RubricData, model: str = "gpt-4o-mini"
+) -> CriterionCheck:
+    """
+    Check if response satisfies a single criterion.
 
     Args:
         question: The question being answered
         response: The response to evaluate
-        correct_answer: The ground truth answer
-        model: The LLM model to use for judging
+        criterion: The rubric criterion to check
+        model: LLM model for judging
 
     Returns:
-        Dictionary containing the judgement result and metadata
+        CriterionCheck with satisfaction result
     """
-    prompt = GRADER_TEMPLATE.format(
-        question=question, response=response, correct_answer=correct_answer
+    prompt = CRITERION_PROMPT.format(
+        question=question,
+        response=response,
+        criterion_description=criterion.description,
     )
 
-    # Use litellm with structured output
     llm_response = litellm.completion(
         model=model,
         messages=[
             {
                 "role": "system",
-                "content": "You are an expert judge evaluating answers for accuracy and equivalence.",
+                "content": "You are an expert evaluator for rubric-based assessment.",
             },
             {"role": "user", "content": prompt},
         ],
-        response_format=JudgementResult,
         temperature=0.0,
+        response_format=CriterionCheck,
     )
 
-    # Parse structured output
-    result: JudgementResult = JudgementResult.model_validate_json(
-        llm_response.choices[0].message.content
-    )
+    result = CriterionCheck.model_validate_json(llm_response.choices[0].message.content)
+
     return result
 
 
-def evaluate_dataset(
-    input_file: str,
-    eval_file: str,
-    output_file: str = "evaluation_results.jsonl",
+def evaluate_with_rubrics(
+    question: str,
+    response: str,
+    reference_answer: str,
+    rubrics: List[RubricData],
     model: str = "gpt-4o-mini",
-    max_concurrent: int = 30,
-    limit: int = None,
-) -> None:
+) -> RubricEvaluation:
     """
-    Evaluate all QA pairs in the input file using LLM as judge.
+    Evaluate response using RaR-Explicit method (weighted sum).
+
+    Implements Equation 1 from paper:
+    r(x, ŷ) = Σ(w_j * c_j(x, ŷ)) / Σ(w_j)
 
     Args:
-        input_file: Path to input JSONL file with QA pairs
-        output_file: Path to output JSONL file for results
-        model: The LLM model to use for judging
-        max_concurrent: Maximum number of concurrent threads
-        limit: Optional limit on number of examples to evaluate
+        question: The question
+        response: Response to evaluate
+        reference_answer: Reference answer (not directly used, but available)
+        rubrics: List of rubric criteria
+        model: LLM model for judging
+
+    Returns:
+        RubricEvaluation with normalized score
     """
-    # Load input data as proper models
-    to_evaluate = [
-        QuestionAndSolution.model_validate_json(line) for line in open(input_file, "r")
-    ]
+    # Check each criterion independently
+    checks = []
+    for rubric in rubrics:
+        check = check_criterion(question, response, rubric, model)
+        checks.append(check)
+
+    # Calculate weighted score (Equation 1)
+    # Only positive weights contribute to denominator
+    positive_weights = sum(abs(r.weight) for r in rubrics if r.weight > 0)
+
+    raw_score = 0.0
+    for check in checks:
+        if check.satisfied:
+            raw_score += check.weight
+
+    # Normalize to [0, 1]
+    normalized_score = raw_score / positive_weights if positive_weights > 0 else 0.0
+    # Clip to [0, 1] in case pitfalls make it negative
+    normalized_score = max(0.0, min(1.0, normalized_score))
+
+    return RubricEvaluation(
+        raw_score=raw_score,
+        normalized_score=normalized_score,
+        criterion_checks=checks,
+    )
+
+
+def evaluate_dataset_with_rubrics(
+    input_file: str,
+    rubric_file: str,
+    ground_truth_file: str,
+    output_file: str = "rubric_evaluation_results.jsonl",
+    model: str = "gpt-4o-mini",
+    max_concurrent: int = 10,
+    limit: Optional[int] = None,
+) -> None:
+    """
+    Evaluate all responses using rubric-based assessment.
+
+    Args:
+        input_file: Path to JSONL with responses to evaluate
+        rubric_file: Path to JSONL with rubrics (output from generate_rubrics.py)
+        ground_truth_file: Path to JSONL with ground truth answers
+        output_file: Path to output JSONL file
+        model: LLM model for judging
+        max_concurrent: Maximum concurrent evaluations
+        limit: Optional limit on number of examples
+    """
+    # Load data
+    print(f"Loading responses from {input_file}...")
+    with open(input_file, "r") as f:
+        responses = [json.loads(line) for line in f]
+
+    print(f"Loading rubrics from {rubric_file}...")
+    rubrics_by_question = load_rubrics_from_file(rubric_file)
+
+    print(f"Loading ground truth from {ground_truth_file}...")
+    with open(ground_truth_file, "r") as f:
+        ground_truths = [json.loads(line) for line in f]
+
     if limit:
-        to_evaluate = to_evaluate[:limit]
+        responses = responses[:limit]
+        ground_truths = ground_truths[:limit]
 
-    print(f"Loaded {len(to_evaluate)} QA pairs to evaluate")
+    print(f"Loaded {len(responses)} responses to evaluate")
+    print(f"Judge model: {model}")
 
-    # Load ground truth dataset
-    print(f"Loading ground truth from {eval_file}...")
-    with open(eval_file, "r") as f:
-        ground_truths = [QuestionAndSolution.model_validate_json(line) for line in f]
+    # Match responses with rubrics and ground truth
+    evaluation_tasks = []
+    for response_data, gt_data in zip(responses, ground_truths):
+        question = gt_data["question"]
 
-    print(f"Loaded {len(ground_truths)} ground truths")
+        # Find rubrics for this question
+        rubrics = rubrics_by_question.get(question)
+        if not rubrics:
+            print(f"Warning: No rubrics found for question: {question[:50]}...")
+            continue
 
-    # Run evaluations in parallel using ThreadPoolExecutor
-    print(f"Running evaluations with {max_concurrent} parallel workers...")
+        evaluation_tasks.append(
+            {
+                "question": question,
+                "response": response_data["solution"],
+                "reference_answer": gt_data["solution"],
+                "rubrics": rubrics,
+                "metadata": {
+                    "discussion_title": response_data.get("discussion_title", ""),
+                    "discussion_url": response_data.get("discussion_url", ""),
+                },
+            }
+        )
+
+    print(
+        f"Running {len(evaluation_tasks)} evaluations with {max_concurrent} parallel workers..."
+    )
+
+    # Run evaluations in parallel
     results = []
-
     with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
         # Submit all tasks
         future_to_idx = {}
-        for idx, (qa_pair, ground_truth) in enumerate(zip(to_evaluate, ground_truths)):
-            question = ground_truth.question
-            ground_truth_answer = ground_truth.solution
-            response = qa_pair.solution
-
+        for idx, task in enumerate(evaluation_tasks):
             future = executor.submit(
-                evaluate_single_response,
-                response=response,
-                question=question,
-                correct_answer=ground_truth_answer,
+                evaluate_with_rubrics,
+                question=task["question"],
+                response=task["response"],
+                reference_answer=task["reference_answer"],
+                rubrics=task["rubrics"],
                 model=model,
             )
             future_to_idx[future] = idx
 
         # Collect results in order
-        results = [None] * len(to_evaluate)
+        results = [None] * len(evaluation_tasks)
+        completed = 0
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             results[idx] = future.result()
+            completed += 1
+            print(f"Completed: {completed}/{len(evaluation_tasks)}", end="\r")
 
-    # Combine results with original data using proper models
-    output_data: list[EvaluatedQuestionAndSolution] = []
-    correct_count = 0
-    error_count = 0
+    print()  # New line after progress
 
-    for qa_pair, result in zip(to_evaluate, results):
-        print(result.model_dump_json())
+    # Combine results with metadata
+    output_data = []
+    total_score = 0.0
 
-        # Create proper evaluated model
-        output_entry = EvaluatedQuestionAndSolution(
-            **qa_pair.model_dump(),
-            evaluation=result
+    for task, evaluation in zip(evaluation_tasks, results):
+        evaluated_response = EvaluatedResponse(
+            discussion_title=task["metadata"]["discussion_title"],
+            discussion_url=task["metadata"]["discussion_url"],
+            question=task["question"],
+            response=task["response"],
+            reference_answer=task["reference_answer"],
+            evaluation=evaluation,
         )
-        output_data.append(output_entry)
+        output_data.append(evaluated_response)
+        total_score += evaluation.normalized_score
 
-        if result.correct == Correctness.yes:
-            correct_count += 1
-        else:
-            error_count += 1
-
-    # Write results using proper model serialization
+    # Write results
     print(f"Writing results to {output_file}...")
     with open(output_file, "w") as f:
         for entry in output_data:
             f.write(entry.model_dump_json() + "\n")
 
     # Print summary
-    total = len(to_evaluate)
-    success_rate = (total - error_count) / total * 100 if total > 0 else 0
-    accuracy = correct_count / total * 100 if total > 0 else 0
+    avg_score = total_score / len(output_data) if output_data else 0.0
 
-    print("\n" + "=" * 50)
-    print("EVALUATION SUMMARY")
-    print("=" * 50)
-    print(f"Total examples: {total}")
-    print(f"Successful evaluations: {total - error_count}")
-    print(f"Errors: {error_count}")
-    print(f"Success rate: {success_rate:.2f}%")
-    print(f"Correct answers: {correct_count}")
-    print(f"Accuracy: {accuracy:.2f}%")
-    print("=" * 50)
+    print("\n" + "=" * 60)
+    print("RUBRIC-BASED EVALUATION SUMMARY")
+    print("=" * 60)
+    print(f"Total examples: {len(output_data)}")
+    print(f"Judge model: {model}")
+    print(f"Average normalized score: {avg_score:.3f}")
+    print(f"Average percentage: {avg_score * 100:.1f}%")
 
-
-#
-
-
-def main():
-    """Main entry point for the evaluation script"""
-    evaluate_dataset(
-        input_file="eval/qa_pairs.jsonl",
-        eval_file="eval/qa_pairs.jsonl",
-        output_file="evaluation_results.jsonl",
-        model="gpt-4o-mini",
-        max_concurrent=30,
-        limit=10,  # Set to None to evaluate all, or a number to limit
+    # Per-criterion statistics
+    total_satisfied = sum(
+        sum(1 for check in eval.evaluation.criterion_checks if check.satisfied)
+        for eval in output_data
     )
+    total_criteria = sum(len(eval.evaluation.criterion_checks) for eval in output_data)
+    satisfaction_rate = total_satisfied / total_criteria if total_criteria > 0 else 0.0
+    print(f"Criteria satisfaction rate: {satisfaction_rate * 100:.1f}%")
+
+    print("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    evaluate_dataset_with_rubrics(
+        input_file="eval/qa_pairs_accepted.jsonl",
+        rubric_file="eval/qa_rubrics.jsonl",
+        ground_truth_file="eval/qa_pairs_accepted.jsonl",
+        output_file="rubric_evaluation.jsonl",
+        model="gpt-4o-mini",
+        max_concurrent=10,
+        limit=30,  # Set to None to evaluate all
+    )

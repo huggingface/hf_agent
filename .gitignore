@@ -11,3 +11,5 @@ wheels/
 .env
 .DS_Store
 .claude/
+*.jsonl
+*.csv
