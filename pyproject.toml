@@ -12,4 +12,6 @@ dependencies = [
     "tenacity>=8.0.0",
     "pandas>=2.3.3",
     "python-dotenv>=1.2.1",
+    "datasets>=4.3.0",
+    "huggingface-hub>=1.0.1",
 ]

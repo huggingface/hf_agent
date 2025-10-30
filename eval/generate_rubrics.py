@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 import litellm
 import pandas as pd
 from dotenv import load_dotenv
+from hf_dataset_io import df_to_hub
 from pydantic import BaseModel
 
 
@@ -246,6 +247,12 @@ def main():
         default=30,
         help="Maximum number of concurrent workers (default: 30)",
     )
+    parser.add_argument(
+        "--push-to-hub",
+        type=str,
+        default=None,
+        help="Push to HuggingFace dataset (e.g., username/dataset@rubrics)",
+    )
 
     args = parser.parse_args()
 
@@ -284,31 +291,52 @@ def main():
 
     print()  # New line after progress
 
-    # Write results to file
-    print(f"Writing results to {args.outfile}...")
+    # Prepare results DataFrame
+    print("Preparing results...")
+    output_rows = []
     success_count = 0
     failure_count = 0
 
+    for idx, (_, row) in enumerate(df.iterrows()):
+        rubric_result = results[idx]
+
+        if rubric_result is None:
+            failure_count += 1
+            continue
+
+        # Merge with original data
+        output_row = row.to_dict()
+        output_row["rubric"] = rubric_result
+        output_rows.append(output_row)
+        success_count += 1
+
+    # Create DataFrame with results
+    results_df = pd.DataFrame(output_rows)
+
+    # Upload to HuggingFace if specified (before saving JSONL)
+    if args.push_to_hub:
+        print(f"\nUploading to HuggingFace: {args.push_to_hub}")
+        upload_success = df_to_hub(
+            df=results_df,
+            dataset_spec=args.push_to_hub,
+            split="train",
+            private=False,
+        )
+        if not upload_success:
+            print("Warning: HuggingFace push failed, but continuing to save JSONL...")
+
+    # Write results to JSONL file
+    print(f"\nWriting results to {args.outfile}...")
     with open(args.outfile, "w") as outf:
-        for idx, (_, row) in enumerate(df.iterrows()):
-            rubric_result = results[idx]
-
-            if rubric_result is None:
-                failure_count += 1
-                continue
-
-            # Merge with original data
-            output_row = row.to_dict()
-            output_row["rubric"] = rubric_result
-
-            # Write JSONL line
+        for output_row in output_rows:
             outf.write(json.dumps(output_row, default=str) + "\n")
-            success_count += 1
 
     print("\nComplete!")
     print(f"Success: {success_count}/{len(df)}")
     print(f"Failures: {failure_count}/{len(df)}")
     print(f"Output written to: {args.outfile}")
+    if args.push_to_hub and upload_success:
+        print(f"Pushed to: {args.push_to_hub}")
 
 
 if __name__ == "__main__":

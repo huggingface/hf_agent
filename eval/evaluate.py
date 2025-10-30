@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 import litellm
+import pandas as pd
+from hf_dataset_io import df_to_hub
 from pydantic import BaseModel
 
 
@@ -190,6 +192,7 @@ def evaluate_dataset_with_rubrics(
     model: str = "gpt-4o-mini",
     max_concurrent: int = 10,
     limit: Optional[int] = None,
+    push_to_hub: Optional[str] = None,
 ) -> None:
     """
     Evaluate all responses using rubric-based assessment.
@@ -202,6 +205,7 @@ def evaluate_dataset_with_rubrics(
         model: LLM model for judging
         max_concurrent: Maximum concurrent evaluations
         limit: Optional limit on number of examples
+        push_to_hub: Optional HuggingFace dataset spec (e.g., username/dataset@evaluations)
     """
     # Load data
     print(f"Loading responses from {input_file}...")
@@ -293,8 +297,23 @@ def evaluate_dataset_with_rubrics(
         output_data.append(evaluated_response)
         total_score += evaluation.normalized_score
 
-    # Write results
-    print(f"Writing results to {output_file}...")
+    # Convert to DataFrame for HuggingFace upload
+    results_df = pd.DataFrame([entry.model_dump() for entry in output_data])
+
+    # Upload to HuggingFace if specified (before saving JSONL)
+    if push_to_hub:
+        print(f"\nUploading to HuggingFace: {push_to_hub}")
+        upload_success = df_to_hub(
+            df=results_df,
+            dataset_spec=push_to_hub,
+            split="test",
+            private=False,
+        )
+        if not upload_success:
+            print("Warning: HuggingFace upload failed, but continuing to save JSONL...")
+
+    # Write results to JSONL file
+    print(f"\nWriting results to {output_file}...")
     with open(output_file, "w") as f:
         for entry in output_data:
             f.write(entry.model_dump_json() + "\n")
@@ -319,6 +338,9 @@ def evaluate_dataset_with_rubrics(
     satisfaction_rate = total_satisfied / total_criteria if total_criteria > 0 else 0.0
     print(f"Criteria satisfaction rate: {satisfaction_rate * 100:.1f}%")
 
+    if push_to_hub and upload_success:
+        print(f"Pushed to: {push_to_hub}")
+
     print("=" * 60)
 
 
@@ -331,4 +353,5 @@ if __name__ == "__main__":
         model="gpt-4o-mini",
         max_concurrent=10,
         limit=30,  # Set to None to evaluate all
+        push_to_hub="akseljoonas/hf-agent-benchmark@ground-truth",  # Set to "username/dataset@evaluations" to upload
     )
