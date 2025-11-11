@@ -132,13 +132,13 @@ class Handlers:
 
 
 async def submission_loop(
-    submission_queue: asyncio.Queue, event_queue: asyncio.Queue
+    submission_queue: asyncio.Queue, event_queue: asyncio.Queue, config=None
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.
     This is the core of the agent (like submission_loop in codex.rs:1259-1340)
     """
-    session = Session(event_queue)
+    session = Session(event_queue, config=config)
 
     print("🤖 Agent loop started")
 

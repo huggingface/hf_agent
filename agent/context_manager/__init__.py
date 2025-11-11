@@ -1,7 +1,7 @@
 """
-Prompt templates and management
+Context manager for handling conversation history
 """
 
-from agent.prompts.manager import PromptManager
+from agent.context_manager.manager import ContextManager
 
-__all__ = ["PromptManager"]
+__all__ = ["ContextManager"]
