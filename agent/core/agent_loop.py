@@ -11,6 +11,7 @@ from litellm import (
     acompletion,
 )
 
+from agent.config import Config
 from agent.core.session import Event, OpType, Session
 
 ToolCall = ChatCompletionMessageToolCall
@@ -35,6 +36,7 @@ class Handlers:
         iteration = 0
         while iteration < max_iterations:
             messages = session.context_manager.get_messages()
+            print(f"Messages: {messages}")
 
             try:
                 response: ModelResponse = await acompletion(
@@ -65,9 +67,12 @@ class Handlers:
                     break
 
                 for tool_call in tool_calls:
+                    print(f"Executing tool: {tool_call.function.name}")
                     result = await session.tool_executor.execute_tool(tool_call)
-
-                    tool_output = Message(role="tool", content=result.output)
+                    print(result)
+                    tool_output = Message(
+                        role="tool", content=result.output, success=result.success
+                    )
                     session.context_manager.add_message(tool_output)
 
                     await session.send_event(
@@ -80,8 +85,13 @@ class Handlers:
                 iteration += 1
 
             except Exception as e:
+                import traceback
+
                 await session.send_event(
-                    Event(event_type="error", data={"error": str(e)})
+                    Event(
+                        event_type="error",
+                        data={"error": traceback.print_exc() + str(e)},
+                    )
                 )
                 break
 
@@ -132,7 +142,9 @@ class Handlers:
 
 
 async def submission_loop(
-    submission_queue: asyncio.Queue, event_queue: asyncio.Queue, config=None
+    submission_queue: asyncio.Queue,
+    event_queue: asyncio.Queue,
+    config: Config | None = None,
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.

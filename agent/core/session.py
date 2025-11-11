@@ -4,9 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from agent.config import Config
 from agent.context_manager.manager import ContextManager
 from agent.core import ToolExecutor
-from agent.config import Config
 
 
 class OpType(Enum):
@@ -44,7 +44,9 @@ class Session:
         self.tool_executor = ToolExecutor()
         self.event_queue = event_queue
         self.config = config or Config(
-            model_name="gpt-3.5-turbo", tools=[], system_prompt_path=""
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+            tools=[],
+            system_prompt_path="",
         )
         self.is_running = True
         self.current_task: asyncio.Task | None = None
