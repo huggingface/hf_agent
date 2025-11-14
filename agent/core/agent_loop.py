@@ -48,18 +48,25 @@ class Handlers:
                 content = message.content
                 tool_calls: list[ToolCall] = message.get("tool_calls", [])
 
-                # Record assistant message if there's content
-                if content:
-                    assistant_msg = Message(role="assistant", content=content)
-                    session.context_manager.add_message(assistant_msg)
+                # If no tool calls, add assistant message and we're done
+                if not tool_calls:
+                    if content:
+                        assistant_msg = Message(role="assistant", content=content)
+                        session.context_manager.add_message(assistant_msg)
+                        await session.send_event(
+                            Event(event_type="assistant_message", data={"content": content})
+                        )
+                    break
 
+                # Add assistant message with tool calls to history
+                # LiteLLM will format this correctly for the provider
+                assistant_msg = Message(role="assistant", content=content, tool_calls=tool_calls)
+                session.context_manager.add_message(assistant_msg)
+
+                if content:
                     await session.send_event(
                         Event(event_type="assistant_message", data={"content": content})
                     )
-
-                # If no tool calls, we're done
-                if not tool_calls:
-                    break
 
                 # Execute tools
                 for tc in tool_calls:
@@ -163,7 +170,7 @@ async def process_submission(session: Session, submission) -> bool:
 
     if op.op_type == OpType.USER_INPUT:
         text = op.data.get("text", "") if op.data else ""
-        await Handlers.user_input(session, text)
+        await Handlers.run_agent(session, text)
         return True
 
     if op.op_type == OpType.INTERRUPT:

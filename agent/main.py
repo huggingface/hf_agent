@@ -37,25 +37,25 @@ async def event_listener(
 
             # Display event
             if event.event_type == "assistant_message":
-                msg = event.data.get("message", {})
-                content = msg.get("content", "")
+                content = event.data.get("content", "") if event.data else ""
                 if content:
                     print(f"\n🤖 Assistant: {content}")
+            elif event.event_type == "tool_call":
+                tool_name = event.data.get("tool", "") if event.data else ""
+                if tool_name:
+                    print(f"🔧 Calling tool: {tool_name}")
             elif event.event_type == "tool_output":
-                msg = event.data.get("message", {})
-                content = msg.get("content", "")
-                if content:
-                    print(
-                        f"🔧 Tool: {content[:200]}{'...' if len(content) > 200 else ''}"
-                    )
+                output = event.data.get("output", "") if event.data else ""
+                success = event.data.get("success", False) if event.data else False
+                status = "✅" if success else "❌"
+                if output:
+                    print(f"{status} Tool output: {output}")
             elif event.event_type == "turn_complete":
                 print("✅ Turn complete\n")
                 turn_complete_event.set()
             elif event.event_type == "error":
-                import traceback
-
-                traceback.print_exc()
-                print(f"❌ Error: {event.data.get('error', 'Unknown error')}")
+                error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+                print(f"❌ Error: {error}")
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
                 print("🛑 Agent shutdown")
