@@ -141,6 +141,40 @@ class Handlers:
         return True
 
 
+async def process_submission(session: Session, submission) -> bool:
+    """
+    Process a single submission and return whether to continue running.
+
+    Returns:
+        bool: True to continue, False to shutdown
+    """
+    op = submission.operation
+    print(f"📨 Received: {op.op_type.value}")
+
+    if op.op_type == OpType.USER_INPUT:
+        text = op.data.get("text", "") if op.data else ""
+        await Handlers.run_agent(session, text, max_iterations=10)
+        return True
+
+    if op.op_type == OpType.INTERRUPT:
+        await Handlers.interrupt(session)
+        return True
+
+    if op.op_type == OpType.COMPACT:
+        await Handlers.compact(session)
+        return True
+
+    if op.op_type == OpType.UNDO:
+        await Handlers.undo(session)
+        return True
+
+    if op.op_type == OpType.SHUTDOWN:
+        return not await Handlers.shutdown(session)
+
+    print(f"⚠️  Unknown operation: {op.op_type}")
+    return True
+
+
 async def submission_loop(
     submission_queue: asyncio.Queue,
     event_queue: asyncio.Queue,
@@ -151,45 +185,31 @@ async def submission_loop(
     This is the core of the agent (like submission_loop in codex.rs:1259-1340)
     """
     session = Session(event_queue, config=config)
-
     print("🤖 Agent loop started")
 
-    # Main processing loop
-    while session.is_running:
+    # Initialize MCP connections
+    if session.config.mcp_servers:
         try:
-            # Wait for next submission (like rx_sub.recv() in codex.rs:1262)
+            print(f"Initializing MCP connections for {session.config.mcp_servers}")
+            await session.initialize_mcp()
+        except Exception as e:
+            print(f"⚠️  Error initializing MCP: {e}")
+
+    try:
+        # Main processing loop
+        while session.is_running:
             submission = await submission_queue.get()
 
-            print(f"📨 Received: {submission.operation.op_type.value}")
-
-            # Dispatch to handler based on operation type
-            op = submission.operation
-
-            if op.op_type == OpType.USER_INPUT:
-                text = op.data.get("text", "") if op.data else ""
-                await Handlers.run_agent(session, text, max_iterations=10)
-
-            elif op.op_type == OpType.INTERRUPT:
-                # im not currently sure what this does lol
-                await Handlers.interrupt(session)
-
-            elif op.op_type == OpType.COMPACT:
-                await Handlers.compact(session)
-
-            elif op.op_type == OpType.UNDO:
-                await Handlers.undo(session)
-
-            elif op.op_type == OpType.SHUTDOWN:
-                if await Handlers.shutdown(session):
+            try:
+                should_continue = await process_submission(session, submission)
+                if not should_continue:
                     break
-
-            else:
-                print(f"⚠️  Unknown operation: {op.op_type}")
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"❌ Error in agent loop: {e}")
-            await session.send_event(Event(event_type="error", data={"error": str(e)}))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ Error in agent loop: {e}")
+                await session.send_event(Event(event_type="error", data={"error": str(e)}))
+    finally:
+        await session.cleanup()
 
     print("🛑 Agent loop exited")
