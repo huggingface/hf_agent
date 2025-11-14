@@ -10,9 +10,7 @@ class ContextManager:
 
     def __init__(self):
         self.system_prompt = self._load_system_prompt()
-        self.items: list[Message] = [
-            Message(role="system", content=self.system_prompt)
-        ]
+        self.items: list[Message] = [Message(role="system", content=self.system_prompt)]
 
     def _load_system_prompt(self):
         """Load the system prompt"""
@@ -35,8 +33,10 @@ class ContextManager:
             return
 
         # Always keep system prompt
-        system_msg = self.items[0] if self.items and self.items[0].role == "system" else None
-        messages_to_keep = self.items[-(target_size - 1):]
+        system_msg = (
+            self.items[0] if self.items and self.items[0].role == "system" else None
+        )
+        messages_to_keep = self.items[-(target_size - 1) :]
 
         if system_msg:
             self.items = [system_msg] + messages_to_keep
