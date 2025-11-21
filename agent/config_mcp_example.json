@@ -2,12 +2,20 @@
   "model_name": "anthropic/claude-sonnet-4-5-20250929",
   "tools": [],
   "system_prompt_path": "",
-  "mcp_servers": [
-    {
-      "name": "weather",
-      "command": "python",
-      "args": ["path/to/your/weather_server.py"],
-      "env": null
+  "mcpServers": {
+    "hf-mcp-server": {
+      "transport": "http",
+      "url": "https://huggingface.co/mcp?login",
+      "headers": {
+        "Authorization": "Bearer ${HF_TOKEN}"
+      }
+    },
+    "playwright": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
     }
-  ]
+  }
 }

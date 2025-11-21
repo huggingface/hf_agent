@@ -4,11 +4,13 @@ Interactive CLI chat with the agent
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
-from agent.config import Config
+from agent.config import load_config
 from agent.core.agent_loop import submission_loop
 from agent.core.session import OpType
+from agent.core.tools import ToolRouter
 
 
 @dataclass
@@ -28,7 +30,9 @@ class Submission:
 
 
 async def event_listener(
-    event_queue: asyncio.Queue, turn_complete_event: asyncio.Event
+    event_queue: asyncio.Queue,
+    turn_complete_event: asyncio.Event,
+    ready_event: asyncio.Event,
 ) -> None:
     """Background task that listens for events and displays them"""
     while True:
@@ -36,7 +40,10 @@ async def event_listener(
             event = await event_queue.get()
 
             # Display event
-            if event.event_type == "assistant_message":
+            if event.event_type == "ready":
+                print("✅ Agent ready")
+                ready_event.set()
+            elif event.event_type == "assistant_message":
                 content = event.data.get("content", "") if event.data else ""
                 if content:
                     print(f"\n🤖 Assistant: {content}")
@@ -54,7 +61,11 @@ async def event_listener(
                 print("✅ Turn complete\n")
                 turn_complete_event.set()
             elif event.event_type == "error":
-                error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+                error = (
+                    event.data.get("error", "Unknown error")
+                    if event.data
+                    else "Unknown error"
+                )
                 print(f"❌ Error: {error}")
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
@@ -78,7 +89,6 @@ async def get_user_input() -> str:
 
 async def main():
     """Interactive chat with the agent"""
-
     print("=" * 60)
     print("🤖 Interactive Agent Chat")
     print("=" * 60)
@@ -88,30 +98,36 @@ async def main():
     submission_queue = asyncio.Queue()
     event_queue = asyncio.Queue()
 
-    # Event to signal turn completion
+    # Events to signal agent state
     turn_complete_event = asyncio.Event()
-    turn_complete_event.set()  # Ready for first input
+    turn_complete_event.set()
+    ready_event = asyncio.Event()
 
     # Start agent loop in background
+    config_path = Path(__file__).parent / "config_mcp_example.json"
+    config = load_config(config_path)
+
+    # Create tool router
+    print(f"Config: {config.mcpServers}")
+    tool_router = ToolRouter(config.mcpServers)
+
     agent_task = asyncio.create_task(
         submission_loop(
             submission_queue,
             event_queue,
-            config=Config(
-                model_name="anthropic/claude-sonnet-4-5-20250929",
-                tools=[],
-                system_prompt_path="",
-            ),
+            config=config,
+            tool_router=tool_router,
         )
     )
 
     # Start event listener in background
     listener_task = asyncio.create_task(
-        event_listener(event_queue, turn_complete_event)
+        event_listener(event_queue, turn_complete_event, ready_event)
     )
 
     # Wait for agent to initialize
-    await asyncio.sleep(0.2)
+    print("⏳ Initializing agent...")
+    await ready_event.wait()
 
     submission_id = 0
 

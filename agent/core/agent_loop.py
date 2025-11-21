@@ -9,6 +9,7 @@ from litellm import ChatCompletionMessageToolCall, Message, ModelResponse, acomp
 
 from agent.config import Config
 from agent.core.session import Event, OpType, Session
+from agent.core.tools import ToolRouter
 
 ToolCall = ChatCompletionMessageToolCall
 
@@ -54,13 +55,18 @@ class Handlers:
                         assistant_msg = Message(role="assistant", content=content)
                         session.context_manager.add_message(assistant_msg)
                         await session.send_event(
-                            Event(event_type="assistant_message", data={"content": content})
+                            Event(
+                                event_type="assistant_message",
+                                data={"content": content},
+                            )
                         )
                     break
 
                 # Add assistant message with tool calls to history
                 # LiteLLM will format this correctly for the provider
-                assistant_msg = Message(role="assistant", content=content, tool_calls=tool_calls)
+                assistant_msg = Message(
+                    role="assistant", content=content, tool_calls=tool_calls
+                )
                 session.context_manager.add_message(assistant_msg)
 
                 if content:
@@ -80,7 +86,7 @@ class Handlers:
                         )
                     )
 
-                    output, success = await session.tool_router.execute_tool(
+                    output, success = await session.tool_router.call_tool(
                         tool_name, tool_args
                     )
 
@@ -98,8 +104,7 @@ class Handlers:
                             event_type="tool_output",
                             data={
                                 "tool": tool_name,
-                                "output": output[:200]
-                                + ("..." if len(output) > 200 else ""),
+                                "output": output,
                                 "success": success,
                             },
                         )
@@ -108,8 +113,13 @@ class Handlers:
                 iteration += 1
 
             except Exception as e:
+                import traceback
+
                 await session.send_event(
-                    Event(event_type="error", data={"error": str(e)})
+                    Event(
+                        event_type="error",
+                        data={"error": str(e + "\n" + traceback.format_exc())},
+                    )
                 )
                 break
 
@@ -195,58 +205,26 @@ async def process_submission(session: Session, submission) -> bool:
 async def submission_loop(
     submission_queue: asyncio.Queue,
     event_queue: asyncio.Queue,
-    tool_router=None,
     config: Config | None = None,
+    tool_router: ToolRouter | None = None,
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.
     This is the core of the agent (like submission_loop in codex.rs:1259-1340)
     """
-    # Import here to avoid circular imports
-    from agent.core.mcp_client import McpConnectionManager
-    from agent.core.tools import ToolRouter, create_builtin_tools
-
-    # Initialize MCP and tools
-    if tool_router is None:
-        mcp_manager = McpConnectionManager()
-
-        # Add MCP servers from config
-        if config and config.mcp_servers:
-            print("🔌 Initializing MCP connections...")
-            for server_config in config.mcp_servers:
-                try:
-                    await mcp_manager.add_server(
-                        server_name=server_config.name,
-                        command=server_config.command,
-                        args=server_config.args,
-                        env=server_config.env,
-                    )
-                except Exception as e:
-                    print(
-                        f"⚠️  Failed to connect to MCP server {server_config.name}: {e}"
-                    )
-
-        # Create tool router
-        tool_router = ToolRouter(mcp_manager)
-
-        # Register built-in tools
-        for tool in create_builtin_tools():
-            tool_router.register_tool(tool)
-
-        # Register MCP tools
-        tool_router.register_mcp_tools()
-
-        print(f"📦 Registered {len(tool_router.tools)} tools:")
-        for tool_name in tool_router.tools.keys():
-            print(f"   - {tool_name}")
 
     # Create session and assign tool router
     session = Session(event_queue, config=config)
     session.tool_router = tool_router
     print("🤖 Agent loop started")
 
-    try:
-        # Main processing loop
+    # Main processing loop
+    async with tool_router:
+        # Emit ready event after initialization
+        await session.send_event(
+            Event(event_type="ready", data={"message": "Agent initialized"})
+        )
+
         while session.is_running:
             submission = await submission_queue.get()
 
@@ -261,9 +239,5 @@ async def submission_loop(
                 await session.send_event(
                     Event(event_type="error", data={"error": str(e)})
                 )
-    finally:
-        # Cleanup MCP connections
-        if hasattr(tool_router, "mcp_manager") and tool_router.mcp_manager:
-            await tool_router.mcp_manager.shutdown_all()
 
     print("🛑 Agent loop exited")

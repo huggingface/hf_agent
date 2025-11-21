@@ -14,5 +14,5 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "datasets>=4.3.0",
     "huggingface-hub>=1.0.1",
-    "mcp>=1.21.0",
+    "fastmcp>=2.4.0",
 ]

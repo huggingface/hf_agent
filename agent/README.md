@@ -19,6 +19,5 @@ context_manager/
 └── manager.py         # Message history management
 
 config.py              # Config with model_name + tools
-tools/                 # Tool implementations (todo)
 utils/                 # Logging, etc
 ```
