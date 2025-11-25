@@ -17,8 +17,9 @@ from typing import Any, Dict, List
 import litellm
 import pandas as pd
 from dotenv import load_dotenv
-from hf_dataset_io import df_to_hub
 from pydantic import BaseModel
+
+from eval.hf_io import df_to_hub
 
 
 class Rubric(BaseModel):

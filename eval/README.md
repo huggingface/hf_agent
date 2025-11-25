@@ -5,10 +5,10 @@ Rubric-based evaluation pipeline implementing [Rubrics as Rewards](https://arxiv
 ## Pipeline
 
 ```
-QA pairs → generate_rubrics.py → evaluate.py → scores
+QA pairs → generate_rubrics.py → `eval/task.py@hf-benchmark-with-rubrics` → scores
 ```
 
-### 1. Generate Rubrics
+### 1. Generate Rubrics (if not already generated)
 
 Creates instance-specific evaluation criteria from question + reference answer.
 
@@ -27,50 +27,47 @@ python eval/generate_rubrics.py \
 
 **Output:** 7-20 weighted criteria per question (Essential: +5, Important: +3-4, Optional: +1-2, Pitfall: -1 to -2)
 
-### 2. Evaluate Responses
+### 2. Evaluate Responses (Inspect)
 
-Scores responses using generated rubrics via LLM-as-judge.
+Load your rubric dataset, run a solver, and score with `rubric_scorer` using `inspect-ai`.
 
-```python
-from evaluate import evaluate_dataset_with_rubrics
+Files:  
+- `eval/hf_agent_connector.py` contains a lightweight bridge that spins up
+  the existing hf-agent stack in `agent/` (tools, MCP, LiteLLM loop) and returns the assistant reply.
+- `eval/solvers.py` keeps the solver implementations (e.g. `hf_agent_solver`,
+  `claude_code`). If additional solvers are needed, register them there and pass
+  `-T solver_name=<name>` to swap them in without touching the task.
+- `eval/task.py` registers `hf-benchmark-with-rubrics`, which wires
+  the dataset, solver, and rubric scorer into a single Inspect task and does the eval.
 
-evaluate_dataset_with_rubrics(
-    input_file="responses.jsonl",
-    rubric_file="qa_rubrics.jsonl",
-    ground_truth_file="qa_pairs.jsonl",
-    output_file="results.jsonl",
-    model="gpt-4o-mini",
-    push_to_hub="akseljoonas/hf-agent-benchmark@evaluations"
-)
+### Running the hf-agent (implemented in `agent/`) (args are optional)
+```bash
+uv run inspect eval eval/task.py@hf-benchmark-with-rubrics \
+  -T dataset_name=akseljoonas/hf-agent-rubrics \
+  -T dataset_split=train \
+  -T limit=25 \
+  -T solver_name=hf_agent_solver \
+  -T solver_kwargs='{"config_path":"agent/config_mcp_example.json","max_iterations":10}' \
+  --log-dir logs/inspect
 ```
 
-**Output:** Normalized score [0, 1] + per-criterion satisfaction + reasoning
+Different benchmarks can be used by making/running a new task in `eval/task.py`.
 
-## HuggingFace Integration
+### Running Claude Code headlessly
 
-Both scripts upload DataFrames before saving JSONL:
+The `claude_code` solver shell-outs to the `claude` CLI (`claude -p ... --output-format json`)
+so you can benchmark Claude Code without any interactive UI. Example:
 
-```python
-from hf_dataset_io import df_to_hub, hub_to_df
-
-# Upload
-df_to_hub(df, "username/dataset@config", split="train")
-
-# Download
-df = hub_to_df("username/dataset@config", split="train")
+Claude Code command example (kwargs are optional):
+```bash
+uv run inspect eval eval/task.py@hf-benchmark-with-rubrics \
+  -T solver_name=claude_code \
+  -T solver_kwargs='{"allowed_tools":"Bash,Read","output_format":"json"}'
 ```
 
-Use `@config` notation to organize: `@rubrics`, `@evaluations`, `@ground-truth`
 
-## Key Parameters
+## Scoring (implemented in `eval/rubric_eval.py`)
 
-- **--max-concurrent**: Parallel workers (default: 30 for rubrics, 10 for eval)
-- **--push-to-hub**: Auto-upload to HF Hub (e.g., `user/dataset@rubrics`)
-- **--model**: LiteLLM model string
-- **split**: `train` for rubrics, `test` for evaluations
+The scoring is implemented in `eval/rubric_eval.py` and is based on the RaR-Explicit formula: `score = Σ(weight × satisfied) / Σ(positive_weights)`.
 
-## Scoring
-
-RaR-Explicit: `score = Σ(weight × satisfied) / Σ(positive_weights)`
-
-Normalized to [0, 1], clipped if pitfalls make it negative.
+The score is normalized to [0, 1] and clipped if pitfalls make it negative.
