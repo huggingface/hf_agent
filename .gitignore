@@ -13,3 +13,4 @@ wheels/
 .claude/
 *.jsonl
 *.csv
+/logs
