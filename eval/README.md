@@ -1,11 +1,11 @@
 # HF-Agent Eval
 
-Rubric-based evaluation pipeline implementing [Rubrics as Rewards](https://arxiv.org/abs/2410.13254) (RaR-Explicit).
+Rubric-based evaluation pipeline implementing [Rubrics as Rewards](https://arxiv.org/abs/2507.17746) paper (RaR-Explicit formula).
 
 ## Pipeline
 
 ```
-QA pairs → generate_rubrics.py → `eval/task.py@hf-benchmark-with-rubrics` → scores
+QA pairs → generate_rubrics.py → run `inspect-ai eval eval/task.py@hf-benchmark-with-rubrics` → scores
 ```
 
 ### 1. Generate Rubrics (if not already generated)
@@ -27,9 +27,7 @@ python eval/generate_rubrics.py \
 
 **Output:** 7-20 weighted criteria per question (Essential: +5, Important: +3-4, Optional: +1-2, Pitfall: -1 to -2)
 
-### 2. Evaluate Responses (Inspect)
-
-Load your rubric dataset, run a solver, and score with `rubric_scorer` using `inspect-ai`.
+### 2. Response evaluation
 
 Files:  
 - `eval/hf_agent_connector.py` contains a lightweight bridge that spins up
