@@ -148,7 +148,7 @@ def build_record(
         "command": command,
     }
 
-    if solver_name == "hf_agent_solver":
+    if solver_name == "hf_agent":
         record["solver_version"] = detect_agent_version(
             solver_kwargs.get("config_path", "agent/config_mcp_example.json")
         )

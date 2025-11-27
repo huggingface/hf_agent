@@ -92,7 +92,7 @@ def rubric_scorer(judge_model: str = "gpt-4o-mini"):
 
 @task(name="hf-benchmark-with-rubrics")
 def hf_benchmark_with_rubrics(
-    solver_name: str = "hf_agent_solver",
+    solver_name: str = "hf_agent",
     solver_kwargs: dict[str, Any] = {
         "max_iterations": 10,
         "config_path": "agent/config_mcp_example.json",

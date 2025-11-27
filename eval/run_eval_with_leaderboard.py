@@ -119,7 +119,7 @@ def main() -> None:
     parser.add_argument(
         "--solver-name",
         required=True,
-        help="Solver name used in the Inspect task (e.g. hf_agent_solver).",
+        help="Solver name used in the Inspect task (e.g. hf_agent).",
     )
     parser.add_argument(
         "--solver-kwargs",

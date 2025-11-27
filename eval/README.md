@@ -32,7 +32,7 @@ python eval/generate_rubrics.py \
 Files:  
 - `eval/hf_agent_connector.py` contains a lightweight bridge that spins up
   the existing hf-agent stack in `agent/` (tools, MCP, LiteLLM loop) and returns the assistant reply.
-- `eval/solvers.py` keeps the solver implementations (e.g. `hf_agent_solver`,
+- `eval/solvers.py` keeps the solver implementations (e.g. `hf_agent`,
   `claude_code`). If additional solvers are needed, register them there and pass
   `-T solver_name=<name>` to swap them in without touching the task.
 - `eval/task.py` registers `hf-benchmark-with-rubrics`, which wires
@@ -44,7 +44,7 @@ uv run inspect eval eval/task.py@hf-benchmark-with-rubrics \
   -T dataset_name=akseljoonas/hf-agent-rubrics \
   -T dataset_split=train \
   -T limit=25 \
-  -T solver_name=hf_agent_solver \
+  -T solver_name=hf_agent \
   -T solver_kwargs='{"config_path":"agent/config_mcp_example.json","max_iterations":10}' \
   --log-dir logs/inspect
 ```
@@ -73,7 +73,7 @@ and only appends results when the command succeeds):
 uv run python eval/run_eval_with_leaderboard.py \
   --hf-dataset akseljoonas/hf-agent-leaderboard \
   --hf-token $HF_TOKEN \
-  --solver-name hf_agent_solver \
+  --solver-name hf_agent \
   --solver-kwargs '{"config_path":"agent/config_mcp_example.json","max_iterations":10}' \
   --dataset akseljoonas/hf-agent-rubrics@train \
   --limit 25
