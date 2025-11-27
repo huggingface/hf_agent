@@ -63,6 +63,21 @@ uv run inspect eval eval/task.py@hf-benchmark-with-rubrics \
   -T solver_kwargs='{"allowed_tools":"Bash,Read","output_format":"json"}'
 ```
 
+### Leaderboard
+
+Scores can be pushed to a Hugging Face dataset automatically by wrapping the run
+with `eval/run_eval_with_leaderboard.py` (it executes `inspect eval ...` under the hood
+and only appends results when the command succeeds):
+
+```bash
+uv run python eval/run_eval_with_leaderboard.py \
+  --hf-dataset akseljoonas/hf-agent-leaderboard \
+  --hf-token $HF_TOKEN \
+  --solver-name hf_agent_solver \
+  --solver-kwargs '{"config_path":"agent/config_mcp_example.json","max_iterations":10}' \
+  --dataset akseljoonas/hf-agent-rubrics@train \
+  --limit 25
+```
 
 ## Scoring (implemented in `eval/rubric_eval.py`)
 
