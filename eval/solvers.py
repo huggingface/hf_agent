@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 from typing import Callable, Dict, List, Sequence
 
 from inspect_ai.model import ChatMessageAssistant, ModelOutput
@@ -100,9 +102,54 @@ def claude_code(
     return solve
 
 
+@solver(name="claude_code+hf_mcp")
+def claude_code_hf_mcp(
+    output_format: str = "json",
+    hf_token: str | None = None,
+) -> Solver:
+    """
+    A solver that uses Claude Code with the Hugging Face MCP server.
+    Requires HF_TOKEN in environment variables or passed as argument.
+    """
+    token = hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        raise ValueError(
+            "HF_TOKEN not found. Please set HF_TOKEN env var or pass it to the solver."
+        )
+
+    # Construct the MCP configuration for Hugging Face
+    mcp_config = {
+        "mcpServers": {
+            "huggingface": {
+                "type": "http",
+                "url": "https://huggingface.co/mcp",
+                "headers": {"Authorization": f"Bearer {token}"},
+            }
+        }
+    }
+
+    async def solve(state: TaskState, generate) -> TaskState:
+        # Write config to a temporary file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+            json.dump(mcp_config, tmp, indent=2)
+            tmp_path = tmp.name
+
+        try:
+            # Delegate to the base claude_code solver
+            delegate = claude_code(output_format=output_format, mcp_config=tmp_path)
+            return await delegate(state, generate)
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    return solve
+
+
 SOLVER_REGISTRY: Dict[str, Callable[..., Solver]] = {
     "hf_agent_solver": hf_agent_solver,
     "claude_code": claude_code,
+    "claude_code+hf_mcp": claude_code_hf_mcp,
 }
 
 

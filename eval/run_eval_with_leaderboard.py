@@ -112,7 +112,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--hf-dataset",
-        required=True,
+        default="akseljoonas/hf-agent-leaderboard",
         help="HF dataset repo id for the leaderboard (e.g. user/leaderboard).",
     )
 
