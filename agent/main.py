@@ -160,6 +160,7 @@ async def main():
                     op_type=OpType.USER_INPUT, data={"text": user_input}
                 ),
             )
+            print(f"Main submitting: {submission.operation.op_type}")
             await submission_queue.put(submission)
 
     except KeyboardInterrupt:

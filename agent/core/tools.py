@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from fastmcp import Client
+from lmnr import observe
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
@@ -142,6 +143,7 @@ class ToolRouter:
             await self.mcp_client.__aexit__(exc_type, exc, tb)
             self._mcp_initialized = False
 
+    @observe(name="call_tool")
     async def call_tool(
         self, tool_name: str, arguments: dict[str, Any]
     ) -> tuple[str, bool]:

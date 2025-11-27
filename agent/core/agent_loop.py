@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from litellm import ChatCompletionMessageToolCall, Message, ModelResponse, acompletion
+from lmnr import observe
 
 from agent.config import Config
 from agent.core.session import Event, OpType, Session
@@ -18,8 +19,20 @@ class Handlers:
     """Handler functions for each operation type"""
 
     @staticmethod
-    async def run_agent(session: Session, text: str, max_iterations: int = 10) -> None:
-        """Handle user input (like user_input_or_turn in codex.rs:1291)"""
+    @observe(name="run_agent")
+    async def run_agent(
+        session: Session, text: str, max_iterations: int = 10
+    ) -> str | None:
+        """
+        Handle user input (like user_input_or_turn in codex.rs:1291)
+        Returns the final assistant response content, if any.
+        """
+        # Set session ID for this trace
+        if hasattr(session, "session_id"):
+            from lmnr import Laminar
+
+            Laminar.set_trace_session_id(session_id=session.session_id)
+
         # Add user message to history
         user_msg = Message(role="user", content=text)
         session.context_manager.add_message(user_msg)
@@ -31,6 +44,8 @@ class Handlers:
 
         # Agentic loop - continue until model doesn't call tools or max iterations is reached
         iteration = 0
+        final_response = None
+
         while iteration < max_iterations:
             messages = session.context_manager.get_messages()
             tools = session.tool_router.get_tool_specs_for_llm()
@@ -60,6 +75,7 @@ class Handlers:
                                 data={"content": content},
                             )
                         )
+                        final_response = content
                     break
 
                 # Add assistant message with tool calls to history
@@ -118,7 +134,7 @@ class Handlers:
                 await session.send_event(
                     Event(
                         event_type="error",
-                        data={"error": str(e + "\n" + traceback.format_exc())},
+                        data={"error": str(e) + "\n" + traceback.format_exc()},
                     )
                 )
                 break
@@ -129,6 +145,7 @@ class Handlers:
                 data={"history_size": len(session.context_manager.items)},
             )
         )
+        return final_response
 
     @staticmethod
     async def interrupt(session: Session) -> None:
@@ -202,6 +219,7 @@ async def process_submission(session: Session, submission) -> bool:
     return True
 
 
+@observe(name="submission_loop")
 async def submission_loop(
     submission_queue: asyncio.Queue,
     event_queue: asyncio.Queue,
