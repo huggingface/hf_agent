@@ -32,8 +32,8 @@ async def _run_subprocess(command: Sequence[str]) -> str:
     return stdout.decode().strip()
 
 
-@solver(name="hf_agent_solver")
-def hf_agent_solver(
+@solver(name="hf_agent")
+def hf_agent(
     config_path: str = "agent/config_mcp_example.json",
     max_iterations: int = 10,
 ) -> Solver:
@@ -147,7 +147,7 @@ def claude_code_hf_mcp(
 
 
 SOLVER_REGISTRY: Dict[str, Callable[..., Solver]] = {
-    "hf_agent_solver": hf_agent_solver,
+    "hf_agent": hf_agent,
     "claude_code": claude_code,
     "claude_code+hf_mcp": claude_code_hf_mcp,
 }
