@@ -97,7 +97,7 @@ def evaluate_with_rubrics(
     question: str,
     response: str,
     rubrics: List[RubricData],
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-nano",
 ) -> RubricEvaluation:
     """
     Evaluate response using RaR-Explicit method (weighted sum).

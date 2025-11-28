@@ -14,6 +14,7 @@ from inspect_ai import Task, task
 from inspect_ai.dataset import Sample, hf_dataset
 from inspect_ai.scorer import Score, Target, mean, scorer
 from inspect_ai.solver._task_state import TaskState
+import litellm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -56,7 +57,7 @@ def _metadata_to_rubrics(metadata: dict[str, Any]) -> list[RubricData]:
 
 
 @scorer(metrics=[mean()], name="rubric_scorer")
-def rubric_scorer(judge_model: str = "gpt-4o-mini"):
+def rubric_scorer(judge_model: str = "gpt-5-mini"):
     async def score(state: TaskState, target: Target) -> Score:
         response_text = state.output.completion or state.output.message.text
         question = state.metadata.get("question", state.input_text)
@@ -99,8 +100,9 @@ def hf_benchmark_with_rubrics(
     },
     dataset_name: str = "akseljoonas/hf-agent-rubrics@train",
     limit: int | None = None,
-    judge_model: str = "gpt-4o-mini",
+    judge_model: str = "gpt-5-mini",
 ) -> Task:
+    litellm.drop_params = True
     if "@" not in dataset_name:
         raise ValueError("Dataset name must be in the format 'author/dataset@split'")
     dataset_name, dataset_split = dataset_name.split("@")

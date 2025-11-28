@@ -16,6 +16,17 @@ from agent.core.agent_loop import submission_loop
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
 
+litellm.drop_params = True
+
+lmnr_api_key = os.environ.get("LMNR_API_KEY")
+if lmnr_api_key:
+    try:
+        Laminar.initialize(project_api_key=lmnr_api_key)
+        litellm.callbacks = [LaminarLiteLLMCallback()]
+        print("✅ Laminar initialized")
+    except Exception as e:
+        print(f"⚠️ Failed to initialize Laminar: {e}")
+
 
 @dataclass
 class Operation:
@@ -97,15 +108,6 @@ async def main():
     print("🤖 Interactive Agent Chat")
     print("=" * 60)
     print("Type your messages below. Type 'exit', 'quit', or '/quit' to end.\n")
-
-    lmnr_api_key = os.environ.get("LMNR_API_KEY")
-    if lmnr_api_key:
-        try:
-            Laminar.initialize(project_api_key=lmnr_api_key)
-            litellm.callbacks = [LaminarLiteLLMCallback()]
-            print("✅ Laminar initialized")
-        except Exception as e:
-            print(f"⚠️ Failed to initialize Laminar: {e}")
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
