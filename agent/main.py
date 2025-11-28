@@ -3,9 +3,13 @@ Interactive CLI chat with the agent
 """
 
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+import litellm
+from lmnr import Laminar, LaminarLiteLLMCallback
 
 from agent.config import load_config
 from agent.core.agent_loop import submission_loop
@@ -93,6 +97,15 @@ async def main():
     print("🤖 Interactive Agent Chat")
     print("=" * 60)
     print("Type your messages below. Type 'exit', 'quit', or '/quit' to end.\n")
+
+    lmnr_api_key = os.environ.get("LMNR_API_KEY")
+    if lmnr_api_key:
+        try:
+            Laminar.initialize(project_api_key=lmnr_api_key)
+            litellm.callbacks = [LaminarLiteLLMCallback()]
+            print("✅ Laminar initialized")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize Laminar: {e}")
 
     # Create queues for communication
     submission_queue = asyncio.Queue()

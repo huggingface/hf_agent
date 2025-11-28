@@ -1,12 +1,8 @@
 import asyncio
-import os
 import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
-
-import litellm
-from lmnr import Laminar, LaminarLiteLLMCallback
 
 from agent.config import Config
 from agent.context_manager.manager import ContextManager
@@ -38,16 +34,6 @@ class Session:
         event_queue: asyncio.Queue,
         config: Config | None = None,
     ):
-        # Initialize Laminar if API key is present
-        lmnr_api_key = os.environ.get("LMNR_API_KEY")
-        if lmnr_api_key:
-            try:
-                Laminar.initialize(project_api_key=lmnr_api_key)
-                litellm.callbacks = [LaminarLiteLLMCallback()]
-                print("✅ Laminar initialized")
-            except Exception as e:
-                print(f"⚠️ Failed to initialize Laminar: {e}")
-
         self.context_manager = ContextManager()
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())
