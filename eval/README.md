@@ -2,6 +2,20 @@
 
 Rubric-based evaluation pipeline implementing [Rubrics as Rewards](https://arxiv.org/abs/2507.17746) paper (RaR-Explicit formula).
 
+## Components
+
+| Component | Purpose | Long Term Goal |
+|-----------|---------|----------------|
+| **`generate_rubrics.py`** | Generates instance-specific evaluation criteria (7-20 weighted rubrics) from QA pairs using LLM, following the RaR paper methodology | Improve rubric quality with few-shot examples, domain-specific templates, and iterative refinement |
+| **`rubric_eval.py`** | Scores responses using RaR-Explicit formula: checks each criterion independently via LLM judge, computes weighted normalized score | Support batch evaluation, caching, and alternative scoring formulas (RaR-Holistic) |
+| **`task.py`** | Defines Inspect AI task `hf-benchmark-with-rubrics` that wires dataset, solver, and rubric scorer into a single evaluation pipeline | Add more task variants for different benchmarks (code generation, tool use, multi-turn) |
+| **`solvers.py`** | Registry of solver implementations (`hf_agent`, `claude_code`, `claude_code+hf_mcp`) that can be swapped via CLI args | Expand solver library to benchmark more agents (OpenAI Codex, Gemini, open-source agents) |
+| **`hf_agent_connector.py`** | Lightweight bridge that spins up the hf-agent stack (tools, MCP, LiteLLM loop) and returns the final assistant response | Enable streaming, intermediate step logging, and cost tracking per evaluation |
+| **`leaderboard.py`** | Utilities to build records and append scores to a HuggingFace dataset for tracking performance over time | Add score breakdowns, visualizations, and automatic regression detection |
+| **`run_eval_with_leaderboard.py`** | CLI wrapper that runs `inspect eval`, parses scores from logs, and pushes results to the leaderboard dataset | Support scheduled CI runs, PR-gated benchmarks, and multi-dataset aggregation |
+| **`hf_io.py`** | Helper utilities for pushing DataFrames to HuggingFace Hub | Extend with dataset versioning and diff tracking |
+| **`models.py`** | Shared Pydantic models for evaluation data structures | Centralize all eval schemas for consistency across components |
+
 ## Pipeline
 
 ```
