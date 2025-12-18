@@ -1,11 +1,12 @@
-"""
+"""loop
 Main agent implementation with integrated tool system and MCP support
 """
 
 import asyncio
 import json
 
-from litellm import ChatCompletionMessageToolCall, Message, ModelResponse, acompletion
+from litellm import (ChatCompletionMessageToolCall, Message, ModelResponse,
+                     acompletion)
 from lmnr import observe
 
 from agent.config import Config
@@ -58,17 +59,18 @@ class Handlers:
                     tool_choice="auto",
                 )
 
+                # Extract text response, token usage, and tool calls
                 message = response.choices[0].message
-
-                # Extract content and tool calls
                 content = message.content
+                token_count = response.usage.total_tokens
                 tool_calls: list[ToolCall] = message.get("tool_calls", [])
 
                 # If no tool calls, add assistant message and we're done
                 if not tool_calls:
                     if content:
-                        assistant_msg = Message(role="assistant", content=content)
-                        session.context_manager.add_message(assistant_msg)
+                        assistant_msg = Message(
+                            role="assistant", content=content)
+                        session.context_manager.add_message(assistant_msg, token_count)
                         await session.send_event(
                             Event(
                                 event_type="assistant_message",
@@ -81,9 +83,11 @@ class Handlers:
                 # Add assistant message with tool calls to history
                 # LiteLLM will format this correctly for the provider
                 assistant_msg = Message(
-                    role="assistant", content=content, tool_calls=tool_calls
+                    role="assistant",
+                    content=content,
+                    tool_calls=tool_calls,
                 )
-                session.context_manager.add_message(assistant_msg)
+                session.context_manager.add_message(assistant_msg, token_count)
 
                 if content:
                     await session.send_event(
@@ -139,6 +143,18 @@ class Handlers:
                 )
                 break
 
+        old_length = session.context_manager.context_length
+        await session.context_manager.compact(model_name=session.config.model_name)
+        new_length = session.context_manager.context_length
+
+        if new_length != old_length:
+            await session.send_event(
+                Event(
+                    event_type="compacted",
+                    data={"old_tokens": old_length, "new_tokens": new_length},
+                )
+            )
+
         await session.send_event(
             Event(
                 event_type="turn_complete",
@@ -156,14 +172,14 @@ class Handlers:
     @staticmethod
     async def compact(session: Session) -> None:
         """Handle compact (like compact in codex.rs:1317)"""
-        old_size = len(session.context_manager.items)
-        session.context_manager.compact(target_size=10)
-        new_size = len(session.context_manager.items)
+        old_length = session.context_manager.context_length
+        await session.context_manager.compact(model_name=session.config.model_name)
+        new_length = session.context_manager.context_length
 
         await session.send_event(
             Event(
                 event_type="compacted",
-                data={"removed": old_size - new_size, "remaining": new_size},
+                data={"removed": old_length, "remaining": new_length},
             )
         )
 

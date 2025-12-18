@@ -34,7 +34,7 @@ class Session:
         event_queue: asyncio.Queue,
         config: Config | None = None,
     ):
-        self.context_manager = ContextManager()
+        self.context_manager = ContextManager(max_context=4_000, compact_size=0.1, untouched_messages=5)
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())
         self.config = config or Config(
