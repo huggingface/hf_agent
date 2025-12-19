@@ -27,7 +27,7 @@ class ContextManager:
         """Load the system prompt"""
 
         # TODO: get system prompt from jinja template
-        return "You are a helpful assistant."
+        return "You are a helpful assistant, primarly for ML. Do the task you are asked to as efficiently as possible. Don't invent tasks."
 
     def add_message(self, message: Message, token_count: int = None) -> None:
         """Add a message to the history"""
