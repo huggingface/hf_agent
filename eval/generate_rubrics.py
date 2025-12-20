@@ -38,19 +38,22 @@ load_dotenv()
 # Rubric generation prompt template based on RaR paper
 
 
-PROMPT_TEMPLATE = """You are an expert rubric writer. Your job is to generate a self-contained set of evaluation criteria (“rubrics”) for judging
-how good, helpful and complete an agent's trajectory is to a given user question/request. 
+PROMPT_TEMPLATE = """You are an expert rubric writer. Your job is to generate a self-contained set of evaluation criteria ("rubrics") for judging how good, helpful and complete an agent's trajectory is to a given user question/request. 
 
 Rubrics can cover aspects of a response such as, but not limited to, factual correctness, helpfulness, completeness, harmlessness, correctness of using Hugging Face best practices (based on HF documentation), depth of
 reasoning, contextual relevance and usefulness. Each item must be self-contained – non expert readers should not need to
-infer anything or consult external information. Begin each description with its category: “Essential Criteria: . . . ”, “Important
-Criteria: . . . ”, “Optional Criteria: . . . ”, or “Pitfall Criteria: Does not mention . . . ”.
+infer anything or consult external information. Begin each description with its category: "Essential Criteria: . . . ", "Important
+Criteria: . . . ", "Optional Criteria: . . . ", or "Pitfall Criteria: Does not mention . . . ".
 
 
-Inputs: !!!
+Inputs:
 - question: <<<{question}>>>
-- reference_answer (ideal solution): <<<{reference_answer}>>>
-- thread: <<<{thread}>>>
+- example_solution (NOT ground truth - just an okay attempt): <<<{example_solution}>>>
+- example_trace (NOT ground truth - just an okay attempt showing what tool usage might look like): <<<{example_trace}>>>
+
+IMPORTANT: The example_solution and example_trace provided are NOT ground truth or ideal solutions. They represent 
+an attempt at solving the task - they give you a general idea of the shape of the problem and what tool usage 
+might look like, but they contain mistakes and incomplete solutions, suboptimal approaches, or incomplete answers. Your rubrics MUST be designed to fairly grade a PERFECT solution. The perfect solution is complete in all aspects of solving the task and verifing it's correctness before giving the final answer. It tells the user what was done and why, and provides the final answer clearly answering the user's question.
 
 Total items:
 • Choose 7–20 rubric items based on the complexity of the question.
@@ -69,45 +72,95 @@ Category guidance:
 • Important: Key reasoning, completeness, or clarity; strongly affects quality and usefulness (weight 3–4).
 • Optional: Helpfulness in educating the user or providing extra depth; nice to have but not deal-breaking (weight 1–2).
 • Pitfall: Common mistakes or omissions specific to this prompt—identify things a respondent often forgets or misstates.
-Each Pitfall description must begin with “Pitfall Criteria: Does not mention . . . ” or “Pitfall Criteria: Recommends . . . ”
+Each Pitfall description must begin with "Pitfall Criteria: Does not mention . . . " or "Pitfall Criteria: Recommends . . . "
 and use weight –1 or –2.
 
 To ensure self-contained guidance:
-• When referring to answer choices, explicitly say “Identifies (A)”, “Identifies (B)”, etc., rather than vague phrasing.
+• When referring to answer choices, explicitly say "Identifies (A)", "Identifies (B)", etc., rather than vague phrasing.
 • If the format requires an action like calling a tool or launching a training run, include a rubric item such as:
 – Essential Criteria: Includes a clear statement "Launches the training with hf-jobs.".
 • If reasoning should precede the answer, include a rubric like:
 – Important Criteria: Presents the explanation and reasoning before stating the final answer.
 • If brevity is valued, include a rubric like:
 – Optional Criteria: Remains concise and avoids unnecessary detail.
-• If the question context demands mention of specific findings/best practices, include that explicitly (e.g., “Essential Criteria: Mentions
-that training data must be in "messages" column for LLM training”).
+• If the question context demands mention of specific findings/best practices, include that explicitly (e.g., "Essential Criteria: Mentions
+that training data must be in "messages" column for LLM training").
 
 Output: Provide a JSON array of rubric objects. Each object must contain exactly three keys—title, description, and weight.
-Do not copy large blocks of the question or reference_answer into the text. Each description must begin with its category
+Do not copy large blocks of the question or example_solution into the text. Each description must begin with its category
 prefix, and no extra keys are allowed.
-Now, given the question, thread and reference_answer, generate the rubric as described. The reference answer is an good and helpful response
-but not necessarily exhaustive; use it only as guidance."""
+
+Remember: The example_solution and example_trace are NOT ideal answers - they are just rough attempts to show the 
+general approach. Design rubrics that can fairly evaluate any solution, including ones that are better than the example."""
 
 
 def build_prompt(
-    question: str, reference_answer: str, thread: List[Dict[str, str]]
+    question: str,
+    example_solution: str,
+    example_trace: List[Dict[str, Any]],
 ) -> List[Dict[str, str]]:
     """
     Build the messages list for LiteLLM completion.
 
     Args:
         question: The question/task to evaluate
-        reference_answer: The reference/accepted solution
+        difficulty: The difficulty level of the task
+        example_solution: An example solution attempt (not ground truth)
+        example_trace: The agent's message trace showing tool usage
 
     Returns:
         List of message dicts for LiteLLM
     """
+    # Format the trace for readability - only include key parts
+    formatted_trace = format_trace_for_prompt(example_trace)
+
     prompt = PROMPT_TEMPLATE.format(
-        question=question, reference_answer=reference_answer, thread=thread
+        question=question,
+        example_solution=example_solution,
+        example_trace=formatted_trace,
     )
 
     return [{"role": "user", "content": prompt}]
+
+
+def format_trace_for_prompt(messages: List[Dict[str, Any]]) -> str:
+    """
+    Format the agent message trace for inclusion in the prompt.
+    Extracts key information while keeping it readable.
+    """
+    if not messages:
+        return "(No trace available)"
+
+    formatted_parts = []
+    for msg in messages:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+
+        # Skip system messages
+        if role == "system":
+            continue
+
+        # Handle tool calls
+        if "tool_calls" in msg and msg["tool_calls"]:
+            tool_info = []
+            for tc in msg["tool_calls"]:
+                if isinstance(tc, dict) and "function" in tc:
+                    func = tc["function"]
+                    tool_name = func.get("name", "unknown_tool")
+                    tool_info.append(f"  - Called: {tool_name}")
+            if tool_info:
+                formatted_parts.append(
+                    "[Assistant Tool Calls]\n" + "\n".join(tool_info)
+                )
+
+        # Handle regular content
+        if content:
+            # Truncate very long content
+            if len(content) > 500:
+                content = content[:500] + "... (truncated)"
+            formatted_parts.append(f"[{role.title()}]\n{content}")
+
+    return "\n\n".join(formatted_parts) if formatted_parts else "(Empty trace)"
 
 
 def validate_rubric(rubric_list: List[Dict[str, Any]]) -> bool:
@@ -151,8 +204,7 @@ def generate_rubric(row: pd.Series, model: str, timeout: int = 120) -> Dict[str,
     Generate rubric for a single question using LiteLLM.
 
     Args:
-        question: The question text
-        reference_answer: The reference solution
+        row: DataFrame row containing question, difficulty, solution, and messages
         model: Model name for LiteLLM
         timeout: Request timeout in seconds
 
@@ -160,7 +212,11 @@ def generate_rubric(row: pd.Series, model: str, timeout: int = 120) -> Dict[str,
         Dict with rubric_list and rubric_count, or None on failure
     """
 
-    messages = build_prompt(row["question"], row["solution"], row["thread"])
+    messages = build_prompt(
+        question=row["question"],
+        example_solution=row["solution"],
+        example_trace=row.get("messages", []),
+    )
 
     try:
         response = litellm.completion(
@@ -206,16 +262,18 @@ def load_input_data(infile: str) -> pd.DataFrame:
 
     # Validate required columns
     required_cols = [
-        "discussion_title",
-        "discussion_url",
         "question",
-        "thread",
         "solution",
     ]
+    optional_cols = ["difficulty", "messages", "error"]
     missing_cols = [col for col in required_cols if col not in df.columns]
 
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
+
+    # Log available optional columns
+    available_optional = [col for col in optional_cols if col in df.columns]
+    print(f"Found optional columns: {available_optional}")
 
     return df
 
@@ -307,6 +365,7 @@ def main():
 
         # Merge with original data
         output_row = row.to_dict()
+        output_row["messages"] = json.dumps(output_row["messages"])
         output_row["rubric"] = rubric_result
         output_rows.append(output_row)
         success_count += 1
