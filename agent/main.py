@@ -88,6 +88,10 @@ async def event_listener(
                 break
             elif event.event_type == "processing":
                 print("⏳ Processing...", flush=True)
+            elif event.event_type == "compacted":
+                old_tokens = event.data.get("old_tokens", 0) if event.data else 0
+                new_tokens = event.data.get("new_tokens", 0) if event.data else 0
+                print(f"📦 Compacted context: {old_tokens} → {new_tokens} tokens")
             # Silently ignore other events
 
         except asyncio.CancelledError:
