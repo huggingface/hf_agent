@@ -1,0 +1,16 @@
+{
+  "model_name": "anthropic/claude-sonnet-4-5-20250929",
+  "tools": [],
+  "system_prompt_path": "",
+  "mcpServers": {
+    "hf-mcp-server": {
+      "command": "node",
+      "args": [
+        "/Users/akseljoonas/Documents/hf-agent/hf-mcp-server/packages/app/dist/server/stdio.js"
+      ],
+      "env": {
+        "DEFAULT_HF_TOKEN": "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"
+      }
+    }
+  }
+}

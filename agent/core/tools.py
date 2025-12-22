@@ -13,6 +13,7 @@ from lmnr import observe
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
+from agent.tools.hf.jobs import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 
 # Suppress aiohttp deprecation warning
 warnings.filterwarnings(
@@ -261,5 +262,11 @@ def create_builtin_tools() -> list[ToolSpec]:
                 "required": ["path", "content"],
             },
             handler=write_file_handler,
+        ),
+        ToolSpec(
+            name=HF_JOBS_TOOL_SPEC["name"],
+            description=HF_JOBS_TOOL_SPEC["description"],
+            parameters=HF_JOBS_TOOL_SPEC["parameters"],
+            handler=hf_jobs_handler,
         ),
     ]
