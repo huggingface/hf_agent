@@ -62,10 +62,14 @@ class ContextManager:
         )
 
         # Don't summarize a certain number of just-preceding messages
-        recent_messages = self.items[-self.untouched_messages :]
+        # Walk back to find a user message to make sure we keep an assistant -> user ->
+        # assistant general conversation structure
+        idx = len(self.items) - self.untouched_messages
+        while idx > 1 and self.items[idx].role != "user":
+            idx -= 1
 
-        # Summarize everything in between (skip system prompt, skip preceding n)
-        messages_to_summarize = self.items[1 : -self.untouched_messages]
+        recent_messages = self.items[idx:]
+        messages_to_summarize = self.items[1:idx]
 
         # improbable, messages would have to very long
         if not messages_to_summarize:
@@ -87,7 +91,7 @@ class ContextManager:
             role="assistant", content=response.choices[0].message.content
         )
 
-        # Reconstruct: system + summary + recent 2 messages
+        # Reconstruct: system + summary + recent messages (includes tools)
         if system_msg:
             self.items = [system_msg, summarized_message] + recent_messages
         else:
