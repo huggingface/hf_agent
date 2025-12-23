@@ -12,12 +12,9 @@ from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
 
 from agent.tools.types import ToolResult
-from agent.tools.utilities import (
-    format_job_details,
-    format_jobs_table,
-    format_scheduled_job_details,
-    format_scheduled_jobs_table,
-)
+from agent.tools.utilities import (format_job_details, format_jobs_table,
+                                   format_scheduled_job_details,
+                                   format_scheduled_jobs_table)
 
 # Hardware flavors
 CPU_FLAVORS = ["cpu-basic", "cpu-upgrade", "cpu-performance", "cpu-xl"]
@@ -60,7 +57,6 @@ OperationType = Literal[
 ]
 
 # Constants
-DEFAULT_LOG_WAIT_SECONDS = 10
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
 
@@ -316,7 +312,7 @@ Call this tool with:
 {{
   "operation": "uv",
   "args": {{
-    "script": "import random\\nprint(42 + random.randint(1, 5))"
+    "script": "import random\\nprint(42 + random.randint(1, 5))",
   }}
 }}
 ```
@@ -345,7 +341,7 @@ Call this tool with:
 
 ## Tips
 
-- Jobs default to non-detached mode (tail logs for up to {DEFAULT_LOG_WAIT_SECONDS}s or until completion). Set `detach: true` to return immediately.
+- Jobs default to non-detached mode (stream logs until completion). Set `detach: true` to return immediately.
 - Prefer array commands to avoid shell parsing surprises
 - To access private Hub assets, include `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}` to inject your auth token.
 """
@@ -355,6 +351,33 @@ Call this tool with:
         """Show help for a specific operation"""
         help_text = f"Help for operation: {operation}\n\nCall with appropriate arguments. Use the main help for examples."
         return {"formatted": help_text, "totalResults": 1, "resultsShared": 1}
+
+    async def _wait_for_job_completion(
+        self, job_id: str, namespace: Optional[str] = None
+    ) -> tuple[str, list[str]]:
+        """
+        Stream job logs until completion, printing them in real-time.
+
+        Returns:
+            tuple: (final_status, all_logs)
+        """
+        all_logs = []
+
+        # Fetch logs - generator streams logs as they arrive and ends when job completes
+        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+
+        # Stream logs in real-time
+        for log_line in logs_gen:
+            print("\t" + log_line)
+            all_logs.append(log_line)
+
+        # After logs complete, fetch final job status
+        job_info = await _async_call(
+            self.api.inspect_job, job_id=job_id, namespace=namespace
+        )
+        final_status = job_info.status.stage
+
+        return final_status, all_logs
 
     async def _run_job(self, args: Dict[str, Any]) -> ToolResult:
         """Run a job using HfApi.run_job()"""
@@ -382,14 +405,28 @@ To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "
 To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "{job.id}"}}}}`"""
                 return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
-            # Not detached - return job info
-            response = f"""Job started: {job.id}
+            # Not detached - wait for completion and stream logs
+            print(f"Job started: {job.id}")
+            print(f"Streaming logs...\n---\n")
 
-**Status:** {job.status.stage}
-**View logs at:** {job.url}
+            final_status, all_logs = await self._wait_for_job_completion(
+                job_id=job.id,
+                namespace=args.get("namespace") or self.namespace,
+            )
 
-Note: Logs are being collected. Check the job page for real-time logs.
-"""
+            # Format all logs for the agent
+            log_text = "\n".join(all_logs) if all_logs else "(no logs)"
+
+            response = f"""Job completed!
+
+**Job ID:** {job.id}
+**Final Status:** {final_status}
+**View at:** {job.url}
+
+**Logs:**
+```
+{log_text}
+```"""
             return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
         except Exception as e:
@@ -422,13 +459,39 @@ Note: Logs are being collected. Check the job page for real-time logs.
                 namespace=args.get("namespace") or self.namespace,
             )
 
-            response = f"""UV Job started: {job.id}
+            # If detached, return immediately
+            if args.get("detach", False):
+                response = f"""UV Job started successfully!
 
+**Job ID:** {job.id}
 **Status:** {job.status.stage}
 **View at:** {job.url}
 
-To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "{job.id}"}}}}`
-"""
+To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "{job.id}"}}}}`"""
+                return {"formatted": response, "totalResults": 1, "resultsShared": 1}
+
+            # Not detached - wait for completion and stream logs
+            print(f"UV Job started: {job.id}")
+            print(f"Streaming logs...\n---\n")
+
+            final_status, all_logs = await self._wait_for_job_completion(
+                job_id=job.id,
+                namespace=args.get("namespace") or self.namespace,
+            )
+
+            # Format all logs for the agent
+            log_text = "\n".join(all_logs) if all_logs else "(no logs)"
+
+            response = f"""UV Job completed!
+
+**Job ID:** {job.id}
+**Final Status:** {final_status}
+**View at:** {job.url}
+
+**Logs:**
+```
+{log_text}
+```"""
             return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
         except Exception as e:
