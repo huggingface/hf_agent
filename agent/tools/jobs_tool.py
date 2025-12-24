@@ -313,6 +313,7 @@ Call this tool with:
   "operation": "uv",
   "args": {{
     "script": "import random\\nprint(42 + random.randint(1, 5))",
+    "dependencies" : ["torch", "huggingface_hub"]
   }}
 }}
 ```
@@ -344,6 +345,7 @@ Call this tool with:
 - Jobs default to non-detached mode (stream logs until completion). Set `detach: true` to return immediately.
 - Prefer array commands to avoid shell parsing surprises
 - To access private Hub assets, include `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}` to inject your auth token.
+- Before calling a job, think about dependencies (they must be specified), which hardware flavor to run on (choose simplest for task), and whether to include secrets.
 """
         return {"formatted": usage_text, "totalResults": 1, "resultsShared": 1}
 
@@ -442,7 +444,9 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
             # Resolve the command based on script type (URL, inline, or file)
             command = _resolve_uv_command(
                 script=script,
-                with_deps=args.get("with_deps") or args.get("dependencies"),
+                with_deps=args.get("with_deps")
+                or args.get("dependencies")
+                or args.get("packages"),
                 python=args.get("python"),
                 script_args=args.get("script_args"),
             )
@@ -454,7 +458,7 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
                 command=command,
                 env=args.get("env"),
                 secrets=args.get("secrets"),
-                flavor=args.get("flavor", "cpu-basic"),
+                flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
             )
@@ -679,7 +683,9 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
             # Resolve the command based on script type
             command = _resolve_uv_command(
                 script=script,
-                with_deps=args.get("with_deps") or args.get("dependencies"),
+                with_deps=args.get("with_deps")
+                or args.get("dependencies")
+                or args.get("packages"),
                 python=args.get("python"),
                 script_args=args.get("script_args"),
             )
@@ -692,7 +698,7 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
                 schedule=schedule,
                 env=args.get("env"),
                 secrets=args.get("secrets"),
-                flavor=args.get("flavor", "cpu-basic"),
+                flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
             )
@@ -851,6 +857,7 @@ HF_JOBS_TOOL_SPEC = {
     "description": (
         "Manage Hugging Face CPU/GPU compute jobs. Run commands in Docker containers, "
         "execute Python scripts with UV. List, schedule and monitor jobs/logs. "
+        "Example hardware/flavor: cpu-basic, cpu-performance, t4-medium. "
         "Call this tool with no operation for full usage instructions and examples."
     ),
     "parameters": {
@@ -881,7 +888,12 @@ HF_JOBS_TOOL_SPEC = {
             },
             "args": {
                 "type": "object",
-                "description": "Operation-specific arguments as a JSON object",
+                "description": (
+                    "Operation-specific arguments as a JSON object. "
+                    "Common args: script (for uv), packages/dependencies (array), "
+                    "flavor/hardware (e.g., a10g-large, cpu-basic), command (array), "
+                    "image (string), env (object), secrets (object)."
+                ),
                 "additionalProperties": True,
             },
         },
