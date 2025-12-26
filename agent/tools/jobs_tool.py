@@ -6,6 +6,7 @@ Refactored to use official huggingface-hub library instead of custom HTTP client
 
 import asyncio
 import base64
+import os
 from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import HfApi
@@ -60,6 +61,29 @@ OperationType = Literal[
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
 
+def _substitute_hf_token(params: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """
+    Substitute $HF_TOKEN with actual token value from environment.
+
+    Args:
+        params: Dictionary that may contain "$HF_TOKEN" in values
+
+    Returns:
+        Dictionary with $HF_TOKEN substituted
+    """
+    if params is None:
+        return None
+
+    result = {}
+    for key, value in params.items():
+        if value == "$HF_TOKEN":
+            result[key] = os.environ.get("HF_TOKEN", "")
+        else:
+            result[key] = value
+
+    return result
+
+
 def _build_uv_command(
     script: str,
     with_deps: list[str] | None = None,
@@ -97,6 +121,20 @@ def _wrap_inline_script(
     # Join command parts with proper spacing
     uv_command_str = " ".join(uv_command)
     return f'echo "{encoded}" | base64 -d | {uv_command_str}'
+
+
+def _ensure_hf_transfer_dependency(deps: list[str] | None) -> list[str]:
+    """Ensure hf-transfer is included in the dependencies list"""
+    if deps is None:
+        return ["hf-transfer"]
+
+    if isinstance(deps, list):
+        deps_copy = deps.copy()  # Don't modify the original
+        if "hf-transfer" not in deps_copy:
+            deps_copy.append("hf-transfer")
+        return deps_copy
+
+    return ["hf-transfer"]
 
 
 def _resolve_uv_command(
@@ -332,7 +370,6 @@ Call this tool with:
 **String format (simple cases only):**
 - Still accepted for backwards compatibility, parsed with POSIX shell semantics
 - Rejects shell operators and can mis-handle characters such as `&`; switch to arrays when things turn complex
-- `$HF_TOKEN` stays literal—forward it via `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`
 
 ### Show command-specific help
 Call this tool with:
@@ -344,7 +381,7 @@ Call this tool with:
 
 - Jobs default to non-detached mode (stream logs until completion). Set `detach: true` to return immediately.
 - Prefer array commands to avoid shell parsing surprises
-- To access private Hub assets, include `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}` to inject your auth token.
+- To access private Hub assets (spaces, private models, datasets, collections), pass `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`
 - Before calling a job, think about dependencies (they must be specified), which hardware flavor to run on (choose simplest for task), and whether to include secrets.
 """
         return {"formatted": usage_text, "totalResults": 1, "resultsShared": 1}
@@ -388,8 +425,8 @@ Call this tool with:
                 self.api.run_job,
                 image=args.get("image", "python:3.12"),
                 command=args.get("command"),
-                env=args.get("env"),
-                secrets=args.get("secrets"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
                 flavor=args.get("flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -441,12 +478,18 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
             if not script:
                 raise ValueError("script is required")
 
+            # Get dependencies and ensure hf-transfer is included
+            deps = (
+                args.get("with_deps")
+                or args.get("dependencies")
+                or args.get("packages")
+            )
+            deps = _ensure_hf_transfer_dependency(deps)
+
             # Resolve the command based on script type (URL, inline, or file)
             command = _resolve_uv_command(
                 script=script,
-                with_deps=args.get("with_deps")
-                or args.get("dependencies")
-                or args.get("packages"),
+                with_deps=deps,
                 python=args.get("python"),
                 script_args=args.get("script_args"),
             )
@@ -456,8 +499,8 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
                 self.api.run_job,
                 image=UV_DEFAULT_IMAGE,
                 command=command,
-                env=args.get("env"),
-                secrets=args.get("secrets"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
                 flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -645,8 +688,8 @@ To verify, call this tool with `{{"operation": "inspect", "args": {{"job_id": "{
                 image=args.get("image", "python:3.12"),
                 command=args.get("command"),
                 schedule=args.get("schedule"),
-                env=args.get("env"),
-                secrets=args.get("secrets"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
                 flavor=args.get("flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -680,12 +723,18 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
             if not schedule:
                 raise ValueError("schedule is required")
 
+            # Get dependencies and ensure hf-transfer is included
+            deps = (
+                args.get("with_deps")
+                or args.get("dependencies")
+                or args.get("packages")
+            )
+            deps = _ensure_hf_transfer_dependency(deps)
+
             # Resolve the command based on script type
             command = _resolve_uv_command(
                 script=script,
-                with_deps=args.get("with_deps")
-                or args.get("dependencies")
-                or args.get("packages"),
+                with_deps=deps,
                 python=args.get("python"),
                 script_args=args.get("script_args"),
             )
@@ -696,8 +745,8 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
                 image=UV_DEFAULT_IMAGE,
                 command=command,
                 schedule=schedule,
-                env=args.get("env"),
-                secrets=args.get("secrets"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
                 flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,

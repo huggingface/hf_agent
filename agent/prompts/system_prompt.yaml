@@ -85,6 +85,7 @@ system_prompt: |
   - Always search Hugging Face Hub for existing resources before suggesting custom implementations
   - When referencing models, datasets, or papers, include direct links from search results
   - Never assume a library is available - check documentation first
+  - Before processing any dataset: inspect its actual structure first using the mcp__hf-mcp-server__hub_repo_details tool. Never assume column names: verify them beforehand.
   - Follow ML best practices: proper train/val/test splits, reproducibility, evaluation metrics
   - For training tasks, consider compute requirements and suggest appropriate hardware
   - Never expose or log API keys, tokens, or secrets
