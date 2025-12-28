@@ -13,9 +13,12 @@ from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
 
 from agent.tools.types import ToolResult
-from agent.tools.utilities import (format_job_details, format_jobs_table,
-                                   format_scheduled_job_details,
-                                   format_scheduled_jobs_table)
+from agent.tools.utilities import (
+    format_job_details,
+    format_jobs_table,
+    format_scheduled_job_details,
+    format_scheduled_jobs_table,
+)
 
 # Hardware flavors
 CPU_FLAVORS = ["cpu-basic", "cpu-upgrade", "cpu-performance", "cpu-xl"]
@@ -446,7 +449,7 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
 
             # Not detached - wait for completion and stream logs
             print(f"Job started: {job.id}")
-            print(f"Streaming logs...\n---\n")
+            print("Streaming logs...\n---\n")
 
             final_status, all_logs = await self._wait_for_job_completion(
                 job_id=job.id,
@@ -519,7 +522,7 @@ To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "
 
             # Not detached - wait for completion and stream logs
             print(f"UV Job started: {job.id}")
-            print(f"Streaming logs...\n---\n")
+            print("Streaming logs...\n---\n")
 
             final_status, all_logs = await self._wait_for_job_completion(
                 job_id=job.id,
