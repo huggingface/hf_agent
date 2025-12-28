@@ -53,6 +53,7 @@ class Session:
         )
         self.is_running = True
         self.current_task: asyncio.Task | None = None
+        self.pending_approval: Optional[dict[str, Any]] = None
 
     async def send_event(self, event: Event) -> None:
         """Send event back to client"""
