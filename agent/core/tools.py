@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from lmnr import observe
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 
@@ -166,10 +167,14 @@ class ToolRouter:
 
         # Otherwise, use MCP client
         if self._mcp_initialized:
-            result = await self.mcp_client.call_tool(tool_name, arguments)
-            # Convert MCP content blocks to string
-            output = convert_mcp_content_to_string(result.content)
-            return output, not result.is_error
+            try:
+                result = await self.mcp_client.call_tool(tool_name, arguments)
+                output = convert_mcp_content_to_string(result.content)
+                return output, not result.is_error
+            except ToolError as e:
+                # Catch MCP tool errors and return them to the agent
+                error_msg = f"Tool error: {str(e)}"
+                return error_msg, False
 
         return "MCP client not initialized", False
 
