@@ -8,7 +8,6 @@ from fastmcp.mcp_config import (
     RemoteMCPServer,
     StdioMCPServer,
 )
-from litellm import Tool
 from pydantic import BaseModel
 
 # These two are the canonical server config types for MCP servers.
@@ -19,7 +18,6 @@ class Config(BaseModel):
     """Configuration manager"""
 
     model_name: str
-    tools: list[Tool] = []
     mcpServers: dict[str, MCPServerConfig] = {}
 
 
