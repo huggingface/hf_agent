@@ -15,6 +15,16 @@ from agent.core.tools import ToolRouter
 ToolCall = ChatCompletionMessageToolCall
 
 
+def _needs_approval(tool_name: str, tool_args: dict) -> bool:
+    """Check if a tool call requires user approval before execution"""
+    if tool_name != "hf_jobs":
+        return False
+
+    # Check if it's a run or uv operation
+    operation = tool_args.get("operation", "")
+    return operation in ["run", "uv"]
+
+
 class Handlers:
     """Handler functions for each operation type"""
 
@@ -33,9 +43,10 @@ class Handlers:
 
             Laminar.set_trace_session_id(session_id=session.session_id)
 
-        # Add user message to history
-        user_msg = Message(role="user", content=text)
-        session.context_manager.add_message(user_msg)
+        # Add user message to history only if there's actual content
+        if text:
+            user_msg = Message(role="user", content=text)
+            session.context_manager.add_message(user_msg)
 
         # Send event that we're processing
         await session.send_event(
@@ -96,6 +107,28 @@ class Handlers:
                 for tc in tool_calls:
                     tool_name = tc.function.name
                     tool_args = json.loads(tc.function.arguments)
+
+                    # Check if this tool requires user approval
+                    if _needs_approval(tool_name, tool_args):
+                        await session.send_event(
+                            Event(
+                                event_type="approval_required",
+                                data={
+                                    "tool": tool_name,
+                                    "arguments": tool_args,
+                                    "tool_call_id": tc.id,
+                                },
+                            )
+                        )
+
+                        # Store pending approval and return early
+                        session.pending_approval = {
+                            "tool_call": tc,
+                            "arguments": tool_args,
+                        }
+
+                        # Return early - wait for EXEC_APPROVAL operation
+                        return None
 
                     await session.send_event(
                         Event(
@@ -192,6 +225,85 @@ class Handlers:
         await session.send_event(Event(event_type="undo_complete"))
 
     @staticmethod
+    async def exec_approval(
+        session: Session, approved: bool, feedback: str | None = None
+    ) -> None:
+        """Handle job execution approval"""
+        if not session.pending_approval:
+            await session.send_event(
+                Event(
+                    event_type="error",
+                    data={"error": "No pending approval to process"},
+                )
+            )
+            return
+
+        tc = session.pending_approval["tool_call"]
+        tool_args = session.pending_approval["arguments"]
+        tool_name = tc.function.name
+
+        if approved:
+            # Execute the pending tool
+            await session.send_event(
+                Event(
+                    event_type="tool_call",
+                    data={"tool": tool_name, "arguments": tool_args},
+                )
+            )
+
+            output, success = await session.tool_router.call_tool(tool_name, tool_args)
+
+            # Add tool result to context
+            tool_msg = Message(
+                role="tool",
+                content=output,
+                tool_call_id=tc.id,
+                name=tool_name,
+            )
+            session.context_manager.add_message(tool_msg)
+
+            await session.send_event(
+                Event(
+                    event_type="tool_output",
+                    data={
+                        "tool": tool_name,
+                        "output": output,
+                        "success": success,
+                    },
+                )
+            )
+        else:
+            # User rejected - add cancellation message to context
+            cancellation_msg = "Job execution cancelled by user"
+            if feedback:
+                cancellation_msg += f". User feedback: {feedback}"
+
+            tool_msg = Message(
+                role="tool",
+                content=cancellation_msg,
+                tool_call_id=tc.id,
+                name=tool_name,
+            )
+            session.context_manager.add_message(tool_msg)
+
+            await session.send_event(
+                Event(
+                    event_type="tool_output",
+                    data={
+                        "tool": tool_name,
+                        "output": cancellation_msg,
+                        "success": False,
+                    },
+                )
+            )
+
+        # Clear pending approval
+        session.pending_approval = None
+
+        # Continue agent loop with empty input to process the tool result
+        await Handlers.run_agent(session, "")
+
+    @staticmethod
     async def shutdown(session: Session) -> bool:
         """Handle shutdown (like shutdown in codex.rs:1329)"""
         session.is_running = False
@@ -224,6 +336,12 @@ async def process_submission(session: Session, submission) -> bool:
 
     if op.op_type == OpType.UNDO:
         await Handlers.undo(session)
+        return True
+
+    if op.op_type == OpType.EXEC_APPROVAL:
+        approved = op.data.get("approved", False) if op.data else False
+        feedback = op.data.get("feedback") if op.data else None
+        await Handlers.exec_approval(session, approved, feedback)
         return True
 
     if op.op_type == OpType.SHUTDOWN:

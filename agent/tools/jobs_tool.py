@@ -6,6 +6,7 @@ Refactored to use official huggingface-hub library instead of custom HTTP client
 
 import asyncio
 import base64
+import os
 from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import HfApi
@@ -60,8 +61,30 @@ OperationType = Literal[
 ]
 
 # Constants
-DEFAULT_LOG_WAIT_SECONDS = 10
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
+
+
+def _substitute_hf_token(params: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """
+    Substitute $HF_TOKEN with actual token value from environment.
+
+    Args:
+        params: Dictionary that may contain "$HF_TOKEN" in values
+
+    Returns:
+        Dictionary with $HF_TOKEN substituted
+    """
+    if params is None:
+        return None
+
+    result = {}
+    for key, value in params.items():
+        if value == "$HF_TOKEN":
+            result[key] = os.environ.get("HF_TOKEN", "")
+        else:
+            result[key] = value
+
+    return result
 
 
 def _build_uv_command(
@@ -101,6 +124,20 @@ def _wrap_inline_script(
     # Join command parts with proper spacing
     uv_command_str = " ".join(uv_command)
     return f'echo "{encoded}" | base64 -d | {uv_command_str}'
+
+
+def _ensure_hf_transfer_dependency(deps: list[str] | None) -> list[str]:
+    """Ensure hf-transfer is included in the dependencies list"""
+    if deps is None:
+        return ["hf-transfer"]
+
+    if isinstance(deps, list):
+        deps_copy = deps.copy()  # Don't modify the original
+        if "hf-transfer" not in deps_copy:
+            deps_copy.append("hf-transfer")
+        return deps_copy
+
+    return ["hf-transfer"]
 
 
 def _resolve_uv_command(
@@ -316,7 +353,8 @@ Call this tool with:
 {{
   "operation": "uv",
   "args": {{
-    "script": "import random\\nprint(42 + random.randint(1, 5))"
+    "script": "import random\\nprint(42 + random.randint(1, 5))",
+    "dependencies" : ["torch", "huggingface_hub"]
   }}
 }}
 ```
@@ -335,7 +373,6 @@ Call this tool with:
 **String format (simple cases only):**
 - Still accepted for backwards compatibility, parsed with POSIX shell semantics
 - Rejects shell operators and can mis-handle characters such as `&`; switch to arrays when things turn complex
-- `$HF_TOKEN` stays literal—forward it via `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`
 
 ### Show command-specific help
 Call this tool with:
@@ -345,9 +382,10 @@ Call this tool with:
 
 ## Tips
 
-- Jobs default to non-detached mode (tail logs for up to {DEFAULT_LOG_WAIT_SECONDS}s or until completion). Set `detach: true` to return immediately.
+- Jobs default to non-detached mode (stream logs until completion). Set `detach: true` to return immediately.
 - Prefer array commands to avoid shell parsing surprises
-- To access private Hub assets, include `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}` to inject your auth token.
+- To access private Hub assets (spaces, private models, datasets, collections), pass `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`
+- Before calling a job, think about dependencies (they must be specified), which hardware flavor to run on (choose simplest for task), and whether to include secrets.
 """
         return {"formatted": usage_text, "totalResults": 1, "resultsShared": 1}
 
@@ -356,6 +394,33 @@ Call this tool with:
         help_text = f"Help for operation: {operation}\n\nCall with appropriate arguments. Use the main help for examples."
         return {"formatted": help_text, "totalResults": 1, "resultsShared": 1}
 
+    async def _wait_for_job_completion(
+        self, job_id: str, namespace: Optional[str] = None
+    ) -> tuple[str, list[str]]:
+        """
+        Stream job logs until completion, printing them in real-time.
+
+        Returns:
+            tuple: (final_status, all_logs)
+        """
+        all_logs = []
+
+        # Fetch logs - generator streams logs as they arrive and ends when job completes
+        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+
+        # Stream logs in real-time
+        for log_line in logs_gen:
+            print("\t" + log_line)
+            all_logs.append(log_line)
+
+        # After logs complete, fetch final job status
+        job_info = await _async_call(
+            self.api.inspect_job, job_id=job_id, namespace=namespace
+        )
+        final_status = job_info.status.stage
+
+        return final_status, all_logs
+
     async def _run_job(self, args: Dict[str, Any]) -> ToolResult:
         """Run a job using HfApi.run_job()"""
         try:
@@ -363,8 +428,8 @@ Call this tool with:
                 self.api.run_job,
                 image=args.get("image", "python:3.12"),
                 command=args.get("command"),
-                env=args.get("env"),
-                secrets=args.get("secrets"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
                 flavor=args.get("flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -382,14 +447,28 @@ To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "
 To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "{job.id}"}}}}`"""
                 return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
-            # Not detached - return job info
-            response = f"""Job started: {job.id}
+            # Not detached - wait for completion and stream logs
+            print(f"Job started: {job.id}")
+            print("Streaming logs...\n---\n")
 
-**Status:** {job.status.stage}
-**View logs at:** {job.url}
+            final_status, all_logs = await self._wait_for_job_completion(
+                job_id=job.id,
+                namespace=args.get("namespace") or self.namespace,
+            )
 
-Note: Logs are being collected. Check the job page for real-time logs.
-"""
+            # Format all logs for the agent
+            log_text = "\n".join(all_logs) if all_logs else "(no logs)"
+
+            response = f"""Job completed!
+
+**Job ID:** {job.id}
+**Final Status:** {final_status}
+**View at:** {job.url}
+
+**Logs:**
+```
+{log_text}
+```"""
             return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
         except Exception as e:
@@ -402,10 +481,18 @@ Note: Logs are being collected. Check the job page for real-time logs.
             if not script:
                 raise ValueError("script is required")
 
+            # Get dependencies and ensure hf-transfer is included
+            deps = (
+                args.get("with_deps")
+                or args.get("dependencies")
+                or args.get("packages")
+            )
+            deps = _ensure_hf_transfer_dependency(deps)
+
             # Resolve the command based on script type (URL, inline, or file)
             command = _resolve_uv_command(
                 script=script,
-                with_deps=args.get("with_deps") or args.get("dependencies"),
+                with_deps=deps,
                 python=args.get("python"),
                 script_args=args.get("script_args"),
             )
@@ -415,20 +502,46 @@ Note: Logs are being collected. Check the job page for real-time logs.
                 self.api.run_job,
                 image=UV_DEFAULT_IMAGE,
                 command=command,
-                env=args.get("env"),
-                secrets=args.get("secrets"),
-                flavor=args.get("flavor", "cpu-basic"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
+                flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
             )
 
-            response = f"""UV Job started: {job.id}
+            # If detached, return immediately
+            if args.get("detach", False):
+                response = f"""UV Job started successfully!
 
+**Job ID:** {job.id}
 **Status:** {job.status.stage}
 **View at:** {job.url}
 
-To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "{job.id}"}}}}`
-"""
+To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "{job.id}"}}}}`"""
+                return {"formatted": response, "totalResults": 1, "resultsShared": 1}
+
+            # Not detached - wait for completion and stream logs
+            print(f"UV Job started: {job.id}")
+            print("Streaming logs...\n---\n")
+
+            final_status, all_logs = await self._wait_for_job_completion(
+                job_id=job.id,
+                namespace=args.get("namespace") or self.namespace,
+            )
+
+            # Format all logs for the agent
+            log_text = "\n".join(all_logs) if all_logs else "(no logs)"
+
+            response = f"""UV Job completed!
+
+**Job ID:** {job.id}
+**Final Status:** {final_status}
+**View at:** {job.url}
+
+**Logs:**
+```
+{log_text}
+```"""
             return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
         except Exception as e:
@@ -578,8 +691,8 @@ To verify, call this tool with `{{"operation": "inspect", "args": {{"job_id": "{
                 image=args.get("image", "python:3.12"),
                 command=args.get("command"),
                 schedule=args.get("schedule"),
-                env=args.get("env"),
-                secrets=args.get("secrets"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
                 flavor=args.get("flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -613,10 +726,18 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
             if not schedule:
                 raise ValueError("schedule is required")
 
+            # Get dependencies and ensure hf-transfer is included
+            deps = (
+                args.get("with_deps")
+                or args.get("dependencies")
+                or args.get("packages")
+            )
+            deps = _ensure_hf_transfer_dependency(deps)
+
             # Resolve the command based on script type
             command = _resolve_uv_command(
                 script=script,
-                with_deps=args.get("with_deps") or args.get("dependencies"),
+                with_deps=deps,
                 python=args.get("python"),
                 script_args=args.get("script_args"),
             )
@@ -627,9 +748,9 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
                 image=UV_DEFAULT_IMAGE,
                 command=command,
                 schedule=schedule,
-                env=args.get("env"),
-                secrets=args.get("secrets"),
-                flavor=args.get("flavor", "cpu-basic"),
+                env=_substitute_hf_token(args.get("env")),
+                secrets=_substitute_hf_token(args.get("secrets")),
+                flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
             )
@@ -788,6 +909,7 @@ HF_JOBS_TOOL_SPEC = {
     "description": (
         "Manage Hugging Face CPU/GPU compute jobs. Run commands in Docker containers, "
         "execute Python scripts with UV. List, schedule and monitor jobs/logs. "
+        "Example hardware/flavor: cpu-basic, cpu-performance, t4-medium. "
         "Call this tool with no operation for full usage instructions and examples."
     ),
     "parameters": {
@@ -818,7 +940,12 @@ HF_JOBS_TOOL_SPEC = {
             },
             "args": {
                 "type": "object",
-                "description": "Operation-specific arguments as a JSON object",
+                "description": (
+                    "Operation-specific arguments as a JSON object. "
+                    "Common args: script (for uv), packages/dependencies (array), "
+                    "flavor/hardware (e.g., a10g-large, cpu-basic), command (array), "
+                    "image (string), env (object), secrets (object)."
+                ),
                 "additionalProperties": True,
             },
         },

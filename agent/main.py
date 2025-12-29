@@ -47,10 +47,13 @@ class Submission:
 
 async def event_listener(
     event_queue: asyncio.Queue,
+    submission_queue: asyncio.Queue,
     turn_complete_event: asyncio.Event,
     ready_event: asyncio.Event,
 ) -> None:
     """Background task that listens for events and displays them"""
+    submission_id = [1000]  # Use list to make it mutable in closure
+
     while True:
         try:
             event = await event_queue.get()
@@ -96,6 +99,69 @@ async def event_listener(
                 old_tokens = event.data.get("old_tokens", 0) if event.data else 0
                 new_tokens = event.data.get("new_tokens", 0) if event.data else 0
                 print(f"📦 Compacted context: {old_tokens} → {new_tokens} tokens")
+            elif event.event_type == "approval_required":
+                # Display job details and prompt for approval
+                tool_name = event.data.get("tool", "") if event.data else ""
+                arguments = event.data.get("arguments", {}) if event.data else {}
+
+                print("\n" + "=" * 60)
+                print("⚠️  JOB EXECUTION APPROVAL REQUIRED")
+                print("=" * 60)
+
+                operation = arguments.get("operation", "")
+                args = arguments.get("args", {})
+
+                print(f"Operation: {operation}")
+
+                if operation == "uv":
+                    script = args.get("script", "")
+                    dependencies = args.get("dependencies", [])
+                    print(f"Script to run:\n{script}")
+                    if dependencies:
+                        print(f"Dependencies: {', '.join(dependencies)}")
+                elif operation == "run":
+                    image = args.get("image", "")
+                    command = args.get("command", "")
+                    print(f"Docker image: {image}")
+                    print(f"Command: {command}")
+
+                # Common parameters
+                flavor = args.get("flavor", "cpu-basic")
+                detached = args.get("detached", False)
+                print(f"Hardware: {flavor}")
+                print(f"Detached mode: {detached}")
+
+                secrets = args.get("secrets", [])
+                if secrets:
+                    print(f"Secrets: {', '.join(secrets)}")
+
+                print("=" * 60)
+
+                # Get user decision
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    input,
+                    "Approve? (y=yes, n=no, or provide feedback to reject): ",
+                )
+
+                response = response.strip()
+                approved = response.lower() in ["y", "yes"]
+                feedback = (
+                    None if approved or response.lower() in ["n", "no"] else response
+                )
+
+                # Submit approval
+                submission_id[0] += 1
+                approval_submission = Submission(
+                    id=f"approval_{submission_id[0]}",
+                    operation=Operation(
+                        op_type=OpType.EXEC_APPROVAL,
+                        data={"approved": approved, "feedback": feedback},
+                    ),
+                )
+                await submission_queue.put(approval_submission)
+                print("=" * 60 + "\n")
             # Silently ignore other events
 
         except asyncio.CancelledError:
@@ -145,7 +211,7 @@ async def main():
 
     # Start event listener in background
     listener_task = asyncio.create_task(
-        event_listener(event_queue, turn_complete_event, ready_event)
+        event_listener(event_queue, submission_queue, turn_complete_event, ready_event)
     )
 
     # Wait for agent to initialize
