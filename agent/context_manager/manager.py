@@ -19,17 +19,24 @@ class ContextManager:
         compact_size: float = 0.1,
         untouched_messages: int = 5,
         tool_specs: list[dict[str, Any]] | None = None,
+        prompt_file_suffix: str = "system_prompt.yaml",
     ):
-        self.system_prompt = self._load_system_prompt(tool_specs or [])
+        self.system_prompt = self._load_system_prompt(
+            tool_specs or [], prompt_file_suffix="system_prompt.yaml"
+        )
         self.max_context = max_context
         self.compact_size = int(max_context * compact_size)
         self.context_length = len(self.system_prompt) // 4
         self.untouched_messages = untouched_messages
         self.items: list[Message] = [Message(role="system", content=self.system_prompt)]
 
-    def _load_system_prompt(self, tool_specs: list[dict[str, Any]]):
+    def _load_system_prompt(
+        self,
+        tool_specs: list[dict[str, Any]],
+        prompt_file_suffix: str = "system_prompt.yaml",
+    ):
         """Load and render the system prompt from YAML file with Jinja2"""
-        prompt_file = Path(__file__).parent.parent / "prompts" / "system_prompt.yaml"
+        prompt_file = Path(__file__).parent.parent / "prompts" / f"{prompt_file_suffix}"
 
         with open(prompt_file, "r") as f:
             prompt_data = yaml.safe_load(f)

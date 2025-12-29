@@ -14,13 +14,14 @@ from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
+from agent.tools.search_docs_tool import SEARCH_DOCS_TOOL_SPEC, search_docs_handler
 
 # Suppress aiohttp deprecation warning
 warnings.filterwarnings(
     "ignore", category=DeprecationWarning, module="aiohttp.connector"
 )
 
-NOT_ALLOWED_TOOL_NAMES = ["hf_jobs"]
+NOT_ALLOWED_TOOL_NAMES = ["hf_jobs", "hf_doc_search", "hf_doc_fetch"]
 
 
 def convert_mcp_content_to_string(content: list) -> str:
@@ -186,12 +187,20 @@ class ToolRouter:
 
 def create_builtin_tools() -> list[ToolSpec]:
     """Create built-in tool specifications"""
-    print(f"Creating built-in tools: {HF_JOBS_TOOL_SPEC['name']}")
+    print(
+        f"Creating built-in tools: {HF_JOBS_TOOL_SPEC['name']}, {SEARCH_DOCS_TOOL_SPEC['name']}"
+    )
     return [
         ToolSpec(
             name=HF_JOBS_TOOL_SPEC["name"],
             description=HF_JOBS_TOOL_SPEC["description"],
             parameters=HF_JOBS_TOOL_SPEC["parameters"],
             handler=hf_jobs_handler,
+        ),
+        ToolSpec(
+            name=SEARCH_DOCS_TOOL_SPEC["name"],
+            description=SEARCH_DOCS_TOOL_SPEC["description"],
+            parameters=SEARCH_DOCS_TOOL_SPEC["parameters"],
+            handler=search_docs_handler,
         ),
     ]
