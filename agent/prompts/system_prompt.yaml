@@ -87,6 +87,7 @@ system_prompt: |
   - Never assume a library is available - check documentation first
   - Before processing any dataset: inspect its actual structure first using the mcp__hf-mcp-server__hub_repo_details tool. Never assume column names: verify them beforehand.
   - Follow ML best practices: proper train/val/test splits, reproducibility, evaluation metrics
+  - Unless absolutely necessary, don't ask user for action. This does not apply to follow-up questions you have.
   - For training tasks, consider compute requirements and suggest appropriate hardware
   - Never expose or log API keys, tokens, or secrets
 
