@@ -448,7 +448,7 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
                 return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
             # Not detached - wait for completion and stream logs
-            print(f"Job started: {job.id}")
+            print(f"Job started: {job.url}")
             print("Streaming logs...\n---\n")
 
             final_status, all_logs = await self._wait_for_job_completion(
@@ -521,7 +521,7 @@ To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "
                 return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
             # Not detached - wait for completion and stream logs
-            print(f"UV Job started: {job.id}")
+            print(f"UV Job started: {job.url}")
             print("Streaming logs...\n---\n")
 
             final_status, all_logs = await self._wait_for_job_completion(
