@@ -71,7 +71,7 @@ async def event_listener(
 
             # Display event
             if event.event_type == "ready":
-                print(format_success("\U0001F917 Agent ready"))
+                print(format_success("\U0001f917 Agent ready"))
                 ready_event.set()
             elif event.event_type == "assistant_message":
                 content = event.data.get("content", "") if event.data else ""
@@ -194,8 +194,7 @@ async def main():
     from agent.utils.terminal_display import Colors
 
     # Clear screen
-    os.system('clear' if os.name != 'nt' else 'cls')
-
+    os.system("clear" if os.name != "nt" else "cls")
 
     banner = r"""
   _   _                   _               _____                   _                    _   
@@ -205,7 +204,6 @@ async def main():
  |_| |_|\__,_|\__, |\__, |_|_| |_|\__, | |_|  \__,_|\___\___| /_/   \_\__, |\___|_| |_|\__|
               |___/ |___/         |___/                               |___/
     """
-
 
     print(format_separator())
     print(f"{Colors.YELLOW} {banner}{Colors.RESET}")

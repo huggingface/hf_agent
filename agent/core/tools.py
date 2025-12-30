@@ -14,8 +14,8 @@ from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
-from agent.tools.search_docs_tool import SEARCH_DOCS_TOOL_SPEC, search_docs_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
+from agent.tools.search_docs_tool import SEARCH_DOCS_TOOL_SPEC, search_docs_handler
 
 # Suppress aiohttp deprecation warning
 warnings.filterwarnings(
@@ -204,10 +204,10 @@ def create_builtin_tools() -> list[ToolSpec]:
             parameters=SEARCH_DOCS_TOOL_SPEC["parameters"],
             handler=search_docs_handler,
         ),
-      ToolSpec(
-            ame=PLAN_TOOL_SPEC["name"],
+        ToolSpec(
+            name=PLAN_TOOL_SPEC["name"],
             description=PLAN_TOOL_SPEC["description"],
             parameters=PLAN_TOOL_SPEC["parameters"],
             handler=plan_tool_handler,
-        )
+        ),
     ]

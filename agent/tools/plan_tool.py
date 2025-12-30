@@ -1,8 +1,8 @@
-import json
 from typing import Any, Dict, List
-from .types import ToolResult
+
 from agent.utils.terminal_display import format_plan_tool_output
 
+from .types import ToolResult
 
 # In-memory storage for the current plan (raw structure from agent)
 _current_plan: List[Dict[str, str]] = []
@@ -86,24 +86,24 @@ PLAN_TOOL_SPEC = {
                     "properties": {
                         "id": {
                             "type": "string",
-                            "description": "Unique identifier for the todo"
+                            "description": "Unique identifier for the todo",
                         },
                         "content": {
                             "type": "string",
-                            "description": "Description of the todo task"
+                            "description": "Description of the todo task",
                         },
                         "status": {
                             "type": "string",
                             "enum": ["pending", "in_progress", "completed"],
-                            "description": "Current status of the todo"
-                        }
+                            "description": "Current status of the todo",
+                        },
                     },
-                    "required": ["id", "content", "status"]
-                }
+                    "required": ["id", "content", "status"],
+                },
             }
         },
-        "required": ["todos"]
-    }
+        "required": ["todos"],
+    },
 }
 
 

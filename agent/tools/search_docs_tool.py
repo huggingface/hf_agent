@@ -113,7 +113,9 @@ async def search_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
 
         # Load the search agent's own config file with GitHub MCP server
         search_agent_config_path = (
-            Path(__file__).parent.parent.parent / "configs" / "_subagent_config_search_agent.json"
+            Path(__file__).parent.parent.parent
+            / "configs"
+            / "_subagent_config_search_agent.json"
         )
         search_agent_config = load_config(search_agent_config_path)
 
