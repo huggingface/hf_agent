@@ -12,8 +12,11 @@ from agent.config import Config
 from agent.core.session import Session
 
 
-def create_search_tool_router():
-    """Create a ToolRouter instance for the search sub-agent"""
+async def create_search_tool_router():
+    """
+    Create a ToolRouter instance for the search sub-agent
+    Async because OpenAPI tool needs to fetch and parse spec at initialization
+    """
     # Import at runtime to avoid circular dependency
     from agent.core.tools import ToolRouter
 
@@ -26,10 +29,15 @@ def create_search_tool_router():
             self._mcp_initialized = False
             self.mcp_client = None
 
-            for tool in make_search_agent_tools():
+        async def initialize_tools(self):
+            """Initialize tools asynchronously"""
+            tools = await make_search_agent_tools()
+            for tool in tools:
                 self.register_tool(tool)
 
-    return SearchDocsToolRouter()
+    router = SearchDocsToolRouter()
+    await router.initialize_tools()
+    return router
 
 
 async def search_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
@@ -56,7 +64,7 @@ async def search_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
         sub_event_queue = asyncio.Queue()
 
         # Create specialized tool router for search
-        search_tool_router = create_search_tool_router()
+        search_tool_router = await create_search_tool_router()
 
         # Create config for sub-agent (using same model as main agent)
         sub_config = Config(
@@ -131,18 +139,24 @@ SEARCH_DOCS_TOOL_SPEC = {
 
 
 
-def make_search_agent_tools():
+async def make_search_agent_tools():
     """
     Create a list of tools for the search agent
+    Async because OpenAPI tool spec needs to be populated at runtime
     """
     # Import at runtime to avoid circular dependency
     from agent.core.tools import ToolSpec
     from agent.tools._search_agent_tools import (
         EXPLORE_DOCS_STRUCTURE_TOOL_SPEC,
         HF_DOCS_FETCH_TOOL_SPEC,
+        _get_api_search_tool_spec,
         explore_docs_structure_handler,
         hf_docs_fetch_handler,
+        search_openapi_handler,
     )
+
+    # Get the OpenAPI tool spec with dynamically populated tags
+    openapi_spec = await _get_api_search_tool_spec()
 
     return [
         ToolSpec(
@@ -156,5 +170,11 @@ def make_search_agent_tools():
             description=HF_DOCS_FETCH_TOOL_SPEC["description"],
             parameters=HF_DOCS_FETCH_TOOL_SPEC["parameters"],
             handler=hf_docs_fetch_handler,
+        ),
+        ToolSpec(
+            name=openapi_spec["name"],
+            description=openapi_spec["description"],
+            parameters=openapi_spec["parameters"],
+            handler=search_openapi_handler,
         ),
     ]
