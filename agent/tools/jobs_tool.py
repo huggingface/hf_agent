@@ -66,20 +66,21 @@ UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
 def _substitute_hf_token(params: Dict[str, Any] | None) -> Dict[str, Any] | None:
     """
-    Substitute $HF_TOKEN with actual token value from environment.
+    Substitute HF_TOKEN key with actual token value from environment.
 
     Args:
-        params: Dictionary that may contain "$HF_TOKEN" in values
+        params: Dictionary that may contain "HF_TOKEN" as a key
 
     Returns:
-        Dictionary with $HF_TOKEN substituted
+        Dictionary with HF_TOKEN value substituted from environment
     """
+    print("DEBUG !! : ", params)
     if params is None:
         return None
 
     result = {}
     for key, value in params.items():
-        if value == "$HF_TOKEN":
+        if key == "HF_TOKEN":
             result[key] = os.environ.get("HF_TOKEN", "")
         else:
             result[key] = value
@@ -354,7 +355,8 @@ Call this tool with:
   "operation": "uv",
   "args": {{
     "script": "import random\\nprint(42 + random.randint(1, 5))",
-    "dependencies" : ["torch", "huggingface_hub"]
+    "dependencies": ["torch", "huggingface_hub"],
+    "secrets": {{"HF_TOKEN": "$HF_TOKEN"}}
   }}
 }}
 ```
@@ -384,7 +386,7 @@ Call this tool with:
 
 - Jobs default to non-detached mode (stream logs until completion). Set `detach: true` to return immediately.
 - Prefer array commands to avoid shell parsing surprises
-- To access private Hub assets (spaces, private models, datasets, collections), pass `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`
+- To access, create, or modify private Hub assets (spaces, private models, datasets, collections), pass `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`. This is important. Without it, you will encounter authentification issues. Do not assume the user is connected on the jobs' server.
 - Before calling a job, think about dependencies (they must be specified), which hardware flavor to run on (choose simplest for task), and whether to include secrets.
 """
         return {"formatted": usage_text, "totalResults": 1, "resultsShared": 1}
@@ -448,7 +450,7 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
                 return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
             # Not detached - wait for completion and stream logs
-            print(f"Job started: {job.id}")
+            print(f"Job started: {job.url}")
             print("Streaming logs...\n---\n")
 
             final_status, all_logs = await self._wait_for_job_completion(
@@ -521,7 +523,7 @@ To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "
                 return {"formatted": response, "totalResults": 1, "resultsShared": 1}
 
             # Not detached - wait for completion and stream logs
-            print(f"UV Job started: {job.id}")
+            print(f"UV Job started: {job.url}")
             print("Streaming logs...\n---\n")
 
             final_status, all_logs = await self._wait_for_job_completion(

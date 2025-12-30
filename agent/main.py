@@ -16,6 +16,16 @@ from agent.config import load_config
 from agent.core.agent_loop import submission_loop
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
+from agent.utils.terminal_display import (
+    format_error,
+    format_header,
+    format_plan_display,
+    format_separator,
+    format_success,
+    format_tool_call,
+    format_tool_output,
+    format_turn_complete,
+)
 
 litellm.drop_params = True
 
@@ -24,9 +34,9 @@ if lmnr_api_key:
     try:
         Laminar.initialize(project_api_key=lmnr_api_key)
         litellm.callbacks = [LaminarLiteLLMCallback()]
-        print("✅ Laminar initialized")
+        print("Laminar initialized")
     except Exception as e:
-        print(f"⚠️ Failed to initialize Laminar: {e}")
+        print(f"Failed to initialize Laminar: {e}")
 
 
 @dataclass
@@ -53,6 +63,7 @@ async def event_listener(
 ) -> None:
     """Background task that listens for events and displays them"""
     submission_id = [1000]  # Use list to make it mutable in closure
+    last_tool_name = [None]  # Track last tool called
 
     while True:
         try:
@@ -60,27 +71,32 @@ async def event_listener(
 
             # Display event
             if event.event_type == "ready":
-                print("✅ Agent ready")
+                print(format_success("\U0001F917 Agent ready"))
                 ready_event.set()
             elif event.event_type == "assistant_message":
                 content = event.data.get("content", "") if event.data else ""
                 if content:
-                    print(f"\n🤖 Assistant: {content}")
+                    print(f"\nAssistant: {content}")
             elif event.event_type == "tool_call":
                 tool_name = event.data.get("tool", "") if event.data else ""
                 arguments = event.data.get("arguments", {}) if event.data else {}
                 if tool_name:
-                    print(
-                        f"🔧 Calling tool: {tool_name} with arguments: {json.dumps(arguments)[:100]}..."
-                    )
+                    last_tool_name[0] = tool_name  # Store for tool_output event
+                    args_str = json.dumps(arguments)[:100] + "..."
+                    print(format_tool_call(tool_name, args_str))
             elif event.event_type == "tool_output":
                 output = event.data.get("output", "") if event.data else ""
                 success = event.data.get("success", False) if event.data else False
-                status = "✅" if success else "❌"
                 if output:
-                    print(f"{status} Tool output: {output}")
+                    # Don't truncate plan_tool output, truncate everything else
+                    should_truncate = last_tool_name[0] != "plan_tool"
+                    print(format_tool_output(output, success, truncate=should_truncate))
             elif event.event_type == "turn_complete":
-                print("✅ Turn complete\n")
+                print(format_turn_complete())
+                # Display plan after turn complete
+                plan_display = format_plan_display()
+                if plan_display:
+                    print(plan_display)
                 turn_complete_event.set()
             elif event.event_type == "error":
                 error = (
@@ -88,30 +104,26 @@ async def event_listener(
                     if event.data
                     else "Unknown error"
                 )
-                print(f"❌ Error: {error}")
+                print(format_error(error))
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
-                print("🛑 Agent shutdown")
+                print("Agent shutdown")
                 break
             elif event.event_type == "processing":
-                print("⏳ Processing...", flush=True)
+                print("Processing...", flush=True)
             elif event.event_type == "compacted":
                 old_tokens = event.data.get("old_tokens", 0) if event.data else 0
                 new_tokens = event.data.get("new_tokens", 0) if event.data else 0
-                print(f"📦 Compacted context: {old_tokens} → {new_tokens} tokens")
+                print(f"Compacted context: {old_tokens} → {new_tokens} tokens")
             elif event.event_type == "approval_required":
                 # Display job details and prompt for approval
                 tool_name = event.data.get("tool", "") if event.data else ""
                 arguments = event.data.get("arguments", {}) if event.data else {}
 
-                print("\n" + "=" * 60)
-                print("⚠️  JOB EXECUTION APPROVAL REQUIRED")
-                print("=" * 60)
-
                 operation = arguments.get("operation", "")
                 args = arguments.get("args", {})
 
-                print(f"Operation: {operation}")
+                print(f"\nOperation: {operation}")
 
                 if operation == "uv":
                     script = args.get("script", "")
@@ -135,9 +147,10 @@ async def event_listener(
                 if secrets:
                     print(f"Secrets: {', '.join(secrets)}")
 
-                print("=" * 60)
-
                 # Get user decision
+                print("\n" + format_separator())
+                print(format_header("JOB EXECUTION APPROVAL REQUIRED"))
+                print(format_separator())
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None,
@@ -161,13 +174,13 @@ async def event_listener(
                     ),
                 )
                 await submission_queue.put(approval_submission)
-                print("=" * 60 + "\n")
+                print(format_separator() + "\n")
             # Silently ignore other events
 
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"⚠️ Event listener error: {e}")
+            print(f"Event listener error: {e}")
 
 
 async def get_user_input() -> str:
@@ -178,10 +191,26 @@ async def get_user_input() -> str:
 
 async def main():
     """Interactive chat with the agent"""
-    print("=" * 60)
-    print("🤖 Interactive Agent Chat")
-    print("=" * 60)
+    from agent.utils.terminal_display import Colors
+
+    # Clear screen
+    os.system('clear' if os.name != 'nt' else 'cls')
+
+
+    banner = r"""
+  _   _                   _               _____                   _                    _   
+ | | | |_   _  __ _  __ _(_)_ __   __ _  |  ___|_ _  ___ ___     / \   __ _  ___ _ __ | |_ 
+ | |_| | | | |/ _` |/ _` | | '_ \ / _` | | |_ / _` |/ __/ _ \   / _ \ / _` |/ _ \ '_ \| __|
+ |  _  | |_| | (_| | (_| | | | | | (_| | |  _| (_| | (_|  __/  / ___ \ (_| |  __/ | | | |_ 
+ |_| |_|\__,_|\__, |\__, |_|_| |_|\__, | |_|  \__,_|\___\___| /_/   \_\__, |\___|_| |_|\__|
+              |___/ |___/         |___/                               |___/
+    """
+
+
+    print(format_separator())
+    print(f"{Colors.YELLOW} {banner}{Colors.RESET}")
     print("Type your messages below. Type 'exit', 'quit', or '/quit' to end.\n")
+    print(format_separator())
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
@@ -215,7 +244,7 @@ async def main():
     )
 
     # Wait for agent to initialize
-    print("⏳ Initializing agent...")
+    print("Initializing agent...")
     await ready_event.wait()
 
     submission_id = 0
@@ -253,7 +282,7 @@ async def main():
             await submission_queue.put(submission)
 
     except KeyboardInterrupt:
-        print("\n\n⚠️ Interrupted by user")
+        print("\n\nInterrupted by user")
 
     # Shutdown
     print("\n🛑 Shutting down agent...")
