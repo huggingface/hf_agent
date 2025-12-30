@@ -20,4 +20,5 @@ dependencies = [
     "transformers>=2.3.0",
     "torch>=2.9.1",
     "pytest>=9.0.2",
+    "trafilatura>=2.0.0",
 ]

@@ -36,10 +36,11 @@ class Session:
         event_queue: asyncio.Queue,
         config: Config | None = None,
         tool_router=None,
+        context_manager: ContextManager | None = None,
     ):
         self.tool_router = tool_router
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
-        self.context_manager = ContextManager(
+        self.context_manager = context_manager or ContextManager(
             max_context=get_max_tokens(config.model_name),
             compact_size=0.1,
             untouched_messages=5,
@@ -49,7 +50,6 @@ class Session:
         self.session_id = str(uuid.uuid4())
         self.config = config or Config(
             model_name="anthropic/claude-sonnet-4-5-20250929",
-            tools=[],
         )
         self.is_running = True
         self.current_task: asyncio.Task | None = None

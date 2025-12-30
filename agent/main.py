@@ -222,7 +222,7 @@ async def main():
     ready_event = asyncio.Event()
 
     # Start agent loop in background
-    config_path = Path(__file__).parent / "config_mcp_example.json"
+    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
     config = load_config(config_path)
 
     # Create tool router
