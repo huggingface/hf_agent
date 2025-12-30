@@ -71,7 +71,7 @@ async def event_listener(
 
             # Display event
             if event.event_type == "ready":
-                print(format_success("Agent ready"))
+                print(format_success("\U0001F917 Agent ready"))
                 ready_event.set()
             elif event.event_type == "assistant_message":
                 content = event.data.get("content", "") if event.data else ""
@@ -196,9 +196,21 @@ async def main():
     # Clear screen
     os.system('clear' if os.name != 'nt' else 'cls')
 
+
+    banner = r"""
+  _   _                   _               _____                   _                    _   
+ | | | |_   _  __ _  __ _(_)_ __   __ _  |  ___|_ _  ___ ___     / \   __ _  ___ _ __ | |_ 
+ | |_| | | | |/ _` |/ _` | | '_ \ / _` | | |_ / _` |/ __/ _ \   / _ \ / _` |/ _ \ '_ \| __|
+ |  _  | |_| | (_| | (_| | | | | | (_| | |  _| (_| | (_|  __/  / ___ \ (_| |  __/ | | | |_ 
+ |_| |_|\__,_|\__, |\__, |_|_| |_|\__, | |_|  \__,_|\___\___| /_/   \_\__, |\___|_| |_|\__|
+              |___/ |___/         |___/                               |___/
+    """
+
+
     print(format_separator())
-    print(f"{Colors.YELLOW}{Colors.BOLD}\U0001F917 Hugging Face Agent{Colors.RESET}")
+    print(f"{Colors.YELLOW} {banner}{Colors.RESET}")
     print("Type your messages below. Type 'exit', 'quit', or '/quit' to end.\n")
+    print(format_separator())
 
     # Create queues for communication
     submission_queue = asyncio.Queue()

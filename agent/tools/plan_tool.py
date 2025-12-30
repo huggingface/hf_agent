@@ -33,7 +33,7 @@ class PlanTool:
         for todo in todos:
             if not isinstance(todo, dict):
                 return {
-                    "formatted": "Error: Each todo must be an object",
+                    "formatted": "Error: Each todo must be an object. Re call the tool with correct format (mandatory).",
                     "isError": True,
                 }
 
@@ -41,7 +41,7 @@ class PlanTool:
             for field in required_fields:
                 if field not in todo:
                     return {
-                        "formatted": f"Error: Todo missing required field '{field}'",
+                        "formatted": f"Error: Todo missing required field '{field}'. Re call the tool with correct format (mandatory).",
                         "isError": True,
                     }
 
@@ -49,7 +49,7 @@ class PlanTool:
             valid_statuses = ["pending", "in_progress", "completed"]
             if todo["status"] not in valid_statuses:
                 return {
-                    "formatted": f"Error: Invalid status '{todo['status']}'. Must be one of: {', '.join(valid_statuses)}",
+                    "formatted": f"Error: Invalid status '{todo['status']}'. Must be one of: {', '.join(valid_statuses)}. Re call the tool with correct format (mandatory).",
                     "isError": True,
                 }
 
