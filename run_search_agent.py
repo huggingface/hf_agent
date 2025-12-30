@@ -19,29 +19,29 @@ async def test_search_agent(query: str):
     print(f"Testing search agent with query: {query}\n")
     print("=" * 60)
 
+    # Import at runtime
+    from pathlib import Path
+    from agent.config import load_config
+
     # Create event queue for the sub-agent
     sub_event_queue = asyncio.Queue()
 
-    # Create search tool router
-    search_tool_router = await create_search_tool_router()
+    # Load the search agent's own config file with GitHub MCP server
+    search_agent_config_path = Path(__file__).parent / "configs" / "_subagent_config_search_agent.json"
+    search_agent_config = load_config(search_agent_config_path)
+
+    # Extract GitHub MCP config from search agent config
+    github_mcp_config = None
+    if search_agent_config.mcpServers and "github" in search_agent_config.mcpServers:
+        github_server = search_agent_config.mcpServers["github"]
+        github_mcp_config = {"github": github_server.model_dump()}
+
+    # Create search tool router with GitHub MCP config
+    search_tool_router = await create_search_tool_router(github_mcp_config)
 
     # Create config
     sub_config = Config(
         model_name="anthropic/claude-haiku-4-5",
-    )
-
-    # Create session with custom system prompt
-    sub_session = Session(
-        event_queue=sub_event_queue,
-        config=sub_config,
-        tool_router=search_tool_router,
-        context_manager=ContextManager(
-            tool_specs=search_tool_router.get_tool_specs_for_llm(),
-            max_context=get_max_tokens(sub_config.model_name),
-            compact_size=0.1,
-            untouched_messages=5,
-            prompt_file_suffix="search_docs_system_prompt.yaml",
-        ),
     )
 
     # Event listener to show what the sub-agent is doing
@@ -81,6 +81,21 @@ async def test_search_agent(query: str):
 
     # Run the sub-agent and event monitor concurrently
     async with search_tool_router:
+        # Create session with custom system prompt
+        # NOTE: MCP tools are registered during __aenter__, so we must create session AFTER entering the context
+        sub_session = Session(
+            event_queue=sub_event_queue,
+            config=sub_config,
+            tool_router=search_tool_router,
+            context_manager=ContextManager(
+                tool_specs=search_tool_router.get_tool_specs_for_llm(),
+                max_context=get_max_tokens(sub_config.model_name),
+                compact_size=0.1,
+                untouched_messages=5,
+                prompt_file_suffix="search_docs_system_prompt.yaml",
+            ),
+        )
+
         monitor_task = asyncio.create_task(event_monitor())
 
         result = await Handlers.run_agent(
@@ -107,9 +122,10 @@ async def main():
     # Example queries to test
     test_queries = [
         # "Explore the TRL documentation structure and find information about DPO trainer",
-        # "is there a way to get the logs from a served huggingface space",
+        "is there a way to get the logs from a served huggingface space",
         # "How do I train GLM4.7 with a GRPO training loop with trl with llm judge as a reward model for training on hle?"
-        "can i stream logs through the api for a served huggingface space",
+        # "can i stream logs through the api for a served huggingface space",
+        # 'what tools do you have access to?',
     ]
 
     for i, query in enumerate(test_queries, 1):
