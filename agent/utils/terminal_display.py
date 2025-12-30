@@ -18,10 +18,13 @@ class Colors:
 
 def truncate_to_lines(text: str, max_lines: int = 6) -> str:
     """Truncate text to max_lines, adding '...' if truncated"""
-    lines = text.split('\n')
+    lines = text.split("\n")
     if len(lines) <= max_lines:
         return text
-    return '\n'.join(lines[:max_lines]) + f'\n{Colors.CYAN}... ({len(lines) - max_lines} more lines){Colors.RESET}'
+    return (
+        "\n".join(lines[:max_lines])
+        + f"\n{Colors.CYAN}... ({len(lines) - max_lines} more lines){Colors.RESET}"
+    )
 
 
 def format_header(text: str, emoji: str = "") -> str:
@@ -65,10 +68,12 @@ def format_plan_display() -> str:
             lines.append(f"  [ ] {todo['id']}. {todo['content']}")
         lines.append("")
 
-    lines.append(f"Total: {len(plan)} todos ({len(completed)} completed, {len(in_progress)} in progress, {len(pending)} pending)")
+    lines.append(
+        f"Total: {len(plan)} todos ({len(completed)} completed, {len(in_progress)} in progress, {len(pending)} pending)"
+    )
     lines.append("=" * 60 + "\n")
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def format_error(message: str) -> str:
@@ -100,7 +105,7 @@ def format_tool_output(output: str, success: bool, truncate: bool = True) -> str
 
 def format_turn_complete() -> str:
     """Format turn complete message in green with hugging face emoji"""
-    return f"{Colors.GREEN}{Colors.BOLD}\U0001F917 Turn complete{Colors.RESET}\n"
+    return f"{Colors.GREEN}{Colors.BOLD}\U0001f917 Turn complete{Colors.RESET}\n"
 
 
 def format_separator(char: str = "=", length: int = 60) -> str:
@@ -138,6 +143,8 @@ def format_plan_tool_output(todos: list) -> str:
             lines.append(f"  [ ] {todo['id']}. {todo['content']}")
         lines.append("")
 
-    lines.append(f"Total: {len(todos)} todos ({len(completed)} completed, {len(in_progress)} in progress, {len(pending)} pending)")
+    lines.append(
+        f"Total: {len(todos)} todos ({len(completed)} completed, {len(in_progress)} in progress, {len(pending)} pending)"
+    )
 
     return "\n".join(lines)
