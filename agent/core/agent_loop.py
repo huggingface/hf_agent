@@ -365,7 +365,7 @@ async def submission_loop(
 
     # Create session with tool router
     session = Session(event_queue, config=config, tool_router=tool_router)
-    print("🤖 Agent loop started")
+    print("Agent loop started")
 
     # Main processing loop
     async with tool_router:
