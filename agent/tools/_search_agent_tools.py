@@ -128,10 +128,10 @@ def _format_exploration_results(
     return result
 
 
-async def _explore_docs_structure(hf_token: str, endpoint: str) -> str:
+async def explore_hf_docs(hf_token: str, endpoint: str) -> str:
     """Main function to explore documentation structure"""
     start_time = time.perf_counter()
-    print(f"[DEBUG] _explore_docs_structure: Starting for endpoint '{endpoint}'")
+    print(f"[DEBUG] explore_hf_docs: Starting for endpoint '{endpoint}'")
 
     # Fetch HTML page
     html_content = await _fetch_html_page(hf_token, endpoint)
@@ -149,12 +149,12 @@ async def _explore_docs_structure(hf_token: str, endpoint: str) -> str:
     result = _format_exploration_results(endpoint, result_items)
 
     total_time = time.perf_counter() - start_time
-    print(f"[DEBUG] _explore_docs_structure: Total time {total_time:.2f}s")
+    print(f"[DEBUG] explore_hf_docs: Total time {total_time:.2f}s")
 
     return result
 
 
-async def explore_docs_structure_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
+async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
     """
     Explore the documentation structure for a given endpoint by parsing the sidebar navigation
 
@@ -178,7 +178,7 @@ async def explore_docs_structure_handler(arguments: dict[str, Any]) -> tuple[str
     endpoint = endpoint.lstrip("/")
 
     try:
-        result = await _explore_docs_structure(hf_token, endpoint)
+        result = await explore_hf_docs(hf_token, endpoint)
         return result, True
 
     except httpx.HTTPStatusError as e:
@@ -555,10 +555,10 @@ async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
 
 # Tool specifications for the search sub-agent
 
-EXPLORE_DOCS_STRUCTURE_TOOL_SPEC = {
-    "name": "explore_docs_structure",
+EXPLORE_HF_DOCS_TOOL_SPEC = {
+    "name": "explore_hf_docs",
     "description": (
-        "Explore the structure of HF documentation by parsing the sidebar navigation. "
+        "Explore the Hugging Face documentation at a glance. "
         "Select an endpoint from the available options and get a list of all documentation pages "
         "with their titles, URLs, and a 300-character glimpse of each page. "
         "Use this to discover what documentation is available before fetching specific pages."
@@ -695,9 +695,9 @@ HF_DOCS_FETCH_TOOL_SPEC = {
     "name": "fetch_hf_docs",
     "description": (
         "Fetch the full content of a specific HF documentation page. "
-        "Provide the full URL to the doc page (e.g., from explore_docs_structure results). "
+        "Provide the full URL to the doc page (e.g., from explore_hf_docs results). "
         "Returns the complete markdown content of that page. "
-        "Use explore_docs_structure first to discover available pages."
+        "Use explore_hf_docs first to discover available pages."
     ),
     "parameters": {
         "type": "object",
