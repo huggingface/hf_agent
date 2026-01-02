@@ -189,15 +189,10 @@ class ToolRouter:
 def create_builtin_tools() -> list[ToolSpec]:
     """Create built-in tool specifications"""
     print(
-        f"Creating built-in tools: {HF_JOBS_TOOL_SPEC['name']}, {SEARCH_DOCS_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}"
+        f"Creating built-in tools: {SEARCH_DOCS_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}"
     )
+    # in order of importance
     return [
-        ToolSpec(
-            name=HF_JOBS_TOOL_SPEC["name"],
-            description=HF_JOBS_TOOL_SPEC["description"],
-            parameters=HF_JOBS_TOOL_SPEC["parameters"],
-            handler=hf_jobs_handler,
-        ),
         ToolSpec(
             name=SEARCH_DOCS_TOOL_SPEC["name"],
             description=SEARCH_DOCS_TOOL_SPEC["description"],
@@ -209,5 +204,11 @@ def create_builtin_tools() -> list[ToolSpec]:
             description=PLAN_TOOL_SPEC["description"],
             parameters=PLAN_TOOL_SPEC["parameters"],
             handler=plan_tool_handler,
+        ),
+        ToolSpec(
+            name=HF_JOBS_TOOL_SPEC["name"],
+            description=HF_JOBS_TOOL_SPEC["description"],
+            parameters=HF_JOBS_TOOL_SPEC["parameters"],
+            handler=hf_jobs_handler,
         ),
     ]
