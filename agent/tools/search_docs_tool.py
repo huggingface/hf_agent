@@ -96,9 +96,13 @@ async def search_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
         Tuple of (search_results, success)
     """
     query = arguments.get("query", "")
+    user_query = arguments.get("user_query", "")
 
     if not query:
         return "Error: No search query provided", False
+
+    if not user_query:
+        return "Error: No user query provided", False
 
     try:
         # Import at runtime to avoid circular dependency
@@ -149,9 +153,12 @@ async def search_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
                 ),
             )
 
+            # make search prompt
+            search_prompt = f"What the user tasked the main agent with: {user_query}\nWhat you have asked to research by the main agent: {query}. Use both to find the best practices, code examples, and determine the recommended approach for solving the user's task."
+
             # Run the sub-agent
             result = await Handlers.run_agent(
-                session=sub_session, text=query, max_iterations=30
+                session=sub_session, text=search_prompt, max_iterations=30
             )
 
         # Return the final result or compiled events
@@ -161,41 +168,6 @@ async def search_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
             return "Search completed but no results were generated", False
     except Exception as e:
         return f"Error in search_docs tool: {str(e)}", False
-
-
-# Tool specification to be used by the main agent
-SEARCH_DOCS_TOOL_SPEC = {
-    "name": "search_docs",
-    "description": (
-        "Intelligently search HF documentation for libraries, repositories, and best practices with an agent that has access to: explore_hf_docs, fetch_hf_docs, search_hf_api_endpoints. "
-        "The agent acts like your personal search assistant. "
-        "Using the search agent is necessary to give the best quality answer to the user's question. Most questions require a search to get the best information on code examples.\n\n"
-        "WHEN TO USE THIS TOOL:\n"
-        "  - When searching for high-level concepts like 'how to do GRPO training on a model?' or 'best way to do inference on a trained model?'\n"
-        "  - When you need to get code examples for intricate ML code patterns like training loops, inference pipelines, data processing, etc.\n\n"
-        "USAGE GUIDELINES:\n"
-        "  1. Launch multiple agents concurrently for better performance.\n"
-        "  2. Be specific in your query - include exact terminology, expected file locations, or code patterns.\n"
-        "  3. Use the query as if you were talking to another engineer. Bad: logger impl Good: where is the logger implemented, we're trying to find out how to log to files.\n"
-        "  4. Make sure to formulate the query in such a way that the agent knows when it's done or has found the result."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": (
-                    "The search query describing to the agent what it should do. Be "
-                    "specific and include technical terms, file types, or expected "
-                    "code patterns to help the agent find relevant code. Formulate "
-                    "the query in a way that makes it clear to the agent when it "
-                    "has found the right thing."
-                ),
-            },
-        },
-        "required": ["query"],
-    },
-}
 
 
 async def make_search_agent_tools():
@@ -237,3 +209,64 @@ async def make_search_agent_tools():
             handler=search_openapi_handler,
         ),
     ]
+
+
+# Tool specification to be used by the main agent
+SEARCH_DOCS_TOOL_SPEC = {
+    "name": "research_solution",
+    "description": (
+        "Spawns a specialized research sub-agent to search to find best practices, locate code examples, and determine the recommended approach for solving the user's task.\n\n"
+        "SEARCH AGENT CAPABILITIES:\n"
+        "The search subagent has access to these specialized tools:\n"
+        "  - explore_hf_docs: Discovers documentation structure by parsing sidebar navigation, returns page titles, URLs, and content glimpses\n"
+        "  - fetch_hf_docs: Retrieves full markdown content from specific HF documentation pages\n"
+        "  - search_hf_api_endpoints: Searches HF OpenAPI specification by tag to find API endpoints with usage examples\n"
+        "  - GitHub tools: search_code, search_repositories, get_file_contents, list_issues, list_pull_requests (for searching HF repositories)\n"
+        "MANDATORY FIRST STEP for:\n"
+        "  - ANY task involving training, fine-tuning, or model deployment with HF libraries\n"
+        "  - Implementing ML workflows (data loading, preprocessing, training loops, inference pipelines)\n"
+        "  - Working with specific HF libraries (transformers, diffusers, trl, datasets, accelerate, etc.)\n"
+        "  - Finding the recommended/official way to accomplish ML tasks\n"
+        "  - Understanding which libraries and methods to use for a user's goal\n\n"
+        "ALSO USE for:\n"
+        "  - Verifying current API signatures, parameters, or available methods\n"
+        "  - Finding code examples and best practices from official documentation\n"
+        "  - Understanding relationships between HF libraries and components\n\n"
+        "SKIP ONLY when:\n"
+        "  - User asks simple factual questions answerable from general ML knowledge (e.g., 'What is fine-tuning?')\n"
+        "  - Task is about general Python/programming unrelated to ML or HF libraries\n"
+        "QUERY FORMAT:\n"
+        "Write queries as if delegating to an engineer. Include:\n"
+        "  - Specific library names (e.g., 'trl', 'transformers', 'diffusers')\n"
+        "  - Technical terminology from the domain (e.g., 'DPO trainer', 'GRPO', 'LoRA adapter')\n"
+        "  - Clear success criteria (e.g., 'find code example', 'verify parameter exists', 'get recommended approach')\n\n"
+        "QUERY EXAMPLES:\n"
+        "  Good: 'Find the best way to implement DPO training in trl. Get code example showing dataset format, trainer configuration, and reward model setup'\n"
+        "  Bad: 'dpo trainer'\n"
+        "  Good: 'Search transformers docs for the recommended approach to load and run quantized models with 4-bit precision. Find the specific classes and methods to use'\n"
+        "  Bad: 'quantization'\n"
+        "  Good: 'Research the best way to fine-tune a diffusion model for custom image generation. Find which library to use (diffusers/PEFT), required components, and complete training example'\n"
+        "  Bad: 'fine-tune diffusion'\n\n"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "user_query": {
+                "type": "string",
+                "description": (
+                    "The original user query that you received. This will be used to search the documentation."
+                ),
+            },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Detailed search query for the specialized agent. Must include: (1) specific library/component names, "
+                    "(2) technical terms or concepts to search for, (3) clear objective (e.g., 'find code example', "
+                    "'verify API exists', 'get implementation details'). The search agent will autonomously explore "
+                    "documentation structure, retrieve relevant pages, and compile results until the objective is met."
+                ),
+            },
+        },
+        "required": ["user_query", "query"],
+    },
+}
