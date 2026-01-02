@@ -10,7 +10,7 @@ import os
 from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import HfApi
-from huggingface_hub.utils import HfHubHTTPError
+from huggingface_hub.utils import HfHubHTTPError, get_token_to_send
 
 from agent.tools.types import ToolResult
 from agent.tools.utilities import (
@@ -64,26 +64,21 @@ OperationType = Literal[
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
 
-def _substitute_hf_token(params: Dict[str, Any] | None) -> Dict[str, Any] | None:
+def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
     """
-    Substitute HF_TOKEN key with actual token value from environment.
+    Automatically adds selected environment variables to the parameters passed by LLM.
 
     Args:
-        params: Dictionary that may contain "HF_TOKEN" as a key
+        params: Dictionary that may contain "HF_TOKEN" and other environment variables as keys
 
     Returns:
-        Dictionary with HF_TOKEN value substituted from environment
+        Dictionary with environment variables added
     """
-    print("DEBUG !! : ", params)
-    if params is None:
-        return None
 
-    result = {}
-    for key, value in params.items():
-        if key == "HF_TOKEN":
-            result[key] = os.environ.get("HF_TOKEN", "")
-        else:
-            result[key] = value
+    result = {"HF_TOKEN": get_token_to_send(os.environ.get("HF_TOKEN", ""))}
+
+    if params:
+        result.update(params)
 
     return result
 
@@ -231,16 +226,17 @@ class HfJobsTool:
         operation = params.get("operation")
         args = params.get("args", {})
 
-        # If no operation provided, return usage instructions
+        # If no operation provided, return error
         if not operation:
-            return self._show_help()
+            return {
+                "formatted": "Error: 'operation' parameter is required. See tool description for available operations and usage examples.",
+                "totalResults": 0,
+                "resultsShared": 0,
+                "isError": True,
+            }
 
         # Normalize operation name
         operation = operation.lower()
-
-        # Check if help is requested
-        if args.get("help"):
-            return self._show_operation_help(operation)
 
         try:
             # Route to appropriate handler
@@ -298,104 +294,6 @@ class HfJobsTool:
                 "isError": True,
             }
 
-    def _show_help(self) -> ToolResult:
-        """Show usage instructions when tool is called with no arguments"""
-        cpu_flavors_list = ", ".join(CPU_FLAVORS)
-        gpu_flavors_list = ", ".join(GPU_FLAVORS)
-        specialized_flavors_list = ", ".join(SPECIALIZED_FLAVORS)
-
-        hardware_section = f"**CPU:** {cpu_flavors_list}\n"
-        if GPU_FLAVORS:
-            hardware_section += f"**GPU:** {gpu_flavors_list}\n"
-        if SPECIALIZED_FLAVORS:
-            hardware_section += f"**Specialized:** {specialized_flavors_list}"
-
-        usage_text = f"""# HuggingFace Jobs API
-
-Manage compute jobs on Hugging Face infrastructure.
-
-## Available Commands
-
-### Job Management
-- **run** - Run a job with a Docker image
-- **uv** - Run a Python script with UV (inline dependencies)
-- **ps** - List jobs
-- **logs** - Fetch job logs
-- **inspect** - Get detailed job information
-- **cancel** - Cancel a running job
-
-### Scheduled Jobs
-- **scheduled run** - Create a scheduled job
-- **scheduled uv** - Create a scheduled UV job
-- **scheduled ps** - List scheduled jobs
-- **scheduled inspect** - Get scheduled job details
-- **scheduled delete** - Delete a scheduled job
-- **scheduled suspend** - Pause a scheduled job
-- **scheduled resume** - Resume a suspended job
-
-## Examples
-
-### Run a simple job
-Call this tool with:
-```json
-{{
-  "operation": "run",
-  "args": {{
-    "image": "python:3.12",
-    "command": ["python", "-c", "print('Hello from HF Jobs!')"],
-    "flavor": "cpu-basic"
-  }}
-}}
-```
-
-### Run a Python script with UV
-Call this tool with:
-```json
-{{
-  "operation": "uv",
-  "args": {{
-    "script": "import random\\nprint(42 + random.randint(1, 5))",
-    "dependencies": ["torch", "huggingface_hub"],
-    "secrets": {{"HF_TOKEN": "$HF_TOKEN"}}
-  }}
-}}
-```
-
-## Hardware Flavors
-
-{hardware_section}
-
-## Command Format Guidelines
-
-**Array format (default):**
-- Recommended for every command—JSON keeps arguments intact (URLs with `&`, spaces, etc.)
-- Use `["/bin/sh", "-lc", "..."]` when you need shell operators like `&&`, `|`, or redirections
-- Works with any language: Python, bash, node, npm, uv, etc.
-
-**String format (simple cases only):**
-- Still accepted for backwards compatibility, parsed with POSIX shell semantics
-- Rejects shell operators and can mis-handle characters such as `&`; switch to arrays when things turn complex
-
-### Show command-specific help
-Call this tool with:
-```json
-{{"operation": "<operation>", "args": {{"help": true}}}}
-```
-
-## Tips
-
-- Jobs default to non-detached mode (stream logs until completion). Set `detach: true` to return immediately.
-- Prefer array commands to avoid shell parsing surprises
-- To access, create, or modify private Hub assets (spaces, private models, datasets, collections), pass `secrets: {{ "HF_TOKEN": "$HF_TOKEN" }}`. This is important. Without it, you will encounter authentification issues. Do not assume the user is connected on the jobs' server.
-- Before calling a job, think about dependencies (they must be specified), which hardware flavor to run on (choose simplest for task), and whether to include secrets.
-"""
-        return {"formatted": usage_text, "totalResults": 1, "resultsShared": 1}
-
-    def _show_operation_help(self, operation: str) -> ToolResult:
-        """Show help for a specific operation"""
-        help_text = f"Help for operation: {operation}\n\nCall with appropriate arguments. Use the main help for examples."
-        return {"formatted": help_text, "totalResults": 1, "resultsShared": 1}
-
     async def _wait_for_job_completion(
         self, job_id: str, namespace: Optional[str] = None
     ) -> tuple[str, list[str]]:
@@ -430,26 +328,14 @@ Call this tool with:
                 self.api.run_job,
                 image=args.get("image", "python:3.12"),
                 command=args.get("command"),
-                env=_substitute_hf_token(args.get("env")),
-                secrets=_substitute_hf_token(args.get("secrets")),
+                env=_add_environment_variables(args.get("env")),
+                secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
             )
 
-            # If detached, return immediately
-            if args.get("detach", False):
-                response = f"""Job started successfully!
-
-**Job ID:** {job.id}
-**Status:** {job.status.stage}
-**View at:** {job.url}
-
-To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "{job.id}"}}}}`
-To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "{job.id}"}}}}`"""
-                return {"formatted": response, "totalResults": 1, "resultsShared": 1}
-
-            # Not detached - wait for completion and stream logs
+            # Wait for completion and stream logs
             print(f"Job started: {job.url}")
             print("Streaming logs...\n---\n")
 
@@ -504,25 +390,14 @@ To inspect, call this tool with `{{"operation": "inspect", "args": {{"job_id": "
                 self.api.run_job,
                 image=UV_DEFAULT_IMAGE,
                 command=command,
-                env=_substitute_hf_token(args.get("env")),
-                secrets=_substitute_hf_token(args.get("secrets")),
+                env=_add_environment_variables(args.get("env")),
+                secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
             )
 
-            # If detached, return immediately
-            if args.get("detach", False):
-                response = f"""UV Job started successfully!
-
-**Job ID:** {job.id}
-**Status:** {job.status.stage}
-**View at:** {job.url}
-
-To check logs, call this tool with `{{"operation": "logs", "args": {{"job_id": "{job.id}"}}}}`"""
-                return {"formatted": response, "totalResults": 1, "resultsShared": 1}
-
-            # Not detached - wait for completion and stream logs
+            # Wait for completion and stream logs
             print(f"UV Job started: {job.url}")
             print("Streaming logs...\n---\n")
 
@@ -693,8 +568,8 @@ To verify, call this tool with `{{"operation": "inspect", "args": {{"job_id": "{
                 image=args.get("image", "python:3.12"),
                 command=args.get("command"),
                 schedule=args.get("schedule"),
-                env=_substitute_hf_token(args.get("env")),
-                secrets=_substitute_hf_token(args.get("secrets")),
+                env=_add_environment_variables(args.get("env")),
+                secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -750,8 +625,8 @@ To list all, call this tool with `{{"operation": "scheduled ps"}}`"""
                 image=UV_DEFAULT_IMAGE,
                 command=command,
                 schedule=schedule,
-                env=_substitute_hf_token(args.get("env")),
-                secrets=_substitute_hf_token(args.get("secrets")),
+                env=_add_environment_variables(args.get("env")),
+                secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("flavor") or args.get("hardware") or "cpu-basic",
                 timeout=args.get("timeout", "30m"),
                 namespace=args.get("namespace") or self.namespace,
@@ -911,8 +786,44 @@ HF_JOBS_TOOL_SPEC = {
     "description": (
         "Manage Hugging Face CPU/GPU compute jobs. Run commands in Docker containers, "
         "execute Python scripts with UV. List, schedule and monitor jobs/logs. "
-        "Example hardware/flavor: cpu-basic, cpu-performance, t4-medium. "
-        "Call this tool with no operation for full usage instructions and examples."
+        "Call this tool with no operation for full usage instructions and examples.\n\n"
+        "## Available Operations\n"
+        "**Job Management:**\n"
+        "- run: Run job with Docker image\n"
+        "- uv: Run Python script with inline dependencies (recommended for Python)\n"
+        "- ps: List jobs (shows running by default, use args: {'all': true} for all)\n"
+        "- logs: Fetch job logs (args: {'job_id': 'xxx'})\n"
+        "- inspect: Get job details (args: {'job_id': 'xxx'})\n"
+        "- cancel: Cancel running job (args: {'job_id': 'xxx'})\n\n"
+        "**Scheduled Jobs:**\n"
+        "- same functionality as Job Management, but recurring periodically\n"
+        "- schedule: One of '@annually', '@yearly', '@monthly', '@weekly', '@daily', '@hourly', or a CRON schedule expression (e.g., '0 9 * * 1' for 9 AM every Monday).\n"
+        "- scheduled run/uv/ps/inspect/delete/suspend/resume\n\n"
+        "## Available Hardware Flavors\n"
+        "**CPU:** cpu-basic, cpu-upgrade, cpu-performance, cpu-xl\n"
+        "**GPU:** t4-small, t4-medium, l4x1, l4x4, a10g-small, a10g-large, a10g-largex2, a10g-largex4, a100-large, h100, h100x8\n"
+        "**Specialized:** inf2x6\n\n"
+        "## Usage Examples\n"
+        "**Run Python with UV (recommended):**\n"
+        "{'operation': 'uv', 'args': {'script': 'import torch\\nprint(torch.cuda.is_available())', "
+        "'dependencies': ['torch', 'transformers'], 'flavor': 'a10g-small', 'secrets': {'HF_TOKEN': '$HF_TOKEN'}}}\n\n"
+        "**Run Docker command:**\n"
+        "{'operation': 'run', 'args': {'image': 'python:3.12', 'command': ['python', '-c', 'print(42)'], 'flavor': 'cpu-basic'}}\n\n"
+        "**List running jobs:**\n"
+        "{'operation': 'ps'}\n\n"
+        "## Key Parameters\n"
+        "- script: Python code (for uv) - can be inline string, URL, or file path\n"
+        "- dependencies/packages: List of pip packages (for uv)\n"
+        "- command: Array format ['cmd', 'arg1', 'arg2'] (for run)\n"
+        "- flavor/hardware: Choose appropriate size (default: cpu-basic)\n"
+        "- secrets: {'HF_TOKEN': '$HF_TOKEN'} for Hub access\n"
+        "- timeout: Max runtime (default: '30m')\n\n"
+        "## Important Notes\n"
+        "- **CRITICAL: Job files are EPHEMERAL** - ALL files created in HF Jobs (trained models, datasets, outputs, completions etc.) are DELETED when the job completes. You MUST upload any outputs to HF Hub in the script itself (using model.push_to_hub() when training models, dataset.push_to_hub() when creating text based outputs, etc.)."
+        "- Always pass full script content - no local files available on server\n"
+        "- Use array format for commands: ['/bin/sh', '-lc', 'cmd'] for shell features\n"
+        "- hf-transfer is auto-included in uv jobs for faster downloads\n"
+        "- **Remember to upload outputs to Hub before job finishes!**"
     ),
     "parameters": {
         "type": "object",
@@ -958,7 +869,7 @@ HF_JOBS_TOOL_SPEC = {
 async def hf_jobs_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
     """Handler for agent tool router"""
     try:
-        tool = HfJobsTool()
+        tool = HfJobsTool(namespace=os.environ.get("HF_NAMESPACE", ""))
         result = await tool.execute(arguments)
         return result["formatted"], not result.get("isError", False)
     except Exception as e:
