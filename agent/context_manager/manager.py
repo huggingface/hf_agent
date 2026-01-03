@@ -52,7 +52,6 @@ class ContextManager:
         """Add a message to the history"""
         if token_count:
             self.context_length = token_count
-            print(f"DEBUG : token_count = {self.context_length}")
         self.items.append(message)
 
     def get_messages(self) -> list[Message]:
