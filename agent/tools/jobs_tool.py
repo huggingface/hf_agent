@@ -10,7 +10,7 @@ import os
 from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import HfApi
-from huggingface_hub.utils import HfHubHTTPError, get_token_to_send
+from huggingface_hub.utils import HfHubHTTPError
 
 from agent.tools.types import ToolResult
 from agent.tools.utilities import (
@@ -63,20 +63,19 @@ UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
 
 def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
-    """
-    Automatically adds selected environment variables to the parameters passed by LLM.
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
 
-    Args:
-        params: Dictionary that may contain "HF_TOKEN" and other environment variables as keys
+    # Start with user-provided env vars, then force-set token last
+    result = dict(params or {})
 
-    Returns:
-        Dictionary with environment variables added
-    """
+    # If the caller passed HF_TOKEN="$HF_TOKEN", ignore it.
+    if result.get("HF_TOKEN", "").strip().startswith("$"):
+        result.pop("HF_TOKEN", None)
 
-    result = {"HF_TOKEN": get_token_to_send(os.environ.get("HF_TOKEN", ""))}
-
-    if params:
-        result.update(params)
+    # Set both names to be safe (different libs check different vars)
+    if token:
+        result["HF_TOKEN"] = token
+        result["HUGGINGFACE_HUB_TOKEN"] = token
 
     return result
 
@@ -747,9 +746,9 @@ HF_JOBS_TOOL_SPEC = {
         "GPU: t4-small, t4-medium, l4x1, a10g-small, a10g-large, a100-large, h100\n\n"
         "## Examples:\n\n"
         "**Fine-tune LLM and push to Hub:**\n"
-        "{'operation': 'run', 'script': 'from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer\\nmodel = AutoModelForCausalLM.from_pretrained(\"gpt2\")\\n# ... training code ...\\nmodel.push_to_hub(\"my-finetuned-model\")', 'dependencies': ['transformers', 'torch', 'datasets'], 'hardware_flavor': 'a10g-large', 'timeout': '4h', 'secrets': {'HF_TOKEN': '$HF_TOKEN'}}\n\n"
+        "{'operation': 'run', 'script': 'from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer\\nmodel = AutoModelForCausalLM.from_pretrained(\"gpt2\")\\n# ... training code ...\\nmodel.push_to_hub(\"user-name/my-finetuned-model\")', 'dependencies': ['transformers', 'torch', 'datasets'], 'hardware_flavor': 'a10g-large', 'timeout': '4h', 'env': {'CUSTOM_VAR': 'value'}}\n\n"
         "**Generate dataset daily and upload:**\n"
-        "{'operation': 'scheduled run', 'script': 'from datasets import Dataset\\nimport pandas as pd\\n# scrape/generate data\\ndf = pd.DataFrame(data)\\nds = Dataset.from_pandas(df)\\nds.push_to_hub(\"daily-dataset\")', 'dependencies': ['datasets', 'pandas'], 'schedule': '@daily', 'secrets': {'HF_TOKEN': '$HF_TOKEN'}}\n\n"
+        "{'operation': 'scheduled run', 'script': 'from datasets import Dataset\\nimport pandas as pd\\n# scrape/generate data\\ndf = pd.DataFrame(data)\\nds = Dataset.from_pandas(df)\\nds.push_to_hub(\"user-name/daily-dataset\")', 'dependencies': ['datasets', 'pandas'], 'schedule': '@daily'}\n\n"
         "**Run custom training with Docker:**\n"
         "{'operation': 'run', 'image': 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime', 'command': ['python', 'train.py', '--epochs', '10'], 'hardware_flavor': 'a100-large'}\n\n"
         "**Monitor jobs:**\n"
@@ -812,9 +811,9 @@ HF_JOBS_TOOL_SPEC = {
                 "type": "string",
                 "description": "Max runtime. Examples: '30m', '2h', '4h'. Default: '30m'. Important for long training jobs. Use with 'run'/'scheduled run'.",
             },
-            "secrets": {
+            "env": {
                 "type": "object",
-                "description": "Environment variables (private). Format: {'KEY': 'VALUE'}. Use {'HF_TOKEN': '$HF_TOKEN'} for Hub auth. Use with 'run'/'scheduled run'.",
+                "description": "Environment variables. Format: {'KEY': 'VALUE'}. HF_TOKEN is automatically included from your auth. Use with 'run'/'scheduled run'.",
             },
             # Job management parameters
             "job_id": {
