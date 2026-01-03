@@ -21,13 +21,16 @@ async def test_search_agent(query: str):
 
     # Import at runtime
     from pathlib import Path
+
     from agent.config import load_config
 
     # Create event queue for the sub-agent
     sub_event_queue = asyncio.Queue()
 
     # Load the search agent's own config file with GitHub MCP server
-    search_agent_config_path = Path(__file__).parent / "configs" / "_subagent_config_search_agent.json"
+    search_agent_config_path = (
+        Path(__file__).parent / "configs" / "_subagent_config_search_agent.json"
+    )
     search_agent_config = load_config(search_agent_config_path)
 
     # Extract GitHub MCP config from search agent config
@@ -122,7 +125,8 @@ async def main():
     # Example queries to test
     test_queries = [
         # "Explore the TRL documentation structure and find information about DPO trainer",
-        "is there a way to get the logs from a served huggingface space",
+        # "is there a way to get the logs from a served huggingface space",
+        """use exactly this call {\"tool_name\": \"search_hf_docs\", \"arguments\": {\"query\": \"vLLM offline batch inference Hugging Face models\"}}""",
         # "How do I train GLM4.7 with a GRPO training loop with trl with llm judge as a reward model for training on hle?"
         # "can i stream logs through the api for a served huggingface space",
         # 'what tools do you have access to?',

@@ -360,7 +360,7 @@ class HfJobsTool:
                 self.api.run_job,
                 image=image,
                 command=command,
-                env=_add_environment_variables(args.get("env")),
+                env=args.get("env"),
                 secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
@@ -575,7 +575,7 @@ To verify, call this tool with `{{"operation": "inspect", "job_id": "{job_id}"}}
                 image=image,
                 command=command,
                 schedule=schedule,
-                env=_add_environment_variables(args.get("env")),
+                env=args.get("env"),
                 secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
@@ -735,41 +735,29 @@ To inspect, call this tool with `{{"operation": "scheduled inspect", "scheduled_
 HF_JOBS_TOOL_SPEC = {
     "name": "hf_jobs",
     "description": (
-        "Manage Hugging Face CPU/GPU compute jobs. Run Python scripts with UV or custom Docker commands. "
-        "List, schedule and monitor jobs/logs.\n\n"
-        "## Operations\n"
-        "**Jobs:** run, ps, logs, inspect, cancel\n"
-        "**Scheduled Jobs:** scheduled run, scheduled ps, scheduled inspect, scheduled delete, scheduled suspend, scheduled resume\n\n"
-        "## 'run' Operation Behavior\n"
-        "The 'run' operation automatically detects what you want to do:\n"
-        "- If 'script' provided → runs a Python script and auto installs dependencies in the env\n"
-        "- If 'command' provided → runs a custom Docker command (full control)\n"
-        "- 'script' and 'command' are MUTUALLY EXCLUSIVE - provide one or the other, not both\n\n"
-        "## Available Hardware Flavors\n"
-        "**CPU:** cpu-basic, cpu-upgrade, cpu-performance, cpu-xl\n"
-        "**GPU:** t4-small, t4-medium, l4x1, l4x4, a10g-small, a10g-large, a10g-largex2, a10g-largex4, a100-large, h100, h100x8\n"
-        "**Specialized:** inf2x6\n\n"
-        "## Usage Examples\n"
-        "**Run Python script with dependencies:**\n"
-        "{'operation': 'run', 'script': 'import torch\\nprint(torch.cuda.is_available())', 'dependencies': ['torch', 'transformers'], 'hardware_flavor': 'a10g-small'}\n\n"
-        "**Run Python with secrets:**\n"
-        "{'operation': 'run', 'script': 'from huggingface_hub import HfApi\\napi = HfApi()\\nprint(api.whoami())', 'dependencies': ['huggingface-hub']}\n\n"
-        "**Run custom Docker command:**\n"
-        "{'operation': 'run', 'image': 'nvidia/cuda:12.0-base', 'command': ['nvidia-smi']}\n\n"
-        "**List running jobs:**\n"
-        "{'operation': 'ps'}\n\n"
-        "**Get job logs:**\n"
-        "{'operation': 'logs', 'job_id': 'xxx'}\n\n"
-        "**Cancel job:**\n"
-        "{'operation': 'cancel', 'job_id': 'xxx'}\n\n"
-        "**Schedule daily Python job:**\n"
-        "{'operation': 'scheduled run', 'script': 'print(\"daily task\")', 'schedule': '@daily'}\n\n"
-        "## Important Notes\n"
-        "- **CRITICAL: Job files are EPHEMERAL** - ALL files created in HF Jobs (trained models, datasets, outputs, completions etc.) are DELETED when the job completes. You MUST upload any outputs to HF Hub in the script itself (using model.push_to_hub() when training models, dataset.push_to_hub() when creating text based outputs, etc.)."
-        "- Always pass full script content - no local files available on server\n"
-        "- Use array format for commands: ['/bin/sh', '-lc', 'cmd'] for shell features\n"
-        "- hf-transfer is auto-included in uv jobs for faster downloads\n"
-        "- **Remember to upload outputs to Hub before job finishes!**"
+        "Run Python scripts or Docker containers on HF cloud GPUs/CPUs.\n\n"
+        "## Operations:\n"
+        "run, ps, logs, inspect, cancel, scheduled run, scheduled ps, scheduled inspect, scheduled delete, scheduled suspend, scheduled resume\n\n"
+        "## Two modes:\n"
+        "1. **Python mode:** Provide 'script' + 'dependencies' → auto-handles pip install\n"
+        "2. **Docker mode:** Provide 'image' + 'command' → full control\n"
+        "(script and command are mutually exclusive)\n\n"
+        "## Hardware:\n"
+        "CPU: cpu-basic (default), cpu-upgrade, cpu-performance, cpu-xl\n"
+        "GPU: t4-small, t4-medium, l4x1, a10g-small, a10g-large, a100-large, h100\n\n"
+        "## Examples:\n\n"
+        "**Fine-tune LLM and push to Hub:**\n"
+        "{'operation': 'run', 'script': 'from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer\\nmodel = AutoModelForCausalLM.from_pretrained(\"gpt2\")\\n# ... training code ...\\nmodel.push_to_hub(\"my-finetuned-model\")', 'dependencies': ['transformers', 'torch', 'datasets'], 'hardware_flavor': 'a10g-large', 'timeout': '4h', 'secrets': {'HF_TOKEN': '$HF_TOKEN'}}\n\n"
+        "**Generate dataset daily and upload:**\n"
+        "{'operation': 'scheduled run', 'script': 'from datasets import Dataset\\nimport pandas as pd\\n# scrape/generate data\\ndf = pd.DataFrame(data)\\nds = Dataset.from_pandas(df)\\nds.push_to_hub(\"daily-dataset\")', 'dependencies': ['datasets', 'pandas'], 'schedule': '@daily', 'secrets': {'HF_TOKEN': '$HF_TOKEN'}}\n\n"
+        "**Run custom training with Docker:**\n"
+        "{'operation': 'run', 'image': 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime', 'command': ['python', 'train.py', '--epochs', '10'], 'hardware_flavor': 'a100-large'}\n\n"
+        "**Monitor jobs:**\n"
+        "{'operation': 'ps'} - list running\n"
+        "{'operation': 'logs', 'job_id': 'xxx'} - stream logs\n"
+        "{'operation': 'cancel', 'job_id': 'xxx'} - stop job\n\n"
+        "## CRITICAL: Files are ephemeral!\n"
+        "Everything created during execution is DELETED when job finishes. Always .push_to_hub() your outputs (models, datasets, artifacts) in the script."
     ),
     "parameters": {
         "type": "object",
@@ -798,90 +786,49 @@ HF_JOBS_TOOL_SPEC = {
             # Python/UV specific parameters
             "script": {
                 "type": "string",
-                "description": (
-                    "Python code to execute. Can be inline code or a raw GitHub URL. "
-                    "Auto-uses UV image and builds UV command. "
-                    "USED with: 'run', 'scheduled run' (triggers Python mode). "
-                    "MUTUALLY EXCLUSIVE with 'command'. "
-                    "NOT USED with: 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Python code to execute. Triggers Python mode (auto pip install). Use with 'run'/'scheduled run'. Mutually exclusive with 'command'.",
             },
             "dependencies": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "List of pip packages to install. Example: ['torch', 'transformers']. "
-                    "Only used when 'script' is provided. "
-                    "USED with: 'run', 'scheduled run' (optional, only with script). "
-                    "NOT USED with: 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Pip packages to install. Example: ['trl', 'torch', 'datasets', 'transformers']. Only used with 'script'.",
             },
             # Docker specific parameters
             "image": {
                 "type": "string",
-                "description": (
-                    "Docker image to use. Default: UV image if 'script' provided, else 'python:3.12'. "
-                    "Can override the default UV image when using 'script'. "
-                    "USED with: 'run', 'scheduled run' (optional). "
-                    "NOT USED with: 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Docker image. Example: 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime'. Use with 'run'/'scheduled run'. Optional (auto-selected if not provided).",
             },
             "command": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "Command to execute as array. Example: ['python', '-c', 'print(42)']. "
-                    "Use this for full Docker control. "
-                    "USED with: 'run', 'scheduled run' (triggers Docker mode). "
-                    "MUTUALLY EXCLUSIVE with 'script'. "
-                    "NOT USED with: 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Command to execute as list. Example: ['python', 'train.py', '--epochs', '10']. Triggers Docker mode. Use with 'run'/'scheduled run'. Mutually exclusive with 'script'.",
             },
             # Hardware and environment
             "hardware_flavor": {
                 "type": "string",
-                "description": (
-                    "Hardware flavor. CPU: cpu-basic, cpu-upgrade, cpu-performance, cpu-xl. "
-                    "GPU: t4-small, t4-medium, l4x1, l4x4, a10g-small, a10g-large, a10g-largex2, a10g-largex4, a100-large, h100, h100x8. "
-                    "Default: cpu-basic. "
-                    "USED with: 'run', 'uv', 'scheduled run', 'scheduled uv' (optional). "
-                    "NOT USED with: 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Hardware type. CPU: cpu-basic (default), cpu-upgrade, cpu-performance, cpu-xl. GPU: t4-small, t4-medium, l4x1, a10g-small, a10g-large, a100-large, h100. Use with 'run'/'scheduled run'.",
+            },
+            "timeout": {
+                "type": "string",
+                "description": "Max runtime. Examples: '30m', '2h', '4h'. Default: '30m'. Important for long training jobs. Use with 'run'/'scheduled run'.",
             },
             "secrets": {
                 "type": "object",
-                "description": (
-                    "Secret environment variables. Format: {'KEY': 'VALUE'}. HF_TOKEN is loaded automatically. "
-                    "USED with: 'run', 'uv', 'scheduled run', 'scheduled uv' (optional). "
-                    "NOT USED with: 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Environment variables (private). Format: {'KEY': 'VALUE'}. Use {'HF_TOKEN': '$HF_TOKEN'} for Hub auth. Use with 'run'/'scheduled run'.",
             },
             # Job management parameters
             "job_id": {
                 "type": "string",
-                "description": (
-                    "Job ID to operate on. "
-                    "REQUIRED for: 'logs', 'inspect', 'cancel'. "
-                    "NOT USED with: 'run', 'uv', 'ps', 'scheduled run/uv/ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Job ID to operate on. Required for: 'logs', 'inspect', 'cancel'.",
             },
             # Scheduled job parameters
             "scheduled_job_id": {
                 "type": "string",
-                "description": (
-                    "Scheduled job ID to operate on. "
-                    "REQUIRED for: 'scheduled inspect', 'scheduled delete', 'scheduled suspend', 'scheduled resume'. "
-                    "NOT USED with: 'run', 'uv', 'ps', 'logs', 'inspect', 'cancel', 'scheduled run', 'scheduled uv', 'scheduled ps'."
-                ),
+                "description": "Scheduled job ID. Required for: 'scheduled inspect', 'scheduled delete', 'scheduled suspend', 'scheduled resume'.",
             },
             "schedule": {
                 "type": "string",
-                "description": (
-                    "Cron schedule or preset. Presets: '@hourly', '@daily', '@weekly', '@monthly', '@yearly'. "
-                    "Cron example: '0 9 * * 1' (9 AM every Monday). "
-                    "REQUIRED for: 'scheduled run', 'scheduled uv'. "
-                    "NOT USED with: 'run', 'uv', 'ps', 'logs', 'inspect', 'cancel', 'scheduled ps/inspect/delete/suspend/resume'."
-                ),
+                "description": "Schedule for recurring job. Presets: '@hourly', '@daily', '@weekly', '@monthly'. Cron: '0 9 * * 1' (Mon 9am). Required for: 'scheduled run'.",
             },
         },
         "required": ["operation"],
