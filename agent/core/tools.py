@@ -13,9 +13,14 @@ from lmnr import observe
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
+from agent.tools.docs_tools import (
+    EXPLORE_HF_DOCS_TOOL_SPEC,
+    HF_DOCS_FETCH_TOOL_SPEC,
+    explore_hf_docs_handler,
+    hf_docs_fetch_handler,
+)
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
-from agent.tools.search_docs_tool import SEARCH_DOCS_TOOL_SPEC, search_docs_handler
 
 # Suppress aiohttp deprecation warning
 warnings.filterwarnings(
@@ -122,6 +127,27 @@ class ToolRouter:
                 )
             )
 
+    async def register_openapi_tool(self) -> None:
+        """Register the OpenAPI search tool (requires async initialization)"""
+        from agent.tools.docs_tools import (
+            _get_api_search_tool_spec,
+            search_openapi_handler,
+        )
+
+        print("Registering OpenAPI search tool...")
+
+        # Register search_hf_api_endpoints with dynamic spec
+        openapi_spec = await _get_api_search_tool_spec()
+        self.register_tool(
+            ToolSpec(
+                name=openapi_spec["name"],
+                description=openapi_spec["description"],
+                parameters=openapi_spec["parameters"],
+                handler=search_openapi_handler,
+            )
+        )
+        print(f"Registered: {openapi_spec['name']}")
+
     def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
         """Get tool specifications in OpenAI format"""
         specs = []
@@ -145,6 +171,10 @@ class ToolRouter:
             await self.register_mcp_tools()
             self._mcp_initialized = True
         print(f"MCP initialized: {self._mcp_initialized}")
+
+        # Register OpenAPI tool (requires async initialization)
+        await self.register_openapi_tool()
+
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -189,16 +219,24 @@ class ToolRouter:
 def create_builtin_tools() -> list[ToolSpec]:
     """Create built-in tool specifications"""
     print(
-        f"Creating built-in tools: {SEARCH_DOCS_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}"
+        f"Creating built-in tools: {EXPLORE_HF_DOCS_TOOL_SPEC['name']}, {HF_DOCS_FETCH_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}"
     )
     # in order of importance
     return [
+        # Documentation search tools
         ToolSpec(
-            name=SEARCH_DOCS_TOOL_SPEC["name"],
-            description=SEARCH_DOCS_TOOL_SPEC["description"],
-            parameters=SEARCH_DOCS_TOOL_SPEC["parameters"],
-            handler=search_docs_handler,
+            name=EXPLORE_HF_DOCS_TOOL_SPEC["name"],
+            description=EXPLORE_HF_DOCS_TOOL_SPEC["description"],
+            parameters=EXPLORE_HF_DOCS_TOOL_SPEC["parameters"],
+            handler=explore_hf_docs_handler,
         ),
+        ToolSpec(
+            name=HF_DOCS_FETCH_TOOL_SPEC["name"],
+            description=HF_DOCS_FETCH_TOOL_SPEC["description"],
+            parameters=HF_DOCS_FETCH_TOOL_SPEC["parameters"],
+            handler=hf_docs_fetch_handler,
+        ),
+        # Planning and job management tools
         ToolSpec(
             name=PLAN_TOOL_SPEC["name"],
             description=PLAN_TOOL_SPEC["description"],
