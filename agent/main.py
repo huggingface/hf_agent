@@ -116,61 +116,101 @@ async def event_listener(
                 new_tokens = event.data.get("new_tokens", 0) if event.data else 0
                 print(f"Compacted context: {old_tokens} → {new_tokens} tokens")
             elif event.event_type == "approval_required":
-                # Display job details and prompt for approval
-                tool_name = event.data.get("tool", "") if event.data else ""
-                arguments = event.data.get("arguments", {}) if event.data else {}
+                # Handle batch approval format
+                tools_data = event.data.get("tools", []) if event.data else []
+                count = event.data.get("count", 0) if event.data else 0
 
-                operation = arguments.get("operation", "")
-                args = arguments.get("args", {})
-
-                print(f"\nOperation: {operation}")
-
-                if operation == "uv":
-                    script = args.get("script", "")
-                    dependencies = args.get("dependencies", [])
-                    print(f"Script to run:\n{script}")
-                    if dependencies:
-                        print(f"Dependencies: {', '.join(dependencies)}")
-                elif operation == "run":
-                    image = args.get("image", "")
-                    command = args.get("command", "")
-                    print(f"Docker image: {image}")
-                    print(f"Command: {command}")
-
-                # Common parameters
-                flavor = args.get("flavor", "cpu-basic")
-                detached = args.get("detached", False)
-                print(f"Hardware: {flavor}")
-                print(f"Detached mode: {detached}")
-
-                secrets = args.get("secrets", [])
-                if secrets:
-                    print(f"Secrets: {', '.join(secrets)}")
-
-                # Get user decision
                 print("\n" + format_separator())
-                print(format_header("JOB EXECUTION APPROVAL REQUIRED"))
+                print(
+                    format_header(
+                        f"JOB EXECUTION APPROVAL REQUIRED ({count} job{'s' if count != 1 else ''})"
+                    )
+                )
                 print(format_separator())
+
+                approvals = []
                 loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    input,
-                    "Approve? (y=yes, n=no, or provide feedback to reject): ",
-                )
 
-                response = response.strip()
-                approved = response.lower() in ["y", "yes"]
-                feedback = (
-                    None if approved or response.lower() in ["n", "no"] else response
-                )
+                # Ask for approval for each tool
+                for i, tool_info in enumerate(tools_data, 1):
+                    tool_name = tool_info.get("tool", "")
+                    arguments = tool_info.get("arguments", {})
+                    tool_call_id = tool_info.get("tool_call_id", "")
 
-                # Submit approval
+                    # Handle case where arguments might be a JSON string
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            print(f"Warning: Failed to parse arguments for {tool_name}")
+                            arguments = {}
+
+                    operation = arguments.get("operation", "")
+                    args = arguments.get("args", {})
+
+                    # Handle case where args might be a JSON string
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            print(f"Warning: Failed to parse args for {tool_name}")
+                            args = {}
+
+                    print(f"\n[Job {i}/{count}]")
+                    print(f"Operation: {operation}")
+
+                    if operation == "uv":
+                        script = args.get("script", "")
+                        dependencies = args.get("dependencies", [])
+                        print("Script:\n" + script)
+                        if dependencies:
+                            print(f"Dependencies: {', '.join(dependencies)}")
+                    elif operation == "run":
+                        image = args.get("image", "")
+                        command = args.get("command", "")
+                        print(f"Docker image: {image}")
+                        print(f"Command: {command}")
+
+                    # Common parameters
+                    flavor = args.get("flavor", "cpu-basic")
+                    detached = args.get("detached", False)
+                    print(f"Hardware: {flavor}")
+                    print(f"Detached mode: {detached}")
+
+                    secrets = args.get("secrets", [])
+                    if secrets:
+                        print(f"Secrets: {', '.join(secrets)}")
+
+                    # Get user decision for this job
+                    response = await loop.run_in_executor(
+                        None,
+                        input,
+                        f"Approve job {i}? (y=yes, n=no, or provide feedback to reject): ",
+                    )
+
+                    response = response.strip()
+                    approved = response.lower() in ["y", "yes"]
+                    feedback = (
+                        None
+                        if approved or response.lower() in ["n", "no"]
+                        else response
+                    )
+
+                    approvals.append(
+                        {
+                            "tool_call_id": tool_call_id,
+                            "approved": approved,
+                            "feedback": feedback,
+                        }
+                    )
+
+                # Submit batch approval
                 submission_id[0] += 1
                 approval_submission = Submission(
                     id=f"approval_{submission_id[0]}",
                     operation=Operation(
                         op_type=OpType.EXEC_APPROVAL,
-                        data={"approved": approved, "feedback": feedback},
+                        data={"approvals": approvals},
                     ),
                 )
                 await submission_queue.put(approval_submission)
