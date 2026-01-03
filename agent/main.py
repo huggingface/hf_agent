@@ -29,6 +29,16 @@ from agent.utils.terminal_display import (
 
 litellm.drop_params = True
 
+
+def _safe_get_args(arguments: dict) -> dict:
+    """Safely extract args dict from arguments, handling cases where LLM passes string."""
+    args = arguments.get("args", {})
+    # Sometimes LLM passes args as string instead of dict
+    if isinstance(args, str):
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
 lmnr_api_key = os.environ.get("LMNR_API_KEY")
 if lmnr_api_key:
     try:
@@ -121,7 +131,7 @@ async def event_listener(
                 arguments = event.data.get("arguments", {}) if event.data else {}
 
                 operation = arguments.get("operation", "")
-                args = arguments.get("args", {})
+                args = _safe_get_args(arguments)
 
                 print(f"\nOperation: {operation}")
 
@@ -137,19 +147,64 @@ async def event_listener(
                     print(f"Docker image: {image}")
                     print(f"Command: {command}")
 
-                # Common parameters
-                flavor = args.get("flavor", "cpu-basic")
-                detached = args.get("detached", False)
-                print(f"Hardware: {flavor}")
-                print(f"Detached mode: {detached}")
+                    # Common parameters
+                    flavor = args.get("flavor", "cpu-basic")
+                    detached = args.get("detached", False)
+                    print(f"Hardware: {flavor}")
+                    print(f"Detached mode: {detached}")
 
-                secrets = args.get("secrets", [])
-                if secrets:
-                    print(f"Secrets: {', '.join(secrets)}")
+                    secrets = args.get("secrets", [])
+                    if secrets:
+                        print(f"Secrets: {', '.join(secrets)}")
+                elif operation in ["create_repo", "upload_file"]:
+                    repo_id = args.get("repo_id", "")
+                    repo_type = args.get("repo_type", "dataset")
+
+                    # Build repo URL
+                    type_path = "" if repo_type == "model" else f"{repo_type}s"
+                    repo_url = f"https://huggingface.co/{type_path}/{repo_id}".replace("//", "/")
+
+                    print(f"Repository: {repo_id}")
+                    print(f"Type: {repo_type}")
+                    print(f"Private: Yes")
+                    print(f"URL: {repo_url}")
+
+                    # Show file preview for upload_file operation
+                    if operation == "upload_file":
+                        path_in_repo = args.get("path_in_repo", "")
+                        file_content = args.get("file_content", "")
+                        print(f"File: {path_in_repo}")
+
+                        if isinstance(file_content, str):
+                            # Calculate metrics
+                            all_lines = file_content.split('\n')
+                            line_count = len(all_lines)
+                            size_bytes = len(file_content.encode('utf-8'))
+                            size_kb = size_bytes / 1024
+                            size_mb = size_kb / 1024
+
+                            print(f"Line count: {line_count}")
+                            if size_kb < 1024:
+                                print(f"Size: {size_kb:.2f} KB")
+                            else:
+                                print(f"Size: {size_mb:.2f} MB")
+
+                            # Show preview
+                            preview_lines = all_lines[:5]
+                            preview = '\n'.join(preview_lines)
+                            print(f"Content preview (first 5 lines):\n{preview}")
+                            if len(all_lines) > 5:
+                                print("...")
 
                 # Get user decision
                 print("\n" + format_separator())
-                print(format_header("JOB EXECUTION APPROVAL REQUIRED"))
+                if tool_name == "hf_jobs":
+                    header_text = "JOB EXECUTION APPROVAL REQUIRED"
+                elif operation == "upload_file":
+                    header_text = "FILE UPLOAD APPROVAL REQUIRED"
+                else:
+                    header_text = "REPO CREATION APPROVAL REQUIRED"
+                print(format_header(header_text))
                 print(format_separator())
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(

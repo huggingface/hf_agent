@@ -15,14 +15,42 @@ from agent.core.tools import ToolRouter
 ToolCall = ChatCompletionMessageToolCall
 
 
+def _validate_tool_args(tool_args: dict) -> tuple[bool, str | None]:
+    """
+    Validate tool arguments structure.
+
+    Returns:
+        (is_valid, error_message)
+    """
+    args = tool_args.get("args", {})
+    # Sometimes LLM passes args as string instead of dict
+    if isinstance(args, str):
+        return False, f"Tool call error: 'args' must be a JSON object, not a string. You passed: {repr(args)}"
+    if not isinstance(args, dict) and args is not None:
+        return False, f"Tool call error: 'args' must be a JSON object. You passed type: {type(args).__name__}"
+    return True, None
+
+
 def _needs_approval(tool_name: str, tool_args: dict) -> bool:
     """Check if a tool call requires user approval before execution"""
-    if tool_name != "hf_jobs":
+    # If args are malformed, skip approval (validation error will be shown later)
+    args_valid, _ = _validate_tool_args(tool_args)
+    if not args_valid:
         return False
 
-    # Check if it's a run or uv operation
-    operation = tool_args.get("operation", "")
-    return operation in ["run", "uv"]
+    args = tool_args.get("args", {})
+
+    if tool_name == "hf_jobs":
+        # Check if it's a run or uv operation
+        operation = tool_args.get("operation", "")
+        return operation in ["run", "uv"]
+
+    if tool_name == "hf_private_repos":
+        # Repo creation and file uploads require approval
+        operation = tool_args.get("operation", "")
+        return operation in ["create_repo", "upload_file"]
+
+    return False
 
 
 class Handlers:
@@ -130,16 +158,23 @@ class Handlers:
                         # Return early - wait for EXEC_APPROVAL operation
                         return None
 
-                    await session.send_event(
-                        Event(
-                            event_type="tool_call",
-                            data={"tool": tool_name, "arguments": tool_args},
+                    # Validate tool arguments before calling
+                    args_valid, error_msg = _validate_tool_args(tool_args)
+                    if not args_valid:
+                        # Return error to agent instead of calling tool
+                        output = error_msg
+                        success = False
+                    else:
+                        await session.send_event(
+                            Event(
+                                event_type="tool_call",
+                                data={"tool": tool_name, "arguments": tool_args},
+                            )
                         )
-                    )
 
-                    output, success = await session.tool_router.call_tool(
-                        tool_name, tool_args
-                    )
+                        output, success = await session.tool_router.call_tool(
+                            tool_name, tool_args
+                        )
 
                     # Add tool result to history
                     tool_msg = Message(

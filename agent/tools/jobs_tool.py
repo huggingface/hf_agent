@@ -74,7 +74,6 @@ def _substitute_hf_token(params: Dict[str, Any] | None) -> Dict[str, Any] | None
     Returns:
         Dictionary with HF_TOKEN value substituted from environment
     """
-    print("DEBUG !! : ", params)
     if params is None:
         return None
 
@@ -912,6 +911,7 @@ HF_JOBS_TOOL_SPEC = {
         "Manage Hugging Face CPU/GPU compute jobs. Run commands in Docker containers, "
         "execute Python scripts with UV. List, schedule and monitor jobs/logs. "
         "Example hardware/flavor: cpu-basic, cpu-performance, t4-medium. "
+        "After job completion, if needed or asked by the user, use hf_private_repos tool to store scripts/logs/results to Hub."
         "Call this tool with no operation for full usage instructions and examples."
     ),
     "parameters": {
