@@ -1,208 +1,27 @@
 """
-GitHub Search Code Tool
+GitHub Code Search Tool - Search code across GitHub with advanced filtering
 
-Searches code across GitHub with glob filtering and line-level results.
+Find code patterns using regex and glob filters for repositories and file paths.
 """
 
-import asyncio
 import fnmatch
 import os
 import re
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
-try:
-    import requests
-except ImportError:
-    raise ImportError(
-        "requests library is required. Install with: pip install requests"
-    )
+import requests
 
 from agent.tools.types import ToolResult
 
 
-@dataclass
-class CodeMatch:
-    """A code match with location information."""
-
-    repo: str
-    path: str
-    ref: str
-    line_start: int
-    line_end: int
-    snippet: str
-
-    def to_dict(self):
-        return asdict(self)
-
-
-class GitHubAPIError(Exception):
-    """Raised when GitHub API returns an error."""
-
-    pass
-
-
-def _get_github_token() -> str:
-    """Get GitHub token from environment."""
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise GitHubAPIError(
-            "GITHUB_TOKEN environment variable is required. "
-            "Set it with: export GITHUB_TOKEN=your_token_here"
-        )
-    return token
-
-
-def _build_github_query(
-    query: str, repo_glob: Optional[str], path_glob: Optional[str], regex: bool
-) -> str:
-    """Build GitHub search query string from parameters."""
-    parts = []
-
-    if regex:
-        parts.append(f"/{query}/")
-    else:
-        if " " in query:
-            parts.append(f'"{query}"')
-        else:
-            parts.append(query)
-
-    if repo_glob:
-        if "/" in repo_glob:
-            parts.append(f"repo:{repo_glob}")
-        else:
-            parts.append(f"user:{repo_glob}")
-
-    if path_glob:
-        if "*" not in path_glob and "?" not in path_glob:
-            parts.append(f"path:{path_glob}")
-        elif path_glob.startswith("*."):
-            ext = path_glob[2:]
-            parts.append(f"extension:{ext}")
-        elif "/" not in path_glob and "*" in path_glob:
-            parts.append(f"filename:{path_glob}")
-        else:
-            if "." in path_glob:
-                ext_match = re.search(r"\*\.(\w+)", path_glob)
-                if ext_match:
-                    parts.append(f"extension:{ext_match.group(1)}")
-
-    return " ".join(parts)
-
-
-def _fetch_code_search_results(
-    query: str, token: str, max_results: int
-) -> List[Dict[str, Any]]:
-    """Fetch code search results from GitHub API."""
-    headers = {
-        "Accept": "application/vnd.github.text-match+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Authorization": f"Bearer {token}",
-    }
-
-    all_items = []
-    page = 1
-    per_page = min(100, max_results)
-
-    while len(all_items) < max_results:
-        params = {
-            "q": query,
-            "page": page,
-            "per_page": per_page,
-        }
-
-        url = "https://api.github.com/search/code"
-
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-
-            if response.status_code != 200:
-                break
-
-            data = response.json()
-            items = data.get("items", [])
-
-            if not items:
-                break
-
-            all_items.extend(items)
-
-            if len(all_items) >= data.get("total_count", 0):
-                break
-
-            page += 1
-
-        except requests.exceptions.RequestException:
-            break
-
-    return all_items[:max_results]
-
-
 def _glob_match(text: str, pattern: str) -> bool:
-    """Check if text matches glob pattern, supporting ** for multi-level paths."""
+    """Check if text matches glob pattern, supporting ** for multi-level paths"""
     if "**" in pattern:
         regex_pattern = pattern.replace("**", "<<<DOUBLESTAR>>>")
         regex_pattern = fnmatch.translate(regex_pattern)
         regex_pattern = regex_pattern.replace("<<<DOUBLESTAR>>>", ".*")
         return re.match(regex_pattern, text) is not None
-    else:
-        return fnmatch.fnmatch(text, pattern)
-
-
-def _estimate_line_numbers(fragment: str) -> Tuple[int, int]:
-    """Estimate line numbers from a code fragment."""
-    lines = fragment.split("\n")
-    line_count = len([line for line in lines if line.strip()])
-    return 1, line_count
-
-
-def _parse_results_to_matches(
-    raw_results: List[Dict[str, Any]],
-    repo_glob: Optional[str],
-    path_glob: Optional[str],
-) -> List[CodeMatch]:
-    """Parse raw GitHub API results into CodeMatch objects."""
-    matches = []
-
-    for item in raw_results:
-        repo_name = item.get("repository", {}).get("full_name", "unknown/unknown")
-        file_path = item.get("path", "")
-        sha = item.get("sha", "unknown")
-
-        if repo_glob and not _glob_match(repo_name, repo_glob):
-            continue
-
-        if path_glob and not _glob_match(file_path, path_glob):
-            continue
-
-        text_matches = item.get("text_matches", [])
-
-        if text_matches:
-            for text_match in text_matches:
-                fragment = text_match.get("fragment", "")
-                line_start, line_end = _estimate_line_numbers(fragment)
-
-                match = CodeMatch(
-                    repo=repo_name,
-                    path=file_path,
-                    ref=sha,
-                    line_start=line_start,
-                    line_end=line_end,
-                    snippet=fragment.strip(),
-                )
-                matches.append(match)
-        else:
-            match = CodeMatch(
-                repo=repo_name,
-                path=file_path,
-                ref=sha,
-                line_start=1,
-                line_end=1,
-                snippet="<match found, but snippet not available>",
-            )
-            matches.append(match)
-
-    return matches
+    return fnmatch.fnmatch(text, pattern)
 
 
 def search_code(
@@ -210,160 +29,256 @@ def search_code(
     repo_glob: Optional[str] = None,
     path_glob: Optional[str] = None,
     regex: bool = False,
-    max_results: int = 100,
-) -> List[CodeMatch]:
+    max_results: int = 20,
+) -> ToolResult:
     """
-    Search for code across GitHub with glob filtering and line-level results.
-
-    Returns: repo, path, ref, line_start, line_end, snippet
+    Search for code across GitHub with glob filtering.
 
     Args:
         query: Search term or pattern to find in code
-        repo_glob: Glob pattern to filter repositories (e.g., "github/*", "facebook/react")
+        repo_glob: Glob pattern to filter repositories (e.g., "github/*", "*/react")
         path_glob: Glob pattern to filter file paths (e.g., "*.py", "src/**/*.js")
-        regex: If True, treat query as a regular expression
-        max_results: Maximum number of results to return (default: 100)
+        regex: If True, treat query as regular expression
+        max_results: Maximum number of results to return (default 20)
 
     Returns:
-        List of CodeMatch objects with repo, path, ref, line numbers, and snippet
+        ToolResult with code matches and snippets
     """
-    github_query = _build_github_query(query, repo_glob, path_glob, regex)
-    token = _get_github_token()
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return {
+            "formatted": "Error: GITHUB_TOKEN environment variable is required",
+            "totalResults": 0,
+            "resultsShared": 0,
+            "isError": True,
+        }
 
-    raw_results = _fetch_code_search_results(github_query, token, max_results)
-    matches = _parse_results_to_matches(raw_results, repo_glob, path_glob)
+    # Build GitHub query
+    query_parts = []
 
-    return matches
+    if regex:
+        query_parts.append(f"/{query}/")
+    else:
+        query_parts.append(f'"{query}"' if " " in query else query)
 
+    # Add repo filter
+    if repo_glob:
+        if "/" in repo_glob:
+            query_parts.append(f"repo:{repo_glob}")
+        else:
+            query_parts.append(f"user:{repo_glob}")
 
-async def _async_call(func, *args, **kwargs):
-    """Wrap synchronous calls for async context."""
-    return await asyncio.to_thread(func, *args, **kwargs)
+    # Add path filter
+    if path_glob:
+        if "*" not in path_glob and "?" not in path_glob:
+            query_parts.append(f"path:{path_glob}")
+        elif path_glob.startswith("*."):
+            ext = path_glob[2:]
+            query_parts.append(f"extension:{ext}")
+        elif "/" not in path_glob and "*" in path_glob:
+            query_parts.append(f"filename:{path_glob}")
+        else:
+            # Complex pattern, extract extension if possible
+            ext_match = re.search(r"\*\.(\w+)", path_glob)
+            if ext_match:
+                query_parts.append(f"extension:{ext_match.group(1)}")
 
+    github_query = " ".join(query_parts)
 
-def _format_code_matches(matches: List[CodeMatch]) -> str:
-    """Format code matches."""
-    if not matches:
-        return "No matches found."
+    headers = {
+        "Accept": "application/vnd.github.text-match+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Authorization": f"Bearer {token}",
+    }
 
-    lines = []
-    for i, match in enumerate(matches, 1):
-        lines.append(f"**{i}. {match.repo}/{match.path}:{match.line_start}**")
-        lines.append("```")
-        # Show first 5 lines of snippet
-        snippet_lines = match.snippet.split("\n")[:5]
-        lines.extend(snippet_lines)
-        if len(match.snippet.split("\n")) > 5:
-            lines.append("...")
-        lines.append("```")
-        lines.append("")
+    all_matches = []
+    page = 1
+    per_page = min(100, max_results)
 
-    return "\n".join(lines)
-
-
-class SearchCodeTool:
-    """Tool for searching code across GitHub."""
-
-    async def execute(self, params: Dict[str, Any]) -> ToolResult:
-        """Execute search_code operation."""
-        query = params.get("query")
-        if not query:
-            return {
-                "formatted": "Error: 'query' parameter is required",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": True,
+    try:
+        while len(all_matches) < max_results:
+            params = {
+                "q": github_query,
+                "page": page,
+                "per_page": per_page,
             }
 
-        repo_glob = params.get("repo_glob")
-        path_glob = params.get("path_glob")
-        regex = params.get("regex", False)
-        max_results = params.get("max_results", 100)
-
-        try:
-            matches = await _async_call(
-                search_code,
-                query=query,
-                repo_glob=repo_glob,
-                path_glob=path_glob,
-                regex=regex,
-                max_results=max_results,
+            response = requests.get(
+                "https://api.github.com/search/code",
+                headers=headers,
+                params=params,
+                timeout=30,
             )
 
-            if not matches:
+            if response.status_code == 403:
+                error_data = response.json()
                 return {
-                    "formatted": "No matches found",
+                    "formatted": f"GitHub API rate limit or permission error: {error_data.get('message', 'Unknown error')}",
                     "totalResults": 0,
                     "resultsShared": 0,
+                    "isError": True,
                 }
 
-            formatted = _format_code_matches(matches)
-            response = f"**Found {len(matches)} code matches:**\n\n{formatted}"
+            if response.status_code != 200:
+                error_msg = f"GitHub API error (status {response.status_code})"
+                try:
+                    error_data = response.json()
+                    if "message" in error_data:
+                        error_msg += f": {error_data['message']}"
+                except Exception:
+                    pass
+                return {
+                    "formatted": error_msg,
+                    "totalResults": 0,
+                    "resultsShared": 0,
+                    "isError": True,
+                }
 
-            # Add note about viewing full files
-            if matches:
-                response += "\n**To view full file, use:**\n"
-                top_match = matches[0]
-                response += (
-                    f"read_file(repo='{top_match.repo}', path='{top_match.path}')"
-                )
+            data = response.json()
+            items = data.get("items", [])
 
-            return {
-                "formatted": response,
-                "totalResults": len(matches),
-                "resultsShared": min(len(matches), 10),
-            }
+            if not items:
+                break
 
-        except GitHubAPIError as e:
-            return {
-                "formatted": f"GitHub API Error: {str(e)}",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": True,
-            }
-        except Exception as e:
-            return {
-                "formatted": f"Error: {str(e)}",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": True,
-            }
+            for item in items:
+                repo_name = item.get("repository", {}).get("full_name", "unknown")
+                file_path = item.get("path", "")
+                sha = item.get("sha", "")
+
+                # Apply client-side glob filtering
+                if repo_glob and not _glob_match(repo_name, repo_glob):
+                    continue
+                if path_glob and not _glob_match(file_path, path_glob):
+                    continue
+
+                # Extract text matches
+                text_matches = item.get("text_matches", [])
+                if text_matches:
+                    for text_match in text_matches:
+                        fragment = text_match.get("fragment", "")
+                        lines = fragment.split("\n")
+                        line_count = len([line for line in lines if line.strip()])
+
+                        all_matches.append(
+                            {
+                                "repo": repo_name,
+                                "path": file_path,
+                                "ref": sha,
+                                "line_start": 1,
+                                "line_end": line_count,
+                                "snippet": fragment.strip(),
+                                "url": item.get("html_url", ""),
+                            }
+                        )
+                else:
+                    all_matches.append(
+                        {
+                            "repo": repo_name,
+                            "path": file_path,
+                            "ref": sha,
+                            "line_start": 1,
+                            "line_end": 1,
+                            "snippet": "(snippet not available)",
+                            "url": item.get("html_url", ""),
+                        }
+                    )
+
+            if len(all_matches) >= data.get("total_count", 0):
+                break
+
+            page += 1
+
+    except requests.exceptions.RequestException as e:
+        return {
+            "formatted": f"Failed to connect to GitHub API: {str(e)}",
+            "totalResults": 0,
+            "resultsShared": 0,
+            "isError": True,
+        }
+
+    results = all_matches[:max_results]
+
+    if not results:
+        return {
+            "formatted": f"No code matches found for query: {query}",
+            "totalResults": 0,
+            "resultsShared": 0,
+        }
+
+    # Format output
+    lines_output = [f"**Found {len(results)} code matches:**\n"]
+
+    for i, match in enumerate(results, 1):
+        lines_output.append(f"{i}. **{match['repo']}:{match['path']}**")
+        lines_output.append(
+            f"   Lines: {match['line_start']}-{match['line_end']} | Ref: {match['ref'][:7]}"
+        )
+        lines_output.append(f"   URL: {match['url']}")
+
+        # Show snippet (first 5 lines)
+        snippet_lines = match["snippet"].split("\n")[:5]
+        if snippet_lines:
+            lines_output.append("   ```")
+            for line in snippet_lines:
+                lines_output.append(f"   {line}")
+            if len(match["snippet"].split("\n")) > 5:
+                lines_output.append("   ...")
+            lines_output.append("   ```")
+        lines_output.append("")
+
+    return {
+        "formatted": "\n".join(lines_output),
+        "totalResults": len(results),
+        "resultsShared": len(results),
+    }
 
 
 # Tool specification
-SEARCH_CODE_TOOL_SPEC = {
+GITHUB_SEARCH_CODE_TOOL_SPEC = {
     "name": "search_code",
     "description": (
-        "Search code across GitHub with glob filtering and line-level results.\n\n"
-        "Returns: repo, path, ref, line_start, line_end, snippet\n\n"
-        "Examples:\n"
-        "- Search Python functions: {'query': 'def train', 'path_glob': '*.py', 'repo_glob': 'huggingface/*'}\n"
-        "- Search TODO comments: {'query': 'TODO', 'repo_glob': 'github/*', 'max_results': 10}\n"
-        "- Regex search: {'query': r'func Test\\w+', 'path_glob': '*.go', 'regex': True}\n"
-        "- Search in specific repo: {'query': 'HfApi', 'repo_glob': 'huggingface/huggingface_hub', 'path_glob': '*.py'}\n\n"
+        "Search for code patterns across GitHub with advanced glob filtering.\n\n"
+        "Features:\n"
+        "- Text or regex search\n"
+        "- Repository glob patterns (e.g., 'github/*', '*/react')\n"
+        "- File path glob patterns (e.g., '*.py', 'src/**/*.js')\n"
+        "- Returns code snippets with line numbers\n"
+        "- Direct URLs to matches\n\n"
+        "## Examples:\n\n"
+        "**Search for Python function definitions:**\n"
+        "{'query': 'def search', 'path_glob': '*.py', 'max_results': 10}\n\n"
+        "**Search for TODO comments in specific org:**\n"
+        "{'query': 'TODO', 'repo_glob': 'github/*', 'max_results': 5}\n\n"
+        "**Regex search for test functions:**\n"
+        "{'query': r'func Test\\w+', 'path_glob': '*.go', 'regex': True}\n\n"
+        "**Search in specific repo with path filter:**\n"
+        "{'query': 'SearchCode', 'repo_glob': 'github/github-mcp-server', 'path_glob': '*.go'}\n\n"
+        "**Find imports in TypeScript files:**\n"
+        "{'query': 'import', 'path_glob': 'src/**/*.ts', 'repo_glob': 'facebook/*'}\n\n"
+        "Perfect for finding code patterns, learning from examples, or exploring implementations."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search term or pattern to find in code",
+                "description": "Search term or pattern to find in code. Required.",
             },
             "repo_glob": {
                 "type": "string",
-                "description": "Glob pattern to filter repositories (e.g., 'github/*', 'facebook/react')",
+                "description": "Glob pattern to filter repositories (e.g., 'github/*', '*/react'). Optional.",
             },
             "path_glob": {
                 "type": "string",
-                "description": "Glob pattern to filter file paths (e.g., '*.py', 'src/**/*.js', 'test_*.py')",
+                "description": "Glob pattern to filter file paths (e.g., '*.py', 'src/**/*.js'). Optional.",
             },
             "regex": {
                 "type": "boolean",
-                "description": "Treat query as regular expression (default: false)",
+                "description": "If true, treat query as regular expression. Default: false.",
             },
             "max_results": {
                 "type": "integer",
-                "description": "Maximum number of results to return (default: 100)",
+                "description": "Maximum number of results to return. Default: 20.",
             },
         },
         "required": ["query"],
@@ -371,11 +286,16 @@ SEARCH_CODE_TOOL_SPEC = {
 }
 
 
-async def search_code_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
-    """Handler for agent tool router."""
+async def github_search_code_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
+    """Handler for agent tool router"""
     try:
-        tool = SearchCodeTool()
-        result = await tool.execute(arguments)
+        result = search_code(
+            query=arguments["query"],
+            repo_glob=arguments.get("repo_glob"),
+            path_glob=arguments.get("path_glob"),
+            regex=arguments.get("regex", False),
+            max_results=arguments.get("max_results", 20),
+        )
         return result["formatted"], not result.get("isError", False)
     except Exception as e:
-        return f"Error executing search_code: {str(e)}", False
+        return f"Error searching code: {str(e)}", False
