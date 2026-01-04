@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import litellm
 from lmnr import Laminar, LaminarLiteLLMCallback
+from prompt_toolkit import PromptSession
 
 from agent.config import load_config
 from agent.core.agent_loop import submission_loop
@@ -70,6 +71,7 @@ async def event_listener(
     submission_queue: asyncio.Queue,
     turn_complete_event: asyncio.Event,
     ready_event: asyncio.Event,
+    prompt_session: PromptSession,
 ) -> None:
     """Background task that listens for events and displays them"""
     submission_id = [1000]  # Use list to make it mutable in closure
@@ -126,106 +128,162 @@ async def event_listener(
                 new_tokens = event.data.get("new_tokens", 0) if event.data else 0
                 print(f"Compacted context: {old_tokens} → {new_tokens} tokens")
             elif event.event_type == "approval_required":
-                # Display job details and prompt for approval
-                tool_name = event.data.get("tool", "") if event.data else ""
-                arguments = event.data.get("arguments", {}) if event.data else {}
+                # Handle batch approval format
+                tools_data = event.data.get("tools", []) if event.data else []
+                count = event.data.get("count", 0) if event.data else 0
 
-                operation = arguments.get("operation", "")
-                args = _safe_get_args(arguments)
-
-                print(f"\nOperation: {operation}")
-
-                if operation == "uv":
-                    script = args.get("script", "")
-                    dependencies = args.get("dependencies", [])
-                    print(f"Script to run:\n{script}")
-                    if dependencies:
-                        print(f"Dependencies: {', '.join(dependencies)}")
-                elif operation == "run":
-                    image = args.get("image", "")
-                    command = args.get("command", "")
-                    print(f"Docker image: {image}")
-                    print(f"Command: {command}")
-
-                    # Common parameters
-                    flavor = args.get("flavor", "cpu-basic")
-                    detached = args.get("detached", False)
-                    print(f"Hardware: {flavor}")
-                    print(f"Detached mode: {detached}")
-
-                    secrets = args.get("secrets", [])
-                    if secrets:
-                        print(f"Secrets: {', '.join(secrets)}")
-                elif operation in ["create_repo", "upload_file"]:
-                    repo_id = args.get("repo_id", "")
-                    repo_type = args.get("repo_type", "dataset")
-
-                    # Build repo URL
-                    type_path = "" if repo_type == "model" else f"{repo_type}s"
-                    repo_url = f"https://huggingface.co/{type_path}/{repo_id}".replace("//", "/")
-
-                    print(f"Repository: {repo_id}")
-                    print(f"Type: {repo_type}")
-                    print(f"Private: Yes")
-                    print(f"URL: {repo_url}")
-
-                    # Show file preview for upload_file operation
-                    if operation == "upload_file":
-                        path_in_repo = args.get("path_in_repo", "")
-                        file_content = args.get("file_content", "")
-                        print(f"File: {path_in_repo}")
-
-                        if isinstance(file_content, str):
-                            # Calculate metrics
-                            all_lines = file_content.split('\n')
-                            line_count = len(all_lines)
-                            size_bytes = len(file_content.encode('utf-8'))
-                            size_kb = size_bytes / 1024
-                            size_mb = size_kb / 1024
-
-                            print(f"Line count: {line_count}")
-                            if size_kb < 1024:
-                                print(f"Size: {size_kb:.2f} KB")
-                            else:
-                                print(f"Size: {size_mb:.2f} MB")
-
-                            # Show preview
-                            preview_lines = all_lines[:5]
-                            preview = '\n'.join(preview_lines)
-                            print(f"Content preview (first 5 lines):\n{preview}")
-                            if len(all_lines) > 5:
-                                print("...")
-
-                # Get user decision
                 print("\n" + format_separator())
-                if tool_name == "hf_jobs":
-                    header_text = "JOB EXECUTION APPROVAL REQUIRED"
-                elif operation == "upload_file":
-                    header_text = "FILE UPLOAD APPROVAL REQUIRED"
-                else:
-                    header_text = "REPO CREATION APPROVAL REQUIRED"
-                print(format_header(header_text))
+                print(
+                    format_header(
+                        f"APPROVAL REQUIRED ({count} item{'s' if count != 1 else ''})"
+                    )
+                )
                 print(format_separator())
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    input,
-                    "Approve? (y=yes, n=no, or provide feedback to reject): ",
-                )
 
-                response = response.strip()
-                approved = response.lower() in ["y", "yes"]
-                feedback = (
-                    None if approved or response.lower() in ["n", "no"] else response
-                )
+                approvals = []
 
-                # Submit approval
+                # Ask for approval for each tool
+                for i, tool_info in enumerate(tools_data, 1):
+                    tool_name = tool_info.get("tool", "")
+                    arguments = tool_info.get("arguments", {})
+                    tool_call_id = tool_info.get("tool_call_id", "")
+
+                    # Handle case where arguments might be a JSON string
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            print(f"Warning: Failed to parse arguments for {tool_name}")
+                            arguments = {}
+
+                    operation = arguments.get("operation", "")
+
+                    print(f"\n[Item {i}/{count}]")
+                    print(f"Tool: {tool_name}")
+                    print(f"Operation: {operation}")
+
+                    # Handle different tool types
+                    if tool_name == "hf_jobs":
+                        # Check if this is Python mode (script) or Docker mode (command)
+                        script = arguments.get("script")
+                        command = arguments.get("command")
+
+                        if script:
+                            # Python mode
+                            dependencies = arguments.get("dependencies", [])
+                            python_version = arguments.get("python")
+                            script_args = arguments.get("script_args", [])
+
+                            # Show script (truncate if too long)
+                            script_display = (
+                                script if len(script) < 200 else script[:200] + "..."
+                            )
+                            print(f"Script: {script_display}")
+                            if dependencies:
+                                print(f"Dependencies: {', '.join(dependencies)}")
+                            if python_version:
+                                print(f"Python version: {python_version}")
+                            if script_args:
+                                print(f"Script args: {' '.join(script_args)}")
+                        elif command:
+                            # Docker mode
+                            image = arguments.get("image", "python:3.12")
+                            command_str = (
+                                " ".join(command)
+                                if isinstance(command, list)
+                                else str(command)
+                            )
+                            print(f"Docker image: {image}")
+                            print(f"Command: {command_str}")
+
+                        # Common parameters for jobs
+                        hardware_flavor = arguments.get("hardware_flavor", "cpu-basic")
+                        timeout = arguments.get("timeout", "30m")
+                        env = arguments.get("env", {})
+                        schedule = arguments.get("schedule")
+
+                        print(f"Hardware: {hardware_flavor}")
+                        print(f"Timeout: {timeout}")
+
+                        if env:
+                            env_keys = ", ".join(env.keys())
+                            print(f"Environment variables: {env_keys}")
+
+                        if schedule:
+                            print(f"Schedule: {schedule}")
+
+                    elif tool_name == "hf_private_repos":
+                        # Handle private repo operations
+                        args = _safe_get_args(arguments)
+
+                        if operation in ["create_repo", "upload_file"]:
+                            repo_id = args.get("repo_id", "")
+                            repo_type = args.get("repo_type", "dataset")
+
+                            # Build repo URL
+                            type_path = "" if repo_type == "model" else f"{repo_type}s"
+                            repo_url = f"https://huggingface.co/{type_path}/{repo_id}".replace("//", "/")
+
+                            print(f"Repository: {repo_id}")
+                            print(f"Type: {repo_type}")
+                            print(f"Private: Yes")
+                            print(f"URL: {repo_url}")
+
+                            # Show file preview for upload_file operation
+                            if operation == "upload_file":
+                                path_in_repo = args.get("path_in_repo", "")
+                                file_content = args.get("file_content", "")
+                                print(f"File: {path_in_repo}")
+
+                                if isinstance(file_content, str):
+                                    # Calculate metrics
+                                    all_lines = file_content.split('\n')
+                                    line_count = len(all_lines)
+                                    size_bytes = len(file_content.encode('utf-8'))
+                                    size_kb = size_bytes / 1024
+                                    size_mb = size_kb / 1024
+
+                                    print(f"Line count: {line_count}")
+                                    if size_kb < 1024:
+                                        print(f"Size: {size_kb:.2f} KB")
+                                    else:
+                                        print(f"Size: {size_mb:.2f} MB")
+
+                                    # Show preview
+                                    preview_lines = all_lines[:5]
+                                    preview = '\n'.join(preview_lines)
+                                    print(f"Content preview (first 5 lines):\n{preview}")
+                                    if len(all_lines) > 5:
+                                        print("...")
+
+                    # Get user decision for this item
+                    response = await prompt_session.prompt_async(
+                        f"Approve item {i}? (y=yes, n=no, or provide feedback to reject): "
+                    )
+
+                    response = response.strip()
+                    approved = response.lower() in ["y", "yes"]
+                    feedback = (
+                        None
+                        if approved or response.lower() in ["n", "no"]
+                        else response
+                    )
+
+                    approvals.append(
+                        {
+                            "tool_call_id": tool_call_id,
+                            "approved": approved,
+                            "feedback": feedback,
+                        }
+                    )
+
+                # Submit batch approval
                 submission_id[0] += 1
                 approval_submission = Submission(
                     id=f"approval_{submission_id[0]}",
                     operation=Operation(
                         op_type=OpType.EXEC_APPROVAL,
-                        data={"approved": approved, "feedback": feedback},
+                        data={"approvals": approvals},
                     ),
                 )
                 await submission_queue.put(approval_submission)
@@ -238,10 +296,9 @@ async def event_listener(
             print(f"Event listener error: {e}")
 
 
-async def get_user_input() -> str:
+async def get_user_input(prompt_session: PromptSession) -> str:
     """Get user input asynchronously"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, input, "You: ")
+    return await prompt_session.prompt_async("You: ")
 
 
 async def main():
@@ -282,6 +339,9 @@ async def main():
     print(f"Config: {config.mcpServers}")
     tool_router = ToolRouter(config.mcpServers)
 
+    # Create prompt session for input
+    prompt_session = PromptSession()
+
     agent_task = asyncio.create_task(
         submission_loop(
             submission_queue,
@@ -293,7 +353,13 @@ async def main():
 
     # Start event listener in background
     listener_task = asyncio.create_task(
-        event_listener(event_queue, submission_queue, turn_complete_event, ready_event)
+        event_listener(
+            event_queue,
+            submission_queue,
+            turn_complete_event,
+            ready_event,
+            prompt_session,
+        )
     )
 
     # Wait for agent to initialize
@@ -310,7 +376,7 @@ async def main():
 
             # Get user input
             try:
-                user_input = await get_user_input()
+                user_input = await get_user_input(prompt_session)
             except EOFError:
                 break
 
