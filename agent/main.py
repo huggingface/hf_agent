@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import litellm
 from lmnr import Laminar, LaminarLiteLLMCallback
+from prompt_toolkit import PromptSession
 
 from agent.config import load_config
 from agent.core.agent_loop import submission_loop
@@ -60,6 +61,7 @@ async def event_listener(
     submission_queue: asyncio.Queue,
     turn_complete_event: asyncio.Event,
     ready_event: asyncio.Event,
+    prompt_session: PromptSession,
 ) -> None:
     """Background task that listens for events and displays them"""
     submission_id = [1000]  # Use list to make it mutable in closure
@@ -129,7 +131,6 @@ async def event_listener(
                 print(format_separator())
 
                 approvals = []
-                loop = asyncio.get_event_loop()
 
                 # Ask for approval for each tool
                 for i, tool_info in enumerate(tools_data, 1):
@@ -146,46 +147,61 @@ async def event_listener(
                             arguments = {}
 
                     operation = arguments.get("operation", "")
-                    args = arguments.get("args", {})
-
-                    # Handle case where args might be a JSON string
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            print(f"Warning: Failed to parse args for {tool_name}")
-                            args = {}
 
                     print(f"\n[Job {i}/{count}]")
                     print(f"Operation: {operation}")
 
-                    if operation == "uv":
-                        script = args.get("script", "")
-                        dependencies = args.get("dependencies", [])
-                        print("Script:\n" + script)
+                    # Check if this is Python mode (script) or Docker mode (command)
+                    script = arguments.get("script")
+                    command = arguments.get("command")
+
+                    if script:
+                        # Python mode
+                        dependencies = arguments.get("dependencies", [])
+                        python_version = arguments.get("python")
+                        script_args = arguments.get("script_args", [])
+
+                        # Show script (truncate if too long)
+                        script_display = (
+                            script if len(script) < 200 else script[:200] + "..."
+                        )
+                        print(f"Script: {script_display}")
                         if dependencies:
                             print(f"Dependencies: {', '.join(dependencies)}")
-                    elif operation == "run":
-                        image = args.get("image", "")
-                        command = args.get("command", "")
+                        if python_version:
+                            print(f"Python version: {python_version}")
+                        if script_args:
+                            print(f"Script args: {' '.join(script_args)}")
+                    elif command:
+                        # Docker mode
+                        image = arguments.get("image", "python:3.12")
+                        command_str = (
+                            " ".join(command)
+                            if isinstance(command, list)
+                            else str(command)
+                        )
                         print(f"Docker image: {image}")
-                        print(f"Command: {command}")
+                        print(f"Command: {command_str}")
 
                     # Common parameters
-                    flavor = args.get("flavor", "cpu-basic")
-                    detached = args.get("detached", False)
-                    print(f"Hardware: {flavor}")
-                    print(f"Detached mode: {detached}")
+                    hardware_flavor = arguments.get("hardware_flavor", "cpu-basic")
+                    timeout = arguments.get("timeout", "30m")
+                    env = arguments.get("env", {})
+                    schedule = arguments.get("schedule")
 
-                    secrets = args.get("secrets", [])
-                    if secrets:
-                        print(f"Secrets: {', '.join(secrets)}")
+                    print(f"Hardware: {hardware_flavor}")
+                    print(f"Timeout: {timeout}")
+
+                    if env:
+                        env_keys = ", ".join(env.keys())
+                        print(f"Environment variables: {env_keys}")
+
+                    if schedule:
+                        print(f"Schedule: {schedule}")
 
                     # Get user decision for this job
-                    response = await loop.run_in_executor(
-                        None,
-                        input,
-                        f"Approve job {i}? (y=yes, n=no, or provide feedback to reject): ",
+                    response = await prompt_session.prompt_async(
+                        f"Approve job {i}? (y=yes, n=no, or provide feedback to reject): "
                     )
 
                     response = response.strip()
@@ -223,10 +239,9 @@ async def event_listener(
             print(f"Event listener error: {e}")
 
 
-async def get_user_input() -> str:
+async def get_user_input(prompt_session: PromptSession) -> str:
     """Get user input asynchronously"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, input, "You: ")
+    return await prompt_session.prompt_async("You: ")
 
 
 async def main():
@@ -267,6 +282,9 @@ async def main():
     print(f"Config: {config.mcpServers}")
     tool_router = ToolRouter(config.mcpServers)
 
+    # Create prompt session for input
+    prompt_session = PromptSession()
+
     agent_task = asyncio.create_task(
         submission_loop(
             submission_queue,
@@ -278,7 +296,13 @@ async def main():
 
     # Start event listener in background
     listener_task = asyncio.create_task(
-        event_listener(event_queue, submission_queue, turn_complete_event, ready_event)
+        event_listener(
+            event_queue,
+            submission_queue,
+            turn_complete_event,
+            ready_event,
+            prompt_session,
+        )
     )
 
     # Wait for agent to initialize
@@ -295,7 +319,7 @@ async def main():
 
             # Get user input
             try:
-                user_input = await get_user_input()
+                user_input = await get_user_input(prompt_session)
             except EOFError:
                 break
 
