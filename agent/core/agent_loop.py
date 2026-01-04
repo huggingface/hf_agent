@@ -103,32 +103,23 @@ class Handlers:
                         Event(event_type="assistant_message", data={"content": content})
                     )
 
-                # Execute tools
+                # Separate tools into those requiring approval and those that don't
+                approval_required_tools = []
+                non_approval_tools = []
+
                 for tc in tool_calls:
                     tool_name = tc.function.name
                     tool_args = json.loads(tc.function.arguments)
 
-                    # Check if this tool requires user approval
                     if _needs_approval(tool_name, tool_args):
-                        await session.send_event(
-                            Event(
-                                event_type="approval_required",
-                                data={
-                                    "tool": tool_name,
-                                    "arguments": tool_args,
-                                    "tool_call_id": tc.id,
-                                },
-                            )
-                        )
+                        approval_required_tools.append(tc)
+                    else:
+                        non_approval_tools.append(tc)
 
-                        # Store pending approval and return early
-                        session.pending_approval = {
-                            "tool_call": tc,
-                            "arguments": tool_args,
-                        }
-
-                        # Return early - wait for EXEC_APPROVAL operation
-                        return None
+                # Execute non-approval tools first
+                for tc in non_approval_tools:
+                    tool_name = tc.function.name
+                    tool_args = json.loads(tc.function.arguments)
 
                     await session.send_event(
                         Event(
@@ -160,6 +151,37 @@ class Handlers:
                             },
                         )
                     )
+
+                # If there are tools requiring approval, ask for batch approval
+                if approval_required_tools:
+                    # Prepare batch approval data
+                    tools_data = []
+                    for tc in approval_required_tools:
+                        tool_name = tc.function.name
+                        tool_args = json.loads(tc.function.arguments)
+                        tools_data.append({
+                            "tool": tool_name,
+                            "arguments": tool_args,
+                            "tool_call_id": tc.id,
+                        })
+
+                    await session.send_event(
+                        Event(
+                            event_type="approval_required",
+                            data={
+                                "tools": tools_data,  # Batch of tools
+                                "count": len(tools_data),
+                            },
+                        )
+                    )
+
+                    # Store all approval-requiring tools
+                    session.pending_approval = {
+                        "tool_calls": approval_required_tools,
+                    }
+
+                    # Return early - wait for EXEC_APPROVAL operation
+                    return None
 
                 iteration += 1
 
@@ -225,10 +247,8 @@ class Handlers:
         await session.send_event(Event(event_type="undo_complete"))
 
     @staticmethod
-    async def exec_approval(
-        session: Session, approved: bool, feedback: str | None = None
-    ) -> None:
-        """Handle job execution approval"""
+    async def exec_approval(session: Session, approvals: list[dict]) -> None:
+        """Handle batch job execution approval"""
         if not session.pending_approval:
             await session.send_event(
                 Event(
@@ -238,12 +258,36 @@ class Handlers:
             )
             return
 
-        tc = session.pending_approval["tool_call"]
-        tool_args = session.pending_approval["arguments"]
-        tool_name = tc.function.name
+        tool_calls = session.pending_approval.get("tool_calls", [])
+        if not tool_calls:
+            await session.send_event(
+                Event(
+                    event_type="error",
+                    data={"error": "No pending tool calls found"},
+                )
+            )
+            return
 
-        if approved:
-            # Execute the pending tool
+        # Create a map of tool_call_id -> approval decision
+        approval_map = {a["tool_call_id"]: a for a in approvals}
+
+        # Separate approved and rejected tool calls
+        approved_tasks = []
+        rejected_tasks = []
+
+        for tc in tool_calls:
+            tool_name = tc.function.name
+            tool_args = json.loads(tc.function.arguments)
+            approval_decision = approval_map.get(tc.id, {"approved": False})
+
+            if approval_decision.get("approved", False):
+                approved_tasks.append((tc, tool_name, tool_args))
+            else:
+                rejected_tasks.append((tc, tool_name, approval_decision))
+
+        # Execute all approved tools concurrently
+        async def execute_tool(tc, tool_name, tool_args):
+            """Execute a single tool and return its result"""
             await session.send_event(
                 Event(
                     event_type="tool_call",
@@ -251,36 +295,58 @@ class Handlers:
                 )
             )
 
-            output, success = await session.tool_router.call_tool(tool_name, tool_args)
-
-            # Add tool result to context
-            tool_msg = Message(
-                role="tool",
-                content=output,
-                tool_call_id=tc.id,
-                name=tool_name,
+            output, success = await session.tool_router.call_tool(
+                tool_name, tool_args
             )
-            session.context_manager.add_message(tool_msg)
 
-            await session.send_event(
-                Event(
-                    event_type="tool_output",
-                    data={
-                        "tool": tool_name,
-                        "output": output,
-                        "success": success,
-                    },
+            return (tc, tool_name, output, success)
+
+        # Execute all approved tools concurrently and wait for ALL to complete
+        if approved_tasks:
+            results = await asyncio.gather(
+                *[execute_tool(tc, tool_name, tool_args) for tc, tool_name, tool_args in approved_tasks],
+                return_exceptions=True
+            )
+
+            # Process results and add to context
+            for result in results:
+                if isinstance(result, Exception):
+                    # Handle execution error
+                    print(f"Tool execution error: {result}")
+                    continue
+
+                tc, tool_name, output, success = result
+
+                # Add tool result to context
+                tool_msg = Message(
+                    role="tool",
+                    content=output,
+                    tool_call_id=tc.id,
+                    name=tool_name,
                 )
-            )
-        else:
-            # User rejected - add cancellation message to context
-            cancellation_msg = "Job execution cancelled by user"
-            if feedback:
-                cancellation_msg += f". User feedback: {feedback}"
+                session.context_manager.add_message(tool_msg)
+
+                await session.send_event(
+                    Event(
+                        event_type="tool_output",
+                        data={
+                            "tool": tool_name,
+                            "output": output,
+                            "success": success,
+                        },
+                    )
+                )
+
+        # Process rejected tools
+        for tc, tool_name, approval_decision in rejected_tasks:
+            rejection_msg = "Job execution cancelled by user"
+            user_feedback = approval_decision.get("feedback")
+            if user_feedback:
+                rejection_msg += f". User feedback: {user_feedback}"
 
             tool_msg = Message(
                 role="tool",
-                content=cancellation_msg,
+                content=rejection_msg,
                 tool_call_id=tc.id,
                 name=tool_name,
             )
@@ -291,7 +357,7 @@ class Handlers:
                     event_type="tool_output",
                     data={
                         "tool": tool_name,
-                        "output": cancellation_msg,
+                        "output": rejection_msg,
                         "success": False,
                     },
                 )
@@ -300,7 +366,7 @@ class Handlers:
         # Clear pending approval
         session.pending_approval = None
 
-        # Continue agent loop with empty input to process the tool result
+        # Continue agent loop with empty input to process the tool results
         await Handlers.run_agent(session, "")
 
     @staticmethod
@@ -339,9 +405,8 @@ async def process_submission(session: Session, submission) -> bool:
         return True
 
     if op.op_type == OpType.EXEC_APPROVAL:
-        approved = op.data.get("approved", False) if op.data else False
-        feedback = op.data.get("feedback") if op.data else None
-        await Handlers.exec_approval(session, approved, feedback)
+        approvals = op.data.get("approvals", []) if op.data else []
+        await Handlers.exec_approval(session, approvals)
         return True
 
     if op.op_type == OpType.SHUTDOWN:
