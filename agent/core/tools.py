@@ -19,6 +19,13 @@ from agent.tools.docs_tools import (
     explore_hf_docs_handler,
     hf_docs_fetch_handler,
 )
+from agent.tools.github_find_examples import (
+    FIND_EXAMPLES_TOOL_SPEC,
+    find_examples_handler,
+)
+from agent.tools.github_list_repos import LIST_REPOS_TOOL_SPEC, list_repos_handler
+from agent.tools.github_read_file import READ_FILE_TOOL_SPEC, read_file_handler
+from agent.tools.github_search_code import SEARCH_CODE_TOOL_SPEC, search_code_handler
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
 from agent.tools.private_hf_repo_tools import (
@@ -224,7 +231,7 @@ class ToolRouter:
 def create_builtin_tools() -> list[ToolSpec]:
     """Create built-in tool specifications"""
     print(
-        f"Creating built-in tools: {EXPLORE_HF_DOCS_TOOL_SPEC['name']}, {HF_DOCS_FETCH_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}, {PRIVATE_HF_REPO_TOOL_SPEC['name']}, {UTILS_TOOL_SPEC['name']}"
+        f"Creating built-in tools: {EXPLORE_HF_DOCS_TOOL_SPEC['name']}, {HF_DOCS_FETCH_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}, {PRIVATE_HF_REPO_TOOL_SPEC['name']}, {UTILS_TOOL_SPEC['name']}, {FIND_EXAMPLES_TOOL_SPEC['name']}, {READ_FILE_TOOL_SPEC['name']}, {LIST_REPOS_TOOL_SPEC['name']}, {SEARCH_CODE_TOOL_SPEC['name']}"
     )
     # in order of importance
     return [
@@ -265,5 +272,30 @@ def create_builtin_tools() -> list[ToolSpec]:
             description=UTILS_TOOL_SPEC["description"],
             parameters=UTILS_TOOL_SPEC["parameters"],
             handler=utils_handler,
+        ),
+        # GitHub tools - 4 separate tools
+        ToolSpec(
+            name=FIND_EXAMPLES_TOOL_SPEC["name"],
+            description=FIND_EXAMPLES_TOOL_SPEC["description"],
+            parameters=FIND_EXAMPLES_TOOL_SPEC["parameters"],
+            handler=find_examples_handler,
+        ),
+        ToolSpec(
+            name=READ_FILE_TOOL_SPEC["name"],
+            description=READ_FILE_TOOL_SPEC["description"],
+            parameters=READ_FILE_TOOL_SPEC["parameters"],
+            handler=read_file_handler,
+        ),
+        ToolSpec(
+            name=LIST_REPOS_TOOL_SPEC["name"],
+            description=LIST_REPOS_TOOL_SPEC["description"],
+            parameters=LIST_REPOS_TOOL_SPEC["parameters"],
+            handler=list_repos_handler,
+        ),
+        ToolSpec(
+            name=SEARCH_CODE_TOOL_SPEC["name"],
+            description=SEARCH_CODE_TOOL_SPEC["description"],
+            parameters=SEARCH_CODE_TOOL_SPEC["parameters"],
+            handler=search_code_handler,
         ),
     ]
