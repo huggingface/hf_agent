@@ -1,6 +1,6 @@
 """
-Tools available to the search sub-agent
-These tools are used by the search sub-agent spawned by search_docs_tool
+Documentation search tools for the HF Agent
+Tools for exploring and fetching HuggingFace documentation and API specifications
 """
 
 import asyncio
@@ -553,7 +553,7 @@ async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
         return f"Error fetching documentation: {str(e)}", False
 
 
-# Tool specifications for the search sub-agent
+# Tool specifications for documentation search
 
 EXPLORE_HF_DOCS_TOOL_SPEC = {
     "name": "explore_hf_docs",
