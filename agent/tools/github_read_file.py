@@ -105,7 +105,7 @@ def _get_last_commit_info(
                 commit_date = commit.get("commit", {}).get("committer", {}).get("date")
                 return commit_date, commit_sha
 
-    except:
+    except Exception:
         pass
 
     return None, None
@@ -147,7 +147,7 @@ def _fetch_file_contents(
                 error_data = response.json()
                 if "message" in error_data:
                     error_msg += f": {error_data['message']}"
-            except:
+            except Exception:
                 pass
             raise GitHubAPIError(error_msg)
 

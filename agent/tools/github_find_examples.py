@@ -180,7 +180,7 @@ def _fetch_repo_metadata(repos: List[str], token: str) -> Dict[str, Dict[str, An
                     "updated_at": data.get("updated_at", ""),
                     "description": data.get("description", ""),
                 }
-        except:
+        except Exception:
             continue
 
     return metadata
@@ -244,7 +244,7 @@ def _score_and_rank(
                 ):
                     score += 20
                     reasons.append("recently updated")
-            except:
+            except Exception:
                 pass
 
         # Filename quality
