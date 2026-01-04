@@ -1,115 +1,23 @@
 """
-GitHub Find Examples Tool
+GitHub Find Examples Tool - Discover examples, tutorials, and guides for any library
 
-Finds examples, guides, and tutorials for a library using deterministic queries and heuristics.
+Uses intelligent heuristics to find the best learning resources on GitHub.
 """
 
-import asyncio
 import math
 import os
-from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-try:
-    import requests
-except ImportError:
-    raise ImportError(
-        "requests library is required. Install with: pip install requests"
-    )
+import requests
 
 from agent.tools.types import ToolResult
 
 
-@dataclass
-class Example:
-    """An example file with metadata and relevance score."""
-
-    repo: str
-    path: str
-    ref: str
-    url: str
-    score: float
-    reason: str
-    repo_stars: int
-    repo_updated: str
-    file_size: int
-
-    def to_dict(self):
-        return asdict(self)
-
-
-class GitHubAPIError(Exception):
-    """Raised when GitHub API returns an error."""
-
-    pass
-
-
-# Path-based scoring weights
-PATH_SCORES = {
-    "README.md": 100,
-    "readme.md": 100,
-    "docs/": 80,
-    "doc/": 80,
-    "examples/": 90,
-    "example/": 90,
-    "notebooks/": 70,
-    "notebook/": 70,
-    "tutorials/": 85,
-    "tutorial/": 85,
-    "guides/": 85,
-    "guide/": 85,
-    "tests/": 40,
-    "test/": 40,
-    "demos/": 75,
-    "demo/": 75,
-    "samples/": 75,
-    "sample/": 75,
-}
-
-# Content-based scoring keywords
-CONTENT_KEYWORDS = {
-    'if __name__ == "__main__"': 50,
-    "if __name__ == '__main__'": 50,
-    "quickstart": 60,
-    "quick start": 60,
-    "getting started": 60,
-    "tutorial": 50,
-    "example usage": 55,
-    "usage example": 55,
-    "how to use": 45,
-    "basic example": 50,
-    "simple example": 50,
-}
-
-# File extension preferences
-PREFERRED_EXTENSIONS = {
-    ".py": 10,
-    ".ipynb": 15,
-    ".md": 20,
-    ".rst": 10,
-    ".js": 10,
-    ".ts": 10,
-    ".go": 10,
-    ".java": 10,
-    ".cpp": 10,
-    ".c": 10,
-}
-
-
-def _get_github_token() -> str:
-    """Get GitHub token from environment."""
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise GitHubAPIError(
-            "GITHUB_TOKEN environment variable is required. "
-            "Set it with: export GITHUB_TOKEN=your_token_here"
-        )
-    return token
-
-
-def _execute_search(query: str, token: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """Execute a GitHub code search query."""
+def _search_github_code(
+    query: str, token: str, limit: int = 20
+) -> List[Dict[str, Any]]:
+    """Execute a GitHub code search query"""
     headers = {
         "Accept": "application/vnd.github.text-match+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -123,15 +31,18 @@ def _execute_search(query: str, token: str, limit: int = 20) -> List[Dict[str, A
     try:
         while len(results) < limit:
             params = {"q": query, "per_page": per_page, "page": page}
-            url = "https://api.github.com/search/code"
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = requests.get(
+                "https://api.github.com/search/code",
+                headers=headers,
+                params=params,
+                timeout=30,
+            )
 
             if response.status_code != 200:
                 break
 
             data = response.json()
             items = data.get("items", [])
-
             if not items:
                 break
 
@@ -149,7 +60,6 @@ def _execute_search(query: str, token: str, limit: int = 20) -> List[Dict[str, A
 
             if len(results) >= limit or len(items) < per_page:
                 break
-
             page += 1
 
     except Exception:
@@ -159,7 +69,7 @@ def _execute_search(query: str, token: str, limit: int = 20) -> List[Dict[str, A
 
 
 def _fetch_repo_metadata(repos: List[str], token: str) -> Dict[str, Dict[str, Any]]:
-    """Fetch metadata for repositories."""
+    """Fetch star count and update date for repositories"""
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -167,18 +77,16 @@ def _fetch_repo_metadata(repos: List[str], token: str) -> Dict[str, Dict[str, An
     }
 
     metadata = {}
-
     for repo in repos:
         try:
-            url = f"https://api.github.com/repos/{repo}"
-            response = requests.get(url, headers=headers, timeout=10)
-
+            response = requests.get(
+                f"https://api.github.com/repos/{repo}", headers=headers, timeout=10
+            )
             if response.status_code == 200:
                 data = response.json()
                 metadata[repo] = {
                     "stars": data.get("stargazers_count", 0),
                     "updated_at": data.get("updated_at", ""),
-                    "description": data.get("description", ""),
                 }
         except Exception:
             continue
@@ -186,157 +94,89 @@ def _fetch_repo_metadata(repos: List[str], token: str) -> Dict[str, Dict[str, An
     return metadata
 
 
-def _score_and_rank(
-    results: List[Dict[str, Any]], library: str, token: str
-) -> List[Example]:
-    """Score results based on heuristics and rank them."""
-    repos = list(set(r["repo"] for r in results))
-    repo_metadata = _fetch_repo_metadata(repos, token)
+def _score_example(
+    result: Dict[str, Any], metadata: Dict[str, Dict[str, Any]]
+) -> tuple[float, str]:
+    """Score an example based on multiple heuristics"""
+    path = result["path"].lower()
+    repo = result["repo"]
+    score = 0.0
+    reasons = []
 
-    scored_examples = []
+    # Path-based scoring
+    if "readme.md" in path:
+        score += 100
+        reasons.append("README file")
+    elif "examples/" in path or "example/" in path:
+        score += 90
+        reasons.append("in examples/")
+    elif "tutorials/" in path or "tutorial/" in path:
+        score += 85
+        reasons.append("in tutorials/")
+    elif "docs/" in path or "doc/" in path:
+        score += 80
+        reasons.append("in docs/")
+    elif "notebooks/" in path or "notebook/" in path:
+        score += 70
+        reasons.append("in notebooks/")
 
-    for result in results:
-        repo = result["repo"]
-        path = result["path"]
+    # Extension scoring
+    if path.endswith(".ipynb"):
+        score += 15
+    elif path.endswith(".md"):
+        score += 20
+    elif path.endswith(".py"):
+        score += 10
 
-        score = 0.0
-        reasons = []
+    # Content keywords from text matches
+    text_content = ""
+    for match in result.get("text_matches", []):
+        text_content += match.get("fragment", "").lower() + " "
 
-        # Path-based scoring
-        path_lower = path.lower()
-        for pattern, points in PATH_SCORES.items():
-            if pattern.lower() in path_lower:
-                score += points
-                reasons.append(f"in {pattern}")
-                break
+    if 'if __name__ == "__main__"' in text_content:
+        score += 50
+        reasons.append("runnable example")
+    if "quickstart" in text_content or "getting started" in text_content:
+        score += 60
+        reasons.append("quickstart guide")
+    if "tutorial" in text_content:
+        score += 50
+        reasons.append("tutorial content")
 
-        # File extension scoring
-        for ext, points in PREFERRED_EXTENSIONS.items():
-            if path_lower.endswith(ext):
-                score += points
-                break
+    # Repository metadata scoring
+    repo_meta = metadata.get(repo, {})
+    stars = repo_meta.get("stars", 0)
+    updated_at = repo_meta.get("updated_at", "")
 
-        # Content-based scoring
-        text_content = ""
-        for match in result.get("text_matches", []):
-            text_content += match.get("fragment", "").lower() + " "
+    # Star-based score (logarithmic)
+    if stars > 0:
+        score += math.log10(stars + 1) * 10
 
-        for keyword, points in CONTENT_KEYWORDS.items():
-            if keyword.lower() in text_content:
-                score += points
-                reasons.append(f"contains '{keyword}'")
+    # Recency bonus (updated in last 6 months)
+    if updated_at:
+        try:
+            updated_date = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            if datetime.now(updated_date.tzinfo) - updated_date < timedelta(days=180):
+                score += 20
+                reasons.append("recently updated")
+        except Exception:
+            pass
 
-        # Repo-based scoring
-        metadata = repo_metadata.get(repo, {})
-        stars = metadata.get("stars", 0)
-        updated = metadata.get("updated_at", "")
+    # Filename quality
+    filename = path.split("/")[-1].lower()
+    if any(
+        word in filename
+        for word in ["example", "tutorial", "guide", "quickstart", "demo"]
+    ):
+        score += 30
+        reasons.append("descriptive filename")
 
-        if stars > 0:
-            star_score = math.log10(stars + 1) * 10
-            score += star_score
+    # Size penalty for very large files
+    if result["size"] > 100000:
+        score *= 0.5
+        reasons.append("large file")
 
-        # Recency bonus
-        if updated:
-            try:
-                updated_date = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                if datetime.now(updated_date.tzinfo) - updated_date < timedelta(
-                    days=180
-                ):
-                    score += 20
-                    reasons.append("recently updated")
-            except Exception:
-                pass
-
-        # Filename quality
-        filename = path.split("/")[-1].lower()
-        if any(
-            word in filename
-            for word in ["example", "tutorial", "guide", "quickstart", "demo"]
-        ):
-            score += 30
-            reasons.append("descriptive filename")
-
-        # Size penalty
-        if result["size"] > 100000:
-            score *= 0.5
-            reasons.append("large file")
-
-        example = Example(
-            repo=repo,
-            path=path,
-            ref=result["sha"],
-            url=result["url"],
-            score=score,
-            reason=", ".join(reasons) if reasons else "matches library",
-            repo_stars=stars,
-            repo_updated=updated,
-            file_size=result["size"],
-        )
-
-        scored_examples.append(example)
-
-    scored_examples.sort(key=lambda x: x.score, reverse=True)
-    return scored_examples
-
-
-def _search_by_path(
-    library: str, org: str, repo_scope: Optional[str], token: str
-) -> List[Dict[str, Any]]:
-    """Search for library in example/tutorial/docs directories."""
-    results = []
-    path_patterns = [
-        "examples/",
-        "example/",
-        "docs/",
-        "tutorials/",
-        "notebooks/",
-        "guides/",
-    ]
-
-    for path in path_patterns:
-        query_parts = [f"org:{org}", f"{library}", f"path:{path}"]
-        if repo_scope:
-            query_parts[0] = f"repo:{org}/{repo_scope}"
-
-        query = " ".join(query_parts)
-        results.extend(_execute_search(query, token, limit=20))
-
-    return results
-
-
-def _search_by_content(
-    library: str, org: str, repo_scope: Optional[str], token: str
-) -> List[Dict[str, Any]]:
-    """Search for library with specific content patterns."""
-    results = []
-    content_patterns = [
-        f"{library} if __name__",
-        f"{library} quickstart",
-        f"{library} tutorial",
-        f"{library} usage example",
-    ]
-
-    for pattern in content_patterns:
-        query_parts = [f"org:{org}", pattern]
-        if repo_scope:
-            query_parts[0] = f"repo:{org}/{repo_scope}"
-
-        query = " ".join(query_parts)
-        results.extend(_execute_search(query, token, limit=15))
-
-    return results
-
-
-def _search_readmes(
-    library: str, org: str, repo_scope: Optional[str], token: str
-) -> List[Dict[str, Any]]:
-    """Search for library mentions in README files."""
-    query_parts = [f"org:{org}", f"{library}", "filename:README"]
-    if repo_scope:
-        query_parts[0] = f"repo:{org}/{repo_scope}"
-
-    query = " ".join(query_parts)
-    return _execute_search(query, token, limit=20)
+    return score, ", ".join(reasons) if reasons else "matches library"
 
 
 def find_examples(
@@ -344,30 +184,45 @@ def find_examples(
     org: str = "huggingface",
     repo_scope: Optional[str] = None,
     max_results: int = 10,
-) -> List[Example]:
+) -> ToolResult:
     """
-    Find examples, guides, and tutorials for a library using deterministic queries.
-
-    Uses a playbook of smart searches and heuristics to find canonical examples:
-    - Prefers README.md, docs/**, examples/**, notebooks/**, tests/**
-    - Prefers files with if __name__ == "__main__", "quickstart", "tutorial"
-    - Prefers repos with higher stars and more recent updates
+    Find examples, tutorials, and guides for a library using intelligent search.
 
     Args:
-        library: Library name to search for (e.g., "transformers", "torch")
-        org: GitHub organization to search in (default: "huggingface")
-        repo_scope: Optional specific repository (e.g., "transformers")
-        max_results: Maximum number of results to return (default: 10)
+        library: Library name (e.g., "transformers", "torch", "react")
+        org: GitHub organization to search in
+        repo_scope: Optional specific repository name
+        max_results: Maximum number of results (default 10)
 
     Returns:
-        List of Example objects, ranked by relevance score
+        ToolResult with ranked examples
     """
-    token = _get_github_token()
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return {
+            "formatted": "Error: GITHUB_TOKEN environment variable is required",
+            "totalResults": 0,
+            "resultsShared": 0,
+            "isError": True,
+        }
 
+    # Build search queries
     all_results = []
-    all_results.extend(_search_by_path(library, org, repo_scope, token))
-    all_results.extend(_search_by_content(library, org, repo_scope, token))
-    all_results.extend(_search_readmes(library, org, repo_scope, token))
+
+    # Query 1: Search in example directories
+    for path_pattern in ["examples/", "docs/", "tutorials/", "notebooks/"]:
+        query_parts = [f"org:{org}", library, f"path:{path_pattern}"]
+        if repo_scope:
+            query_parts[0] = f"repo:{org}/{repo_scope}"
+        query = " ".join(query_parts)
+        all_results.extend(_search_github_code(query, token, limit=20))
+
+    # Query 2: Search README files
+    query_parts = [f"org:{org}", library, "filename:README"]
+    if repo_scope:
+        query_parts[0] = f"repo:{org}/{repo_scope}"
+    query = " ".join(query_parts)
+    all_results.extend(_search_github_code(query, token, limit=20))
 
     # Deduplicate
     seen = set()
@@ -378,135 +233,89 @@ def find_examples(
             seen.add(key)
             unique_results.append(result)
 
-    scored_examples = _score_and_rank(unique_results, library, token)
-    return scored_examples[:max_results]
+    if not unique_results:
+        return {
+            "formatted": f"No examples found for '{library}' in {org}",
+            "totalResults": 0,
+            "resultsShared": 0,
+        }
 
+    # Fetch repo metadata
+    repos = list(set(r["repo"] for r in unique_results))
+    metadata = _fetch_repo_metadata(repos, token)
 
-async def _async_call(func, *args, **kwargs):
-    """Wrap synchronous calls for async context."""
-    return await asyncio.to_thread(func, *args, **kwargs)
-
-
-def _format_examples_table(examples: List[Example]) -> str:
-    """Format examples as a markdown table."""
-    if not examples:
-        return "No examples found."
-
-    lines = [
-        "| Rank | File | Score | Stars | Reason |",
-        "|------|------|-------|-------|--------|",
-    ]
-
-    for i, ex in enumerate(examples, 1):
-        file_path = f"{ex.repo}/{ex.path}"
-        if len(file_path) > 60:
-            file_path = file_path[:57] + "..."
-        reason = ex.reason if len(ex.reason) < 40 else ex.reason[:37] + "..."
-        lines.append(
-            f"| {i} | {file_path} | {ex.score:.1f} | {ex.repo_stars:,} | {reason} |"
+    # Score and rank
+    scored = []
+    for result in unique_results:
+        score, reason = _score_example(result, metadata)
+        repo_meta = metadata.get(result["repo"], {})
+        scored.append(
+            {
+                "repo": result["repo"],
+                "path": result["path"],
+                "url": result["url"],
+                "score": score,
+                "reason": reason,
+                "stars": repo_meta.get("stars", 0),
+            }
         )
 
-    return "\n".join(lines)
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    top_results = scored[:max_results]
 
+    # Format output
+    lines = [f"**Found {len(top_results)} examples for '{library}' in {org}:**\n"]
 
-class FindExamplesTool:
-    """Tool for finding examples and tutorials for libraries."""
+    for i, ex in enumerate(top_results, 1):
+        lines.append(f"{i}. **{ex['repo']}/{ex['path']}**")
+        lines.append(f"   Score: {ex['score']:.1f} | ⭐ {ex['stars']:,} stars")
+        lines.append(f"   Reason: {ex['reason']}")
+        lines.append(f"   URL: {ex['url']}\n")
 
-    async def execute(self, params: Dict[str, Any]) -> ToolResult:
-        """Execute find_examples operation."""
-        library = params.get("library")
-        if not library:
-            return {
-                "formatted": "Error: 'library' parameter is required",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": True,
-            }
-
-        org = params.get("org", "huggingface")
-        repo_scope = params.get("repo_scope")
-        max_results = params.get("max_results", 10)
-
-        try:
-            examples = await _async_call(
-                find_examples,
-                library=library,
-                org=org,
-                repo_scope=repo_scope,
-                max_results=max_results,
-            )
-
-            if not examples:
-                return {
-                    "formatted": f"No examples found for '{library}' in {org}",
-                    "totalResults": 0,
-                    "resultsShared": 0,
-                }
-
-            table = _format_examples_table(examples)
-            response = f"**Found {len(examples)} examples for '{library}' in {org}:**\n\n{table}"
-
-            # Add URLs and suggest using read_file
-            response += "\n\n**Top examples (use read_file to view):**\n"
-            for i, ex in enumerate(examples[:3], 1):
-                response += f"{i}. [{ex.repo}/{ex.path}]({ex.url})\n"
-                response += f"   Use: read_file(repo='{ex.repo}', path='{ex.path}')\n"
-
-            return {
-                "formatted": response,
-                "totalResults": len(examples),
-                "resultsShared": len(examples),
-            }
-
-        except GitHubAPIError as e:
-            return {
-                "formatted": f"GitHub API Error: {str(e)}",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": True,
-            }
-        except Exception as e:
-            return {
-                "formatted": f"Error: {str(e)}",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": True,
-            }
+    return {
+        "formatted": "\n".join(lines),
+        "totalResults": len(top_results),
+        "resultsShared": len(top_results),
+    }
 
 
 # Tool specification
-FIND_EXAMPLES_TOOL_SPEC = {
+GITHUB_FIND_EXAMPLES_TOOL_SPEC = {
     "name": "find_examples",
     "description": (
-        "Find examples, guides, and tutorials for a library using deterministic queries and heuristics.\n\n"
-        "Uses best practices retrieval without semantic search:\n"
-        "- Prefers README.md, docs/**, examples/**, notebooks/**, tests/**\n"
-        "- Prefers files with if __name__ == '__main__', 'quickstart', 'tutorial', 'usage'\n"
-        "- Prefers repos with higher stars and more recent updates\n\n"
-        "Returns a ranked list of canonical example files.\n\n"
-        "Examples:\n"
-        "- Find transformers examples: {'library': 'transformers', 'org': 'huggingface', 'max_results': 5}\n"
-        "- Find torch examples in specific repo: {'library': 'torch', 'org': 'pytorch', 'repo_scope': 'examples'}\n\n"
-        "Use read_file tool to view the content of returned files.\n\n"
+        "Find examples, tutorials, and guides for any library on GitHub using intelligent heuristic-based search.\n\n"
+        "Uses multiple search strategies and ranks results by:\n"
+        "- Path quality (examples/, docs/, tutorials/ directories)\n"
+        "- Content keywords (quickstart, tutorial, runnable code)\n"
+        "- Repository popularity (stars, recent updates)\n"
+        "- File characteristics (size, extension, descriptive names)\n\n"
+        "## Examples:\n\n"
+        "**Find transformers examples in Hugging Face:**\n"
+        "{'library': 'transformers', 'org': 'huggingface', 'max_results': 5}\n\n"
+        "**Find PyTorch examples in specific repo:**\n"
+        "{'library': 'torch', 'org': 'pytorch', 'repo_scope': 'examples', 'max_results': 10}\n\n"
+        "**Find React quickstart guides:**\n"
+        "{'library': 'react quickstart', 'org': 'facebook', 'max_results': 3}\n\n"
+        "Returns ranked list with file paths, scores, star counts, and direct URLs."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "library": {
                 "type": "string",
-                "description": "Library name to search for (e.g., 'transformers', 'torch', 'react')",
+                "description": "Library name to search for (e.g., 'transformers', 'torch', 'react'). Required.",
             },
             "org": {
                 "type": "string",
-                "description": "GitHub organization to search in (default: 'huggingface')",
+                "description": "GitHub organization to search in. Default: 'huggingface'.",
             },
             "repo_scope": {
                 "type": "string",
-                "description": "Optional specific repository to search within",
+                "description": "Optional specific repository name within the org (e.g., 'transformers').",
             },
             "max_results": {
                 "type": "integer",
-                "description": "Maximum number of results to return (default: 10)",
+                "description": "Maximum number of results to return. Default: 10.",
             },
         },
         "required": ["library"],
@@ -514,11 +323,15 @@ FIND_EXAMPLES_TOOL_SPEC = {
 }
 
 
-async def find_examples_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
-    """Handler for agent tool router."""
+async def github_find_examples_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
+    """Handler for agent tool router"""
     try:
-        tool = FindExamplesTool()
-        result = await tool.execute(arguments)
+        result = find_examples(
+            library=arguments["library"],
+            org=arguments.get("org", "huggingface"),
+            repo_scope=arguments.get("repo_scope"),
+            max_results=arguments.get("max_results", 10),
+        )
         return result["formatted"], not result.get("isError", False)
     except Exception as e:
-        return f"Error executing find_examples: {str(e)}", False
+        return f"Error finding examples: {str(e)}", False
