@@ -159,11 +159,13 @@ class Handlers:
                     for tc in approval_required_tools:
                         tool_name = tc.function.name
                         tool_args = json.loads(tc.function.arguments)
-                        tools_data.append({
-                            "tool": tool_name,
-                            "arguments": tool_args,
-                            "tool_call_id": tc.id,
-                        })
+                        tools_data.append(
+                            {
+                                "tool": tool_name,
+                                "arguments": tool_args,
+                                "tool_call_id": tc.id,
+                            }
+                        )
 
                     await session.send_event(
                         Event(
@@ -295,17 +297,18 @@ class Handlers:
                 )
             )
 
-            output, success = await session.tool_router.call_tool(
-                tool_name, tool_args
-            )
+            output, success = await session.tool_router.call_tool(tool_name, tool_args)
 
             return (tc, tool_name, output, success)
 
         # Execute all approved tools concurrently and wait for ALL to complete
         if approved_tasks:
             results = await asyncio.gather(
-                *[execute_tool(tc, tool_name, tool_args) for tc, tool_name, tool_args in approved_tasks],
-                return_exceptions=True
+                *[
+                    execute_tool(tc, tool_name, tool_args)
+                    for tc, tool_name, tool_args in approved_tasks
+                ],
+                return_exceptions=True,
             )
 
             # Process results and add to context
