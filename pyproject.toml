@@ -23,4 +23,5 @@ dependencies = [
     "prompt-toolkit>=3.0.0",
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
+    "thefuzz>=0.22.1",
 ]
