@@ -30,6 +30,16 @@ from agent.utils.terminal_display import (
 
 litellm.drop_params = True
 
+
+def _safe_get_args(arguments: dict) -> dict:
+    """Safely extract args dict from arguments, handling cases where LLM passes string."""
+    args = arguments.get("args", {})
+    # Sometimes LLM passes args as string instead of dict
+    if isinstance(args, str):
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
 lmnr_api_key = os.environ.get("LMNR_API_KEY")
 if lmnr_api_key:
     try:
@@ -125,7 +135,7 @@ async def event_listener(
                 print("\n" + format_separator())
                 print(
                     format_header(
-                        f"JOB EXECUTION APPROVAL REQUIRED ({count} job{'s' if count != 1 else ''})"
+                        f"APPROVAL REQUIRED ({count} item{'s' if count != 1 else ''})"
                     )
                 )
                 print(format_separator())
@@ -148,60 +158,107 @@ async def event_listener(
 
                     operation = arguments.get("operation", "")
 
-                    print(f"\n[Job {i}/{count}]")
+                    print(f"\n[Item {i}/{count}]")
+                    print(f"Tool: {tool_name}")
                     print(f"Operation: {operation}")
 
-                    # Check if this is Python mode (script) or Docker mode (command)
-                    script = arguments.get("script")
-                    command = arguments.get("command")
+                    # Handle different tool types
+                    if tool_name == "hf_jobs":
+                        # Check if this is Python mode (script) or Docker mode (command)
+                        script = arguments.get("script")
+                        command = arguments.get("command")
 
-                    if script:
-                        # Python mode
-                        dependencies = arguments.get("dependencies", [])
-                        python_version = arguments.get("python")
-                        script_args = arguments.get("script_args", [])
+                        if script:
+                            # Python mode
+                            dependencies = arguments.get("dependencies", [])
+                            python_version = arguments.get("python")
+                            script_args = arguments.get("script_args", [])
 
-                        # Show script (truncate if too long)
-                        script_display = (
-                            script if len(script) < 200 else script[:200] + "..."
-                        )
-                        print(f"Script: {script_display}")
-                        if dependencies:
-                            print(f"Dependencies: {', '.join(dependencies)}")
-                        if python_version:
-                            print(f"Python version: {python_version}")
-                        if script_args:
-                            print(f"Script args: {' '.join(script_args)}")
-                    elif command:
-                        # Docker mode
-                        image = arguments.get("image", "python:3.12")
-                        command_str = (
-                            " ".join(command)
-                            if isinstance(command, list)
-                            else str(command)
-                        )
-                        print(f"Docker image: {image}")
-                        print(f"Command: {command_str}")
+                            # Show script (truncate if too long)
+                            script_display = (
+                                script if len(script) < 200 else script[:200] + "..."
+                            )
+                            print(f"Script: {script_display}")
+                            if dependencies:
+                                print(f"Dependencies: {', '.join(dependencies)}")
+                            if python_version:
+                                print(f"Python version: {python_version}")
+                            if script_args:
+                                print(f"Script args: {' '.join(script_args)}")
+                        elif command:
+                            # Docker mode
+                            image = arguments.get("image", "python:3.12")
+                            command_str = (
+                                " ".join(command)
+                                if isinstance(command, list)
+                                else str(command)
+                            )
+                            print(f"Docker image: {image}")
+                            print(f"Command: {command_str}")
 
-                    # Common parameters
-                    hardware_flavor = arguments.get("hardware_flavor", "cpu-basic")
-                    timeout = arguments.get("timeout", "30m")
-                    env = arguments.get("env", {})
-                    schedule = arguments.get("schedule")
+                        # Common parameters for jobs
+                        hardware_flavor = arguments.get("hardware_flavor", "cpu-basic")
+                        timeout = arguments.get("timeout", "30m")
+                        env = arguments.get("env", {})
+                        schedule = arguments.get("schedule")
 
-                    print(f"Hardware: {hardware_flavor}")
-                    print(f"Timeout: {timeout}")
+                        print(f"Hardware: {hardware_flavor}")
+                        print(f"Timeout: {timeout}")
 
-                    if env:
-                        env_keys = ", ".join(env.keys())
-                        print(f"Environment variables: {env_keys}")
+                        if env:
+                            env_keys = ", ".join(env.keys())
+                            print(f"Environment variables: {env_keys}")
 
-                    if schedule:
-                        print(f"Schedule: {schedule}")
+                        if schedule:
+                            print(f"Schedule: {schedule}")
 
-                    # Get user decision for this job
+                    elif tool_name == "hf_private_repos":
+                        # Handle private repo operations
+                        args = _safe_get_args(arguments)
+
+                        if operation in ["create_repo", "upload_file"]:
+                            repo_id = args.get("repo_id", "")
+                            repo_type = args.get("repo_type", "dataset")
+
+                            # Build repo URL
+                            type_path = "" if repo_type == "model" else f"{repo_type}s"
+                            repo_url = f"https://huggingface.co/{type_path}/{repo_id}".replace("//", "/")
+
+                            print(f"Repository: {repo_id}")
+                            print(f"Type: {repo_type}")
+                            print(f"Private: Yes")
+                            print(f"URL: {repo_url}")
+
+                            # Show file preview for upload_file operation
+                            if operation == "upload_file":
+                                path_in_repo = args.get("path_in_repo", "")
+                                file_content = args.get("file_content", "")
+                                print(f"File: {path_in_repo}")
+
+                                if isinstance(file_content, str):
+                                    # Calculate metrics
+                                    all_lines = file_content.split('\n')
+                                    line_count = len(all_lines)
+                                    size_bytes = len(file_content.encode('utf-8'))
+                                    size_kb = size_bytes / 1024
+                                    size_mb = size_kb / 1024
+
+                                    print(f"Line count: {line_count}")
+                                    if size_kb < 1024:
+                                        print(f"Size: {size_kb:.2f} KB")
+                                    else:
+                                        print(f"Size: {size_mb:.2f} MB")
+
+                                    # Show preview
+                                    preview_lines = all_lines[:5]
+                                    preview = '\n'.join(preview_lines)
+                                    print(f"Content preview (first 5 lines):\n{preview}")
+                                    if len(all_lines) > 5:
+                                        print("...")
+
+                    # Get user decision for this item
                     response = await prompt_session.prompt_async(
-                        f"Approve job {i}? (y=yes, n=no, or provide feedback to reject): "
+                        f"Approve item {i}? (y=yes, n=no, or provide feedback to reject): "
                     )
 
                     response = response.strip()

@@ -21,6 +21,11 @@ from agent.tools.docs_tools import (
 )
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
+from agent.tools.private_hf_repo_tools import (
+    PRIVATE_HF_REPO_TOOL_SPEC,
+    private_hf_repo_handler,
+)
+from agent.tools.utils_tools import UTILS_TOOL_SPEC, utils_handler
 
 # Suppress aiohttp deprecation warning
 warnings.filterwarnings(
@@ -219,7 +224,7 @@ class ToolRouter:
 def create_builtin_tools() -> list[ToolSpec]:
     """Create built-in tool specifications"""
     print(
-        f"Creating built-in tools: {EXPLORE_HF_DOCS_TOOL_SPEC['name']}, {HF_DOCS_FETCH_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}"
+        f"Creating built-in tools: {EXPLORE_HF_DOCS_TOOL_SPEC['name']}, {HF_DOCS_FETCH_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}, {PRIVATE_HF_REPO_TOOL_SPEC['name']}, {UTILS_TOOL_SPEC['name']}"
     )
     # in order of importance
     return [
@@ -248,5 +253,17 @@ def create_builtin_tools() -> list[ToolSpec]:
             description=HF_JOBS_TOOL_SPEC["description"],
             parameters=HF_JOBS_TOOL_SPEC["parameters"],
             handler=hf_jobs_handler,
+        ),
+        ToolSpec(
+            name=PRIVATE_HF_REPO_TOOL_SPEC["name"],
+            description=PRIVATE_HF_REPO_TOOL_SPEC["description"],
+            parameters=PRIVATE_HF_REPO_TOOL_SPEC["parameters"],
+            handler=private_hf_repo_handler,
+        ),
+        ToolSpec(
+            name=UTILS_TOOL_SPEC["name"],
+            description=UTILS_TOOL_SPEC["description"],
+            parameters=UTILS_TOOL_SPEC["parameters"],
+            handler=utils_handler,
         ),
     ]

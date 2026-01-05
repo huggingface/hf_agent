@@ -756,7 +756,9 @@ HF_JOBS_TOOL_SPEC = {
         "{'operation': 'logs', 'job_id': 'xxx'} - stream logs\n"
         "{'operation': 'cancel', 'job_id': 'xxx'} - stop job\n\n"
         "## CRITICAL: Files are ephemeral!\n"
-        "Everything created during execution is DELETED when job finishes. Always .push_to_hub() your outputs (models, datasets, artifacts) in the script."
+        "Everything created during execution is DELETED when job finishes. Always .push_to_hub() your outputs (models, datasets, artifacts) in the script.\n\n"
+        "## After job completion:\n"
+        "If needed or asked by the user, use hf_private_repos tool to store scripts/logs/results to Hub for persistent storage."
     ),
     "parameters": {
         "type": "object",
