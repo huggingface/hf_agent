@@ -333,11 +333,11 @@ def find_examples(
     keyword_desc = f" matching '{keyword}'" if keyword else ""
     lines = [f"**Found {len(results)} example files in {org}/{repo}{keyword_desc}:**"]
     if len(scored_files) > max_results:
-        lines[0] += f" (showing top {max_results} of {len(scored_files)})"
+        lines[0] += f" (showing {max_results} of {len(scored_files)})"
     lines.append("")
 
     for i, file in enumerate(results, 1):
-        lines.append(f"{i}. **{file['path']}** (score: {file['score']})")
+        lines.append(f"{i}. **{file['path']}**")
         lines.append(f"   Size: {file['size']:,} bytes | Ref: {file['ref'][:7]}")
         lines.append(f"   URL: {file['url']}")
 
