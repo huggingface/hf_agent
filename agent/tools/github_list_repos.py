@@ -186,6 +186,9 @@ def list_repos(
         lines.append(f"   URL: {repo['html_url']}")
         if repo["topics"]:
             lines.append(f"   Topics: {', '.join(repo['topics'][:5])}")
+
+        # Copyable parameters for other tools
+        lines.append(f"   Use in tools: {{'repo': '{repo['full_name']}'}}")
         lines.append("")
 
     return {

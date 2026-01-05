@@ -5,12 +5,63 @@ Fetch exact file contents with metadata, supporting line ranges for efficient re
 """
 
 import base64
+import json
 import os
 from typing import Any, Dict, Optional
 
+import nbformat
 import requests
+from nbconvert import MarkdownExporter
+from nbconvert.preprocessors import ClearOutputPreprocessor, TagRemovePreprocessor
 
 from agent.tools.types import ToolResult
+
+
+def _convert_ipynb_to_markdown(content: str) -> str:
+    """
+    Convert Jupyter notebook JSON to LLM-friendly Markdown.
+
+    Args:
+        content: Raw notebook JSON string
+
+    Returns:
+        Converted Markdown string
+    """
+    try:
+        # Parse notebook JSON
+        nb_dict = json.loads(content)
+
+        # Normalize cell sources (can be string or list of strings)
+        if "cells" in nb_dict:
+            for cell in nb_dict["cells"]:
+                if "source" in cell and isinstance(cell["source"], list):
+                    cell["source"] = "".join(cell["source"])
+
+        # Read notebook with explicit version
+        nb = nbformat.reads(json.dumps(nb_dict), as_version=4)
+
+        # Strip outputs for LLM readability (outputs can be noisy/large)
+        clear = ClearOutputPreprocessor()
+        nb, _ = clear.preprocess(nb, {})
+
+        # Optionally remove cells tagged with "hide" or similar
+        remove = TagRemovePreprocessor(
+            remove_cell_tags={"hide", "hidden", "remove"},
+            remove_input_tags=set(),
+            remove_all_outputs_tags=set(),
+        )
+        nb, _ = remove.preprocess(nb, {})
+
+        # Convert to markdown
+        exporter = MarkdownExporter()
+        markdown, _ = exporter.from_notebook_node(nb)
+
+        return markdown
+
+    except json.JSONDecodeError:
+        return content
+    except Exception:
+        return content
 
 
 def read_file(
@@ -126,16 +177,14 @@ def read_file(
                 }
             content = raw_response.text
 
-        # Get metadata
-        file_sha = data.get("sha")
-        file_size = data.get("size", 0)
+        if path.lower().endswith(".ipynb"):
+            content = _convert_ipynb_to_markdown(content)
 
         # Process line ranges
         lines = content.split("\n")
         total_lines = len(lines)
 
         truncated = False
-        message = None
 
         if line_start is None and line_end is None:
             # No range specified
@@ -143,7 +192,6 @@ def read_file(
                 line_start = 1
                 line_end = 300
                 truncated = True
-                message = f"File has {total_lines} lines. Showing first 300 lines. Use line_start and line_end to view more."
             else:
                 line_start = 1
                 line_end = total_lines
@@ -170,21 +218,19 @@ def read_file(
         selected_content = "\n".join(selected_lines)
 
         # Format output
-        lines_output = [f"**File: {repo}/{path}**"]
-        lines_output.append(f"SHA: {file_sha}")
-        lines_output.append(f"Size: {file_size:,} bytes")
-        lines_output.append(
-            f"Lines: {line_start}-{line_end} of {total_lines} total lines"
-        )
+        lines_output = [f"**Reading file from repo: {repo}, path: {path}**"]
+
         if ref and ref != "HEAD":
             lines_output.append(f"Ref: {ref}")
-        if truncated and message:
-            lines_output.append(f"⚠️  {message}")
-        lines_output.append("\n**Content:**")
+
+        lines_output.append("\n**File content:")
         lines_output.append("```")
         lines_output.append(selected_content)
         lines_output.append("```")
-
+        if truncated:
+            lines_output.append(
+                f"Currently showing lines {line_start}-{line_end} out of {total_lines} total lines. Use line_start and line_end to view more lines."
+            )
         return {
             "formatted": "\n".join(lines_output),
             "totalResults": 1,
@@ -210,12 +256,11 @@ GITHUB_READ_FILE_TOOL_SPEC = {
         "- Auto-truncates large files to 300 lines (with warning)\n"
         "- Works with any branch, tag, or commit SHA\n"
         "- Returns file metadata (SHA, size, line count)\n"
-        "- Handles both small and large files efficiently\n\n"
         "## Examples:\n\n"
         "**Read entire README:**\n"
-        "{'repo': 'facebook/react', 'path': 'README.md'}\n\n"
+        "{'repo': 'huggingface/transformers', 'path': 'README.md'}\n\n"
         "**Read specific line range:**\n"
-        "{'repo': 'torvalds/linux', 'path': 'kernel/sched/core.c', 'line_start': 100, 'line_end': 150}\n\n"
+        "{'repo': 'huggingface/trl', 'path': '/examples/scripts/grpo_vlm.py', 'line_start': 100, 'line_end': 150}\n\n"
         "**Read from specific branch:**\n"
         "{'repo': 'python/cpython', 'path': 'Lib/ast.py', 'ref': 'main', 'line_start': 1, 'line_end': 50}\n\n"
         "**Read from specific commit:**\n"

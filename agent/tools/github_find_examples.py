@@ -106,7 +106,7 @@ def _get_repo_tree(org: str, repo: str, token: str) -> tuple[List[Dict[str, Any]
         files = [
             {
                 "path": item["path"],
-                "sha": item["sha"],
+                "ref": item["sha"],
                 "size": item.get("size", 0),
                 "url": f"https://github.com/{full_repo}/blob/{default_branch}/{item['path']}",
             }
@@ -338,8 +338,12 @@ def find_examples(
 
     for i, file in enumerate(results, 1):
         lines.append(f"{i}. **{file['path']}** (score: {file['score']})")
-        lines.append(f"   Size: {file['size']:,} bytes | SHA: {file['sha'][:7]}")
+        lines.append(f"   Size: {file['size']:,} bytes | Ref: {file['ref'][:7]}")
         lines.append(f"   URL: {file['url']}")
+
+        # Copyable parameters for read_file tool
+        read_params = f"{{'repo': '{org}/{repo}', 'path': '{file['path']}'}}"
+        lines.append(f"   To read, use: {read_params}")
         lines.append("")
 
     return {
