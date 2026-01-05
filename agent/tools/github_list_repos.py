@@ -17,10 +17,10 @@ def list_repos(
     owner_type: Literal["user", "org"] = "org",
     sort: Literal["stars", "forks", "updated", "created"] = "stars",
     order: Literal["asc", "desc"] = "desc",
-    limit: Optional[int] = None,
+    limit: Optional[int] = 30,
 ) -> ToolResult:
     """
-    List repositories for a user or organization using GitHub Search API.
+    List repositories for a user or organization using GitHub REST API.
 
     Args:
         owner: GitHub username or organization name
@@ -41,8 +41,10 @@ def list_repos(
             "isError": True,
         }
 
-    # Build search query
-    query = f"org:{owner}" if owner_type == "org" else f"user:{owner}"
+    if owner_type == "org":
+        url = f"https://api.github.com/orgs/{owner}/repos"
+    else:
+        url = f"https://api.github.com/users/{owner}/repos"
 
     headers = {
         "Accept": "application/vnd.github+json",
@@ -52,20 +54,35 @@ def list_repos(
 
     all_repos = []
     page = 1
-    per_page = min(100, limit) if limit else 100
+    per_page = 100  # Maximum allowed by GitHub
+
+    # Map our sort values to GitHub API sort values
+    # Note: GitHub list repos API doesn't support sorting by stars/forks
+    # We'll fetch all repos and sort in memory for those cases
+    api_sort_map = {
+        "created": "created",
+        "updated": "updated",
+        "stars": None,  # Not supported by list API
+        "forks": None,  # Not supported by list API
+    }
+
+    api_sort = api_sort_map.get(sort)
+    need_manual_sort = api_sort is None
 
     try:
         while True:
             params = {
-                "q": query,
-                "sort": sort,
-                "order": order,
                 "page": page,
                 "per_page": per_page,
             }
 
+            # Only add sort/direction if API supports it
+            if api_sort:
+                params["sort"] = api_sort
+                params["direction"] = order
+
             response = requests.get(
-                "https://api.github.com/search/repositories",
+                url,
                 headers=headers,
                 params=params,
                 timeout=30,
@@ -95,8 +112,7 @@ def list_repos(
                     "isError": True,
                 }
 
-            data = response.json()
-            items = data.get("items", [])
+            items = response.json()
 
             if not items:
                 break
@@ -114,16 +130,16 @@ def list_repos(
                         "open_issues": item.get("open_issues_count", 0),
                         "topics": item.get("topics", []),
                         "updated_at": item.get("updated_at"),
+                        "created_at": item.get("created_at"),
                     }
                 )
 
-            # Check limits
-            if limit and len(all_repos) >= limit:
-                all_repos = all_repos[:limit]
+            # Check if we got fewer results than requested (last page)
+            if len(items) < per_page:
                 break
 
-            total_count = data.get("total_count", 0)
-            if len(all_repos) >= total_count or page * per_page >= 1000:
+            # Stop if we have enough repos
+            if limit and len(all_repos) >= limit:
                 break
 
             page += 1
@@ -135,6 +151,15 @@ def list_repos(
             "resultsShared": 0,
             "isError": True,
         }
+
+    # Manual sorting if needed (for stars/forks)
+    if need_manual_sort and all_repos:
+        reverse = order == "desc"
+        all_repos.sort(key=lambda x: x[sort], reverse=reverse)
+
+    # Apply limit after sorting
+    if limit:
+        all_repos = all_repos[:limit]
 
     if not all_repos:
         return {
@@ -217,7 +242,7 @@ GITHUB_LIST_REPOS_TOOL_SPEC = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of repositories to return. No limit if not specified.",
+                "description": "Maximum number of repositories to return. No limit if not specified. Default: 30.",
             },
         },
         "required": ["owner"],
