@@ -215,6 +215,10 @@ def search_code(
         )
         lines_output.append(f"   URL: {match['url']}")
 
+        # Copyable parameters for read_file tool
+        read_params = f"{{'repo': '{match['repo']}', 'path': '{match['path']}', 'ref': '{match['ref'][:7]}'}}"
+        lines_output.append(f"   To read, use: {read_params}")
+
         # Show snippet (first 5 lines)
         snippet_lines = match["snippet"].split("\n")[:5]
         if snippet_lines:
