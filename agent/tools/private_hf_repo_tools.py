@@ -159,7 +159,20 @@ Call this tool with:
   }
 }
 ```
-Note: Repositories are always created as private.
+
+### Create a Space
+Call this tool with:
+```json
+{
+  "operation": "create_repo",
+  "args": {
+    "repo_id": "my-gradio-app",
+    "repo_type": "space",
+    "space_sdk": "gradio"
+  }
+}
+```
+Note: Repositories are always created as private. For spaces, `space_sdk` is required (gradio, streamlit, static, or docker).
 
 ### Check if a repository exists
 Call this tool with:
@@ -261,13 +274,15 @@ Call this tool with:
 
             # Create repo if needed
             if not repo_exists and create_if_missing:
-                await self._create_repo(
-                    {
-                        "repo_id": repo_id,
-                        "repo_type": repo_type,
-                        "private": True,
-                    }
-                )
+                create_args = {
+                    "repo_id": repo_id,
+                    "repo_type": repo_type,
+                    "private": True,
+                }
+                # Pass through space_sdk if provided (required for spaces)
+                if "space_sdk" in args:
+                    create_args["space_sdk"] = args["space_sdk"]
+                await self._create_repo(create_args)
             elif not repo_exists:
                 return {
                     "formatted": f"Repository {repo_id} does not exist. Set create_if_missing: true to create it.",
@@ -332,6 +347,7 @@ Call this tool with:
 
         repo_type = args.get("repo_type", "dataset")
         private = True  # Always create private repos
+        space_sdk = args.get("space_sdk")  # Required if repo_type is "space"
 
         try:
             # Check if repo already exists
@@ -347,14 +363,27 @@ Call this tool with:
                     "resultsShared": 1,
                 }
 
+            # Validate space_sdk for spaces
+            if repo_type == "space" and not space_sdk:
+                return {
+                    "formatted": "space_sdk is required when creating a space. Valid values: gradio, streamlit, static, docker",
+                    "totalResults": 0,
+                    "resultsShared": 0,
+                    "isError": True,
+                }
+
             # Create repository
-            repo_url = await _async_call(
-                self.api.create_repo,
-                repo_id=repo_id,
-                repo_type=repo_type,
-                private=private,
-                exist_ok=True,
-            )
+            create_kwargs = {
+                "repo_id": repo_id,
+                "repo_type": repo_type,
+                "private": private,
+                "exist_ok": True,
+            }
+            # Add space_sdk only for spaces
+            if repo_type == "space" and space_sdk:
+                create_kwargs["space_sdk"] = space_sdk
+
+            repo_url = await _async_call(self.api.create_repo, **create_kwargs)
 
             response = f"""✓ Repository created successfully!
 
@@ -586,7 +615,8 @@ PRIVATE_HF_REPO_TOOL_SPEC = {
                 "description": (
                     "Operation-specific arguments as a JSON object. "
                     "Write ops: file_content (string/bytes), path_in_repo (string), repo_id (string), "
-                    "repo_type (dataset/model/space), create_if_missing (boolean), commit_message (string). "
+                    "repo_type (dataset/model/space), create_if_missing (boolean), commit_message (string), "
+                    "space_sdk (gradio/streamlit/static/docker - required when repo_type=space). "
                     "Read ops: repo_id (string), path_in_repo (for read_file), repo_type (optional)."
                 ),
                 "additionalProperties": True,
