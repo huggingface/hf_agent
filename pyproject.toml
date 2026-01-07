@@ -5,26 +5,39 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=1.24.0",
-    "requests>=2.32.5",
+    # Core dependencies (always required)
     "pydantic>=2.12.3",
-    "litellm>=1.0.0",
-    "tenacity>=8.0.0",
-    "pandas>=2.3.3",
     "python-dotenv>=1.2.1",
-    "datasets>=4.3.0",
+]
+
+[project.optional-dependencies]
+# Agent runtime dependencies
+agent = [
+    "requests>=2.32.5",
+    "litellm>=1.0.0",
     "huggingface-hub>=1.0.1",
     "fastmcp>=2.4.0",
-    "inspect-ai>=0.3.149",
-    "lmnr[all]>=0.7.23",
-    "transformers>=2.3.0",
-    "torch>=2.9.1",
-    "pytest>=9.0.2",
+    "lmnr>=0.7.23",  # Note: Using base package to avoid torch/transformers from [all] extra
     "prompt-toolkit>=3.0.0",
-    "ipykernel>=7.1.0",
-    "ipywidgets>=8.1.8",
     "thefuzz>=0.22.1",
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
-    "markitdown[all,docx,outlook,pdf,pptx,xls,xlsx]>=0.1.4",
+]
+
+# Evaluation/benchmarking dependencies
+eval = [
+    "inspect-ai>=0.3.149",
+    "pandas>=2.3.3",
+    "datasets>=4.3.0",
+    "tenacity>=8.0.0",
+]
+
+# Development and testing dependencies
+dev = [
+    "pytest>=9.0.2",
+]
+
+# All dependencies (agent + eval + dev)
+all = [
+    "hf-agent[agent,eval,dev]",
 ]
