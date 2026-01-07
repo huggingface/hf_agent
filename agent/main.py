@@ -119,7 +119,6 @@ async def event_listener(
                 print(format_error(error))
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
-                print("Agent shutdown")
                 break
             elif event.event_type == "processing":
                 print("Processing...", flush=True)
