@@ -11,9 +11,11 @@ An MLE agent CLI with MCP (Model Context Protocol) integration and built-in tool
 # Clone the repository
 git clone git@github.com:huggingface/hf_agent.git
 cd hf-agent
+```
 
-# Install dependencies (using uv)
-uv sync
+#### Install recommended dependencies
+```bash
+uv sync --extra agent # or uv sync --extra all
 ```
 
 ### Interactive CLI
@@ -21,7 +23,6 @@ uv sync
 ```bash
 uv run python -m agent.main
 ```
-
 This starts an interactive chat session with the agent. Type your messages and the agent will respond, using tools as needed.
 
 The agent will automatically discover and register all tools from configured MCP servers.
