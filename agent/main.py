@@ -327,6 +327,8 @@ async def main():
     print(f"{Colors.YELLOW} {banner}{Colors.RESET}")
     print("Type your messages below. Type 'exit', 'quit', or '/quit' to end.\n")
     print(format_separator())
+    # Wait for agent to initialize
+    print("Initializing agent...")
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
@@ -342,7 +344,7 @@ async def main():
     config = load_config(config_path)
 
     # Create tool router
-    print(f"Config: {config.mcpServers}")
+    print(f"Loading MCP servers: {', '.join(config.mcpServers.keys())}")
     tool_router = ToolRouter(config.mcpServers)
 
     # Create prompt session for input
@@ -368,8 +370,6 @@ async def main():
         )
     )
 
-    # Wait for agent to initialize
-    print("Initializing agent...")
     await ready_event.wait()
 
     submission_id = 0
