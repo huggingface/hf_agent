@@ -255,6 +255,11 @@ class Handlers:
                 data={"history_size": len(session.context_manager.items)},
             )
         )
+
+        # Increment turn counter and check for auto-save
+        session.increment_turn()
+        await session.auto_save_if_needed()
+
         return final_response
 
     @staticmethod
@@ -414,15 +419,13 @@ class Handlers:
     @staticmethod
     async def shutdown(session: Session) -> bool:
         """Handle shutdown (like shutdown in codex.rs:1329)"""
-        # Save session trajectory if enabled
+        # Save session trajectory if enabled (fire-and-forget, returns immediately)
         if session.config.save_sessions:
-            print("💾 Saving session trajectory...")
+            print("💾 Saving session...")
             repo_id = session.config.session_dataset_repo
-            url = await session.push_to_dataset(repo_id)
-            if url:
-                print(f"✅ Session saved to: {url}")
-            else:
-                print("❌ Failed to save session")
+            local_path = session.save_and_upload_detached(repo_id)
+            if local_path:
+                print("✅ Session saved locally, upload in progress")
 
         session.is_running = False
         await session.send_event(Event(event_type="shutdown"))
@@ -484,26 +487,47 @@ async def submission_loop(
     session = Session(event_queue, config=config, tool_router=tool_router)
     print("Agent loop started")
 
-    # Main processing loop
-    async with tool_router:
-        # Emit ready event after initialization
-        await session.send_event(
-            Event(event_type="ready", data={"message": "Agent initialized"})
+    # Retry any failed uploads from previous sessions (fire-and-forget)
+    if config and config.save_sessions:
+        Session.retry_failed_uploads_detached(
+            directory="session_logs", repo_id=config.session_dataset_repo
         )
 
-        while session.is_running:
-            submission = await submission_queue.get()
+    try:
+        # Main processing loop
+        async with tool_router:
+            # Emit ready event after initialization
+            await session.send_event(
+                Event(event_type="ready", data={"message": "Agent initialized"})
+            )
 
-            try:
-                should_continue = await process_submission(session, submission)
-                if not should_continue:
+            while session.is_running:
+                submission = await submission_queue.get()
+
+                try:
+                    should_continue = await process_submission(session, submission)
+                    if not should_continue:
+                        break
+                except asyncio.CancelledError:
+                    print("\n⚠️  Agent loop cancelled")
                     break
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                print(f"❌ Error in agent loop: {e}")
-                await session.send_event(
-                    Event(event_type="error", data={"error": str(e)})
-                )
+                except Exception as e:
+                    print(f"❌ Error in agent loop: {e}")
+                    await session.send_event(
+                        Event(event_type="error", data={"error": str(e)})
+                    )
 
-    print("🛑 Agent loop exited")
+        print("🛑 Agent loop exited")
+
+    finally:
+        # Emergency save if session saving is enabled and shutdown wasn't called properly
+        if session.config.save_sessions and session.is_running:
+            print("\n💾 Emergency save: preserving session before exit...")
+            try:
+                local_path = session.save_and_upload_detached(
+                    session.config.session_dataset_repo
+                )
+                if local_path:
+                    print("✅ Emergency save successful, upload in progress")
+            except Exception as e:
+                print(f"❌ Emergency save failed: {e}")
