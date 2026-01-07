@@ -415,8 +415,7 @@ async def main():
     )
     await submission_queue.put(shutdown_submission)
 
-    # Wait for tasks to complete (longer timeout to allow for session save)
-    await asyncio.wait_for(agent_task, timeout=30.0)
+    await asyncio.wait_for(agent_task, timeout=5.0)
     listener_task.cancel()
 
     print("✨ Goodbye!\n")
