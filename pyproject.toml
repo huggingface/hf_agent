@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=4.4.1",
     # Core dependencies (always required)
     "pydantic>=2.12.3",
     "python-dotenv>=1.2.1",
@@ -22,6 +23,7 @@ agent = [
     "thefuzz>=0.22.1",
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
+    "datasets>=4.3.0",  # For session logging to HF datasets
 ]
 
 # Evaluation/benchmarking dependencies
