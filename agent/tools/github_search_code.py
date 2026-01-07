@@ -1,7 +1,7 @@
 """
-GitHub Code Search Tool - Search code across GitHub with advanced filtering
+GitHub Code Search Tool - Search code across GitHub with intelligent filtering
 
-Find code patterns using regex and glob filters for repositories and file paths.
+Maps user-friendly patterns to GitHub's Code Search API capabilities.
 """
 
 import fnmatch
@@ -24,20 +24,124 @@ def _glob_match(text: str, pattern: str) -> bool:
     return fnmatch.fnmatch(text, pattern)
 
 
+def _parse_repo_filter(repo_pattern: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Parse repository pattern into GitHub API filter and client-side glob pattern.
+
+    Returns: (api_filter, client_glob)
+    - api_filter: GitHub API filter string (e.g., "org:huggingface")
+    - client_glob: Pattern for client-side filtering (e.g., "huggingface/trl*")
+
+    Examples:
+        "huggingface/trl" → ("repo:huggingface/trl", None)
+        "huggingface/*" → ("org:huggingface", "huggingface/*")
+        "huggingface/trl*" → ("org:huggingface", "huggingface/trl*")
+        "huggingface" → ("org:huggingface", None)
+        "*/*" → (None, "*/*")
+    """
+    if not repo_pattern:
+        return None, None
+
+    # Pattern: owner/repo (exact match)
+    if "/" in repo_pattern and "*" not in repo_pattern and "?" not in repo_pattern:
+        return f"repo:{repo_pattern}", None
+
+    # Pattern: owner/* or owner/prefix* (org + client filter)
+    if "/" in repo_pattern and ("*" in repo_pattern or "?" in repo_pattern):
+        org_name = repo_pattern.split("/")[0]
+        if "*" not in org_name and "?" not in org_name:
+            return f"org:{org_name}", repo_pattern
+        # Org name has wildcards - can't filter server-side
+        return None, repo_pattern
+
+    # Pattern: owner (just org name, no wildcards)
+    if "*" not in repo_pattern and "?" not in repo_pattern:
+        return f"org:{repo_pattern}", None
+
+    # Pattern: */* or other complex patterns (client-side only)
+    return None, repo_pattern
+
+
+def _parse_path_filter(path_pattern: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Parse path pattern into GitHub API filter and client-side glob pattern.
+
+    Returns: (api_filter, client_glob)
+
+    Examples:
+        "*.py" → ("extension:py", None)
+        "**/*.py" → ("extension:py", None)
+        "src/**/*.py" → ("extension:py", "src/**/*.py")
+        "test_*.py" → ("extension:py", "test_*.py")
+        "src/main.py" → ("path:src/main.py", None)
+    """
+    if not path_pattern:
+        return None, None
+
+    # Exact path (no wildcards)
+    if "*" not in path_pattern and "?" not in path_pattern:
+        return f"path:{path_pattern}", None
+
+    # Extract extension if present
+    ext_match = re.search(r"\*\.(\w+)$", path_pattern)
+    if ext_match:
+        extension = ext_match.group(1)
+        api_filter = f"extension:{extension}"
+
+        # Check if there's a directory prefix that needs client-side filtering
+        # e.g., "src/**/*.py" needs client filter, "**/*.py" doesn't
+        if path_pattern in [f"*.{extension}", f"**/*.{extension}"]:
+            # Simple patterns - API filter is enough
+            return api_filter, None
+        else:
+            # Complex pattern - need client-side filter too
+            return api_filter, path_pattern
+
+    # Pattern like "test_*.py" or "README*" - use filename with client filter
+    # GitHub's filename: doesn't support wildcards, so we rely on client-side
+    if "/" not in path_pattern:
+        # Try to extract extension for API filtering
+        if "." in path_pattern:
+            parts = path_pattern.rsplit(".", 1)
+            if "*" not in parts[-1] and "?" not in parts[-1]:
+                # Extension is clean
+                return f"extension:{parts[-1]}", path_pattern
+        # No extension or complex - client-side only
+        return None, path_pattern
+
+    # Complex path pattern - client-side only
+    return None, path_pattern
+
+
 def search_code(
     query: str,
-    repo_glob: Optional[str] = None,
-    path_glob: Optional[str] = None,
+    repo_pattern: Optional[str] = None,
+    path_pattern: Optional[str] = None,
     regex: bool = False,
     max_results: int = 20,
 ) -> ToolResult:
     """
-    Search for code across GitHub with glob filtering.
+    Search for code across GitHub with intelligent pattern matching.
+
+    This tool intelligently maps user patterns to GitHub's Code Search API capabilities:
+
+    Repository Patterns:
+        - "owner/repo" → Searches exact repository
+        - "owner/*" or "owner" → Searches all repos in organization
+        - "*/*" → Searches all GitHub (no repo filter)
+        - Wildcards trigger client-side filtering when needed
+
+    Path Patterns:
+        - "*.py" → Searches all Python files
+        - "**/*.js" → Searches all JavaScript files (any directory)
+        - "src/**/*.py" → Python files in src/ (uses client-side filtering)
+        - "test_*.py" → Files matching pattern (client-side filtering)
+        - "path/to/file.py" → Exact file path
 
     Args:
         query: Search term or pattern to find in code
-        repo_glob: Glob pattern to filter repositories (e.g., "github/*", "*/react")
-        path_glob: Glob pattern to filter file paths (e.g., "*.py", "src/**/*.js")
+        repo_pattern: Repository pattern (e.g., "huggingface/trl", "huggingface/*", "huggingface")
+        path_pattern: File path pattern (e.g., "*.py", "src/**/*.js")
         regex: If True, treat query as regular expression
         max_results: Maximum number of results to return (default 20)
 
@@ -53,35 +157,24 @@ def search_code(
             "isError": True,
         }
 
-    # Build GitHub query
+    # Build GitHub API query
     query_parts = []
 
+    # Add search term
     if regex:
         query_parts.append(f"/{query}/")
     else:
         query_parts.append(f'"{query}"' if " " in query else query)
 
-    # Add repo filter
-    if repo_glob:
-        if "/" in repo_glob:
-            query_parts.append(f"repo:{repo_glob}")
-        else:
-            query_parts.append(f"user:{repo_glob}")
+    # Parse repository filter
+    repo_api_filter, repo_client_glob = _parse_repo_filter(repo_pattern)
+    if repo_api_filter:
+        query_parts.append(repo_api_filter)
 
-    # Add path filter
-    if path_glob:
-        if "*" not in path_glob and "?" not in path_glob:
-            query_parts.append(f"path:{path_glob}")
-        elif path_glob.startswith("*."):
-            ext = path_glob[2:]
-            query_parts.append(f"extension:{ext}")
-        elif "/" not in path_glob and "*" in path_glob:
-            query_parts.append(f"filename:{path_glob}")
-        else:
-            # Complex pattern, extract extension if possible
-            ext_match = re.search(r"\*\.(\w+)", path_glob)
-            if ext_match:
-                query_parts.append(f"extension:{ext_match.group(1)}")
+    # Parse path filter
+    path_api_filter, path_client_glob = _parse_path_filter(path_pattern)
+    if path_api_filter:
+        query_parts.append(path_api_filter)
 
     github_query = " ".join(query_parts)
 
@@ -145,10 +238,10 @@ def search_code(
                 file_path = item.get("path", "")
                 sha = item.get("sha", "")
 
-                # Apply client-side glob filtering
-                if repo_glob and not _glob_match(repo_name, repo_glob):
+                # Apply client-side filtering
+                if repo_client_glob and not _glob_match(repo_name, repo_client_glob):
                     continue
-                if path_glob and not _glob_match(file_path, path_glob):
+                if path_client_glob and not _glob_match(file_path, path_client_glob):
                     continue
 
                 # Extract text matches
@@ -241,24 +334,43 @@ def search_code(
 GITHUB_SEARCH_CODE_TOOL_SPEC = {
     "name": "search_code",
     "description": (
-        "Search for code patterns across GitHub with advanced glob filtering.\n\n"
-        "Features:\n"
-        "- Text or regex search\n"
-        "- Repository glob patterns (e.g., 'github/*', '*/react')\n"
-        "- File path glob patterns (e.g., '*.py', 'src/**/*.js')\n"
-        "- Returns code snippets with line numbers\n"
-        "- Direct URLs to matches\n\n"
+        "Search for code patterns across GitHub with intelligent pattern matching.\n\n"
+        "This tool automatically maps your patterns to GitHub's Code Search API:\n\n"
+        "## Repository Patterns:\n"
+        "- **Exact repo**: `'huggingface/trl'` → Searches only that repo\n"
+        "- **Organization**: `'huggingface'` or `'huggingface/*'` → All repos in org\n"
+        "- **All repos**: `'*/*'` or omit → Searches all GitHub\n"
+        "- Wildcards like `'huggingface/trl*'` automatically use client-side filtering\n\n"
+        "## Path Patterns:\n"
+        "- **Extension**: `'*.py'` or `'**/*.py'` → All Python files\n"
+        "- **Directory**: `'src/**/*.js'` → JavaScript files in src/ (client-filtered)\n"
+        "- **Pattern**: `'test_*.py'` → Files matching pattern (client-filtered)\n"
+        "- **Exact path**: `'README.md'` → Specific file\n\n"
+        "## How It Works:\n"
+        "1. Converts patterns to GitHub API filters (server-side, fast)\n"
+        "2. Falls back to client-side filtering for complex patterns\n"
+        "3. Returns code snippets with line numbers and URLs\n\n"
         "## Examples:\n\n"
-        "**Search for Python function definitions:**\n"
-        "{'query': 'def search', 'path_glob': '*.py', 'max_results': 10}\n\n"
-        "**Search for TODO comments in specific org:**\n"
-        "{'query': 'TODO', 'repo_glob': 'github/*', 'max_results': 5}\n\n"
-        "**Regex search for test functions:**\n"
-        "{'query': r'func Test\\w+', 'path_glob': '*.go', 'regex': True}\n\n"
-        "**Search in specific repo with path filter:**\n"
-        "{'query': 'SearchCode', 'repo_glob': 'github/github-mcp-server', 'path_glob': '*.go'}\n\n"
-        "**Find imports in TypeScript files:**\n"
-        "{'query': 'import', 'path_glob': 'src/**/*.ts', 'repo_glob': 'facebook/*'}\n\n"
+        "**Search for function in specific repo:**\n"
+        "```python\n"
+        "{'query': 'def train', 'repo_pattern': 'huggingface/trl', 'path_pattern': '*.py'}\n"
+        "```\n\n"
+        "**Search across entire organization:**\n"
+        "```python\n"
+        "{'query': 'GRPOTrainer', 'repo_pattern': 'huggingface', 'path_pattern': '*.py'}\n"
+        "```\n\n"
+        "**Search specific directory pattern:**\n"
+        "```python\n"
+        "{'query': 'TODO', 'repo_pattern': 'facebook/react', 'path_pattern': 'src/**/*.js'}\n"
+        "```\n\n"
+        "**Regex search across GitHub:**\n"
+        "```python\n"
+        "{'query': r'class \\w+Trainer', 'path_pattern': '*.py', 'regex': True}\n"
+        "```\n\n"
+        "**Search all repos (no filter):**\n"
+        "```python\n"
+        "{'query': 'import transformers', 'path_pattern': '*.py', 'max_results': 50}\n"
+        "```\n\n"
         "Perfect for finding code patterns, learning from examples, or exploring implementations."
     ),
     "parameters": {
@@ -268,13 +380,13 @@ GITHUB_SEARCH_CODE_TOOL_SPEC = {
                 "type": "string",
                 "description": "Search term or pattern to find in code. Required.",
             },
-            "repo_glob": {
+            "repo_pattern": {
                 "type": "string",
-                "description": "Glob pattern to filter repositories (e.g., 'github/*', '*/react'). Optional.",
+                "description": "Repository pattern: 'owner/repo' (exact), 'owner' (org), 'owner/*' (org with filter), '*/*' (all). Optional.",
             },
-            "path_glob": {
+            "path_pattern": {
                 "type": "string",
-                "description": "Glob pattern to filter file paths (e.g., '*.py', 'src/**/*.js'). Optional.",
+                "description": "File path pattern: '*.ext' (extension), 'dir/**/*.ext' (directory), 'pattern*.ext' (name pattern). Optional.",
             },
             "regex": {
                 "type": "boolean",
@@ -295,8 +407,8 @@ async def github_search_code_handler(arguments: Dict[str, Any]) -> tuple[str, bo
     try:
         result = search_code(
             query=arguments["query"],
-            repo_glob=arguments.get("repo_glob"),
-            path_glob=arguments.get("path_glob"),
+            repo_pattern=arguments.get("repo_pattern"),
+            path_pattern=arguments.get("path_pattern"),
             regex=arguments.get("regex", False),
             max_results=arguments.get("max_results", 20),
         )
