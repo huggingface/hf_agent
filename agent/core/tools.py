@@ -132,11 +132,13 @@ class ToolRouter:
 
     async def register_mcp_tools(self) -> None:
         tools = await self.mcp_client.list_tools()
+        registered_names = []
+        skipped_count = 0
         for tool in tools:
             if tool.name in NOT_ALLOWED_TOOL_NAMES:
-                print(f"Skipping not MCP allowed tool: {tool.name}")
+                skipped_count += 1
                 continue
-            print(f"MCP Tool: {tool.name}")
+            registered_names.append(tool.name)
             self.register_tool(
                 ToolSpec(
                     name=tool.name,
@@ -145,6 +147,9 @@ class ToolRouter:
                     handler=None,
                 )
             )
+        print(
+            f"Loaded {len(registered_names)} MCP tools: {', '.join(registered_names)} ({skipped_count} disabled)"
+        )
 
     async def register_openapi_tool(self) -> None:
         """Register the OpenAPI search tool (requires async initialization)"""
@@ -152,8 +157,6 @@ class ToolRouter:
             _get_api_search_tool_spec,
             search_openapi_handler,
         )
-
-        print("Registering OpenAPI search tool...")
 
         # Register search_hf_api_endpoints with dynamic spec
         openapi_spec = await _get_api_search_tool_spec()
@@ -165,7 +168,7 @@ class ToolRouter:
                 handler=search_openapi_handler,
             )
         )
-        print(f"Registered: {openapi_spec['name']}")
+        print(f"Loaded OpenAPI search tool: {openapi_spec['name']}")
 
     def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
         """Get tool specifications in OpenAI format"""
@@ -189,10 +192,12 @@ class ToolRouter:
             await self.mcp_client.initialize()
             await self.register_mcp_tools()
             self._mcp_initialized = True
-        print(f"MCP initialized: {self._mcp_initialized}")
 
         # Register OpenAPI tool (requires async initialization)
         await self.register_openapi_tool()
+
+        total_tools = len(self.tools)
+        print(f"\nAgent ready with {total_tools} tools total\n")
 
         return self
 
@@ -237,11 +242,8 @@ class ToolRouter:
 
 def create_builtin_tools() -> list[ToolSpec]:
     """Create built-in tool specifications"""
-    print(
-        f"Creating built-in tools: {EXPLORE_HF_DOCS_TOOL_SPEC['name']}, {HF_DOCS_FETCH_TOOL_SPEC['name']}, {PLAN_TOOL_SPEC['name']}, {HF_JOBS_TOOL_SPEC['name']}, {PRIVATE_HF_REPO_TOOL_SPEC['name']}, {GITHUB_FIND_EXAMPLES_TOOL_SPEC['name']}, {GITHUB_LIST_REPOS_TOOL_SPEC['name']}, {GITHUB_READ_FILE_TOOL_SPEC['name']}"
-    )
     # in order of importance
-    return [
+    tools = [
         # Documentation search tools
         ToolSpec(
             name=EXPLORE_HF_DOCS_TOOL_SPEC["name"],
@@ -308,3 +310,8 @@ def create_builtin_tools() -> list[ToolSpec]:
             handler=github_read_file_handler,
         ),
     ]
+
+    tool_names = ", ".join([t.name for t in tools])
+    print(f"Loaded {len(tools)} built-in tools: {tool_names}")
+
+    return tools
