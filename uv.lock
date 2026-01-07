@@ -902,12 +902,14 @@ name = "hf-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "datasets" },
     { name = "pydantic" },
     { name = "python-dotenv" },
 ]
 
 [package.optional-dependencies]
 agent = [
+    { name = "datasets" },
     { name = "fastmcp" },
     { name = "huggingface-hub" },
     { name = "litellm" },
@@ -946,6 +948,8 @@ eval = [
 
 [package.metadata]
 requires-dist = [
+    { name = "datasets", specifier = ">=4.4.1" },
+    { name = "datasets", marker = "extra == 'agent'", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=4.3.0" },
     { name = "fastmcp", marker = "extra == 'agent'", specifier = ">=2.4.0" },
     { name = "hf-agent", extras = ["agent", "eval", "dev"], marker = "extra == 'all'" },
