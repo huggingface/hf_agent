@@ -7,6 +7,7 @@ Refactored to use official huggingface-hub library instead of custom HTTP client
 import asyncio
 import base64
 import os
+import re
 from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import HfApi
@@ -74,6 +75,44 @@ OperationType = Literal[
 
 # Constants
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
+
+
+def _filter_uv_install_output(logs: list[str]) -> list[str]:
+    """
+    Filter out UV package installation output from logs.
+
+    Replaces installation details with "[installs truncated]" and keeps
+    the "Installed X packages in Y ms/s" summary line.
+
+    Args:
+        logs: List of log lines
+
+    Returns:
+        Filtered list of log lines
+    """
+    if not logs:
+        return logs
+
+    # Regex pattern to match: "Installed X packages in Y ms" or "Installed X package in Y s"
+    install_pattern = re.compile(
+        r"^Installed\s+\d+\s+packages?\s+in\s+\d+(?:\.\d+)?\s*(?:ms|s)$"
+    )
+
+    # Find the index of the "Installed X packages" line
+    install_line_idx = None
+    for idx, line in enumerate(logs):
+        if install_pattern.match(line.strip()):
+            install_line_idx = idx
+            break
+
+    # If pattern found, replace installation details with truncation message
+    if install_line_idx is not None and install_line_idx > 0:
+        # Keep logs from the "Installed X packages" line onward
+        # Add truncation message before the "Installed" line
+        return ["[installs truncated]"] + logs[install_line_idx:]
+
+    # If pattern not found, return original logs
+    return logs
 
 
 def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -389,8 +428,11 @@ class HfJobsTool:
                 namespace=self.namespace,
             )
 
+            # Filter out UV package installation output
+            filtered_logs = _filter_uv_install_output(all_logs)
+
             # Format all logs for the agent
-            log_text = "\n".join(all_logs) if all_logs else "(no logs)"
+            log_text = "\n".join(filtered_logs) if filtered_logs else "(no logs)"
 
             response = f"""{job_type} job completed!
 
