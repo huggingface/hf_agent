@@ -414,6 +414,16 @@ class Handlers:
     @staticmethod
     async def shutdown(session: Session) -> bool:
         """Handle shutdown (like shutdown in codex.rs:1329)"""
+        # Save session trajectory if enabled
+        if session.config.save_sessions:
+            print("💾 Saving session trajectory...")
+            repo_id = session.config.session_dataset_repo
+            url = await session.push_to_dataset(repo_id)
+            if url:
+                print(f"✅ Session saved to: {url}")
+            else:
+                print("❌ Failed to save session")
+
         session.is_running = False
         await session.send_event(Event(event_type="shutdown"))
         return True
