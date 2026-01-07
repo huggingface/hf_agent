@@ -12,25 +12,19 @@ from thefuzz import fuzz
 
 from agent.tools.types import ToolResult
 
-# Global list of example-related keywords for fuzzy matching
+# In order of priority (lower index = higher priority for sorting)
 EXAMPLE_PATTERNS = [
-    # Core example patterns
+    "scripts",
+    # General example patterns (catch-all, lower priority)
     "examples",
     "example",
-    "samples",
-    "sample",
-    "demos",
-    "demo",
+    # Notebook patterns
+    "notebooks",
+    "notebook",
     # Tutorial/learning patterns
     "tutorials",
     "tutorial",
-    "guides",
-    "guide",
     "quickstart",
-    "getting-started",
-    "getting_started",
-    "howto",
-    "how-to",
     "walkthroughs",
     "walkthrough",
     # Cookbook/recipe patterns
@@ -38,28 +32,24 @@ EXAMPLE_PATTERNS = [
     "cookbooks",
     "recipes",
     "recipe",
-    # Notebook patterns (common in ML/data science)
-    "notebooks",
-    "notebook",
-    "ipynb",
-    # Starter/template patterns
-    "starter",
-    "starters",
-    "templates",
-    "template",
-    "boilerplate",
-    # Snippet/use-case patterns
-    "snippets",
-    "snippet",
+    # Demo/sample patterns
+    "demos",
+    "demo",
+    "samples",
+    "sample",
+    # Other patterns
+    "guides",
+    "guide",
+    "getting-started",
+    "getting_started",
+    "playground",
+    "howto",
+    "how-to",
     "use-cases",
     "usecases",
     "use_cases",
-    # Showcase/playground patterns
-    "showcase",
-    "playground",
     "sandbox",
-    # Script patterns
-    "scripts",
+    "showcase",
 ]
 
 
@@ -176,6 +166,45 @@ def _score_against_keyword(file_path: str, keyword: str) -> int:
 
     # Return the higher of the two
     return max(partial_score, token_score)
+
+
+def _get_pattern_priority(file_path: str) -> tuple[int, int, int]:
+    """
+    Get priority of a file path based on which example pattern directory it's in.
+
+    Returns: (in_examples_dir, pattern_priority, path_depth)
+    - in_examples_dir: 0 if in examples/ directory, 1 otherwise (lower is better)
+    - pattern_priority: Index in EXAMPLE_PATTERNS (lower is better), or 999 if no match
+    - path_depth: Number of path segments (lower is better)
+
+    Note: Prioritizes files in "examples/" directory first, then by most specific pattern match.
+    E.g., "examples/scripts/train.py" is better than "scripts/util.py"
+    """
+    path_lower = file_path.lower()
+    path_parts = path_lower.split("/")
+
+    # Check if file is in examples/ directory (highest priority)
+    in_examples_dir = 0 if (path_parts[0] in ["examples", "example"]) else 1
+
+    # Find ALL matching patterns and use the best (lowest index) one
+    # But prefer deeper matches (more specific) over shallow ones
+    best_priority = 999
+    best_depth_at_match = -1
+
+    for i, pattern in enumerate(EXAMPLE_PATTERNS):
+        # Check if pattern appears as a directory component in the path
+        if pattern in path_parts:
+            # Find the depth where this pattern appears (rightmost occurrence)
+            depth = len(path_parts) - 1 - path_parts[::-1].index(pattern)
+
+            # Prefer deeper matches, or better priority if at same depth
+            if depth > best_depth_at_match or (
+                depth == best_depth_at_match and i < best_priority
+            ):
+                best_priority = i
+                best_depth_at_match = depth
+
+    return (in_examples_dir, best_priority, len(path_parts))
 
 
 def _handle_repo_tree_errors(
@@ -308,23 +337,42 @@ def find_examples(
                 "totalResults": 0,
                 "resultsShared": 0,
             }
+
+        # Sort by keyword score (descending) for best matches first
+        scored_files.sort(key=lambda x: x["score"], reverse=True)
     else:
-        # No keyword: use example pattern scores
-        scored_files = [
-            {**file, "score": file["example_score"]}
-            for file in example_files
-            if file["example_score"] >= min_score
-        ]
+        # No keyword: prioritize by pattern directory, then path depth
+        scored_files = []
+        for file in example_files:
+            in_examples_dir, pattern_priority, path_depth = _get_pattern_priority(
+                file["path"]
+            )
+            scored_files.append(
+                {
+                    **file,
+                    "score": file["example_score"],
+                    "in_examples_dir": in_examples_dir,
+                    "pattern_priority": pattern_priority,
+                    "path_depth": path_depth,
+                }
+            )
 
         if not scored_files:
             return {
-                "formatted": f"No example files found in {org}/{repo} with score >= {min_score}.",
+                "formatted": f"No example files found in {org}/{repo}.",
                 "totalResults": 0,
                 "resultsShared": 0,
             }
 
-    # Sort by score (descending) for best matches first
-    scored_files.sort(key=lambda x: x["score"], reverse=True)
+        # Sort by: 1) files in examples/ dir first, 2) pattern priority (scripts > datasets > etc), 3) path depth, 4) path name
+        scored_files.sort(
+            key=lambda x: (
+                x["in_examples_dir"],
+                x["pattern_priority"],
+                x["path_depth"],
+                x["path"],
+            )
+        )
 
     # Limit results
     results = scored_files[:max_results]
@@ -357,35 +405,54 @@ def find_examples(
 GITHUB_FIND_EXAMPLES_TOOL_SPEC = {
     "name": "github_find_examples",
     "description": (
-        "Find example files in a GitHub repository using fuzzy matching.\n\n"
-        "This tool uses fuzzy string matching to find files related to a keyword or common example patterns. "
-        "It calculates similarity scores and returns the best matches.\n\n"
-        "Global example keywords (always fuzzy matched): example, tutorial, demo, quickstart, guide, sample\n\n"
-        "If the repository is not found, it returns similar repositories sorted by star count.\n\n"
-        "Features:\n"
-        "- Fuzzy matching using Levenshtein distance\n"
-        "- Sorted by match score (best matches first)\n"
-        "- Auto-suggests similar repos if target not found\n"
-        "- Configurable minimum score threshold\n\n"
-        "## Examples:\n\n"
-        "**Find GRPO examples in TRL:**\n"
-        "{'keyword': 'grpo', 'repo': 'trl', 'org': 'huggingface'}\n"
-        "→ Matches: examples/scripts/grpo_agent.py, examples/scripts/gspo.py\n\n"
-        "**Find tutorial files in transformers:**\n"
-        "{'keyword': 'tutorial', 'repo': 'transformers', 'org': 'huggingface'}\n\n"
-        "**Find any example files (no keyword):**\n"
-        "{'repo': 'pytorch', 'org': 'pytorch'}\n"
-        "→ Uses global example keywords for matching\n\n"
-        "**Adjust minimum score:**\n"
-        "{'keyword': 'bert', 'repo': 'transformers', 'org': 'huggingface', 'min_score': 70}\n\n"
-        "Returns list of matching files with fuzzy match scores, paths, sizes, and URLs."
+        "Discover best practices, reusable scripts, tutorials, and demos for usinga specific library or framework. This is an important step before implementing anything ML related.",
+        "Use together with github_read_file tool.\n\n"
+        "## When to use this tool\n\n"
+        "- ALWAYS before implementing any training/inference/benchmarking or other ML related code or answering how-to question.\n"
+        "- When exploring a new repository and need to understand how to use it\n"
+        "## How it works\n\n"
+        "1. Fetches all (examples, tutorials, demos, notebooks, scripts, etc.) from the repository\n"
+        "2. If keyword provided, scores found files against the keyword using fuzzy matching\n"
+        "3. Returns best matches sorted by relevance score\n"
+        "## Examples\n\n"
+        "<example>\n"
+        "// ML Workflow Step: Find GRPO/SFT/DPO/RLOO etc training examples\n"
+        "// Task: Starting GRPO fine-tuning project, need reference implementations\n"
+        "{\n"
+        "  keyword: 'grpo',\n"
+        "  repo: 'trl',\n"
+        "  org: 'huggingface'\n"
+        "}\n"
+        "// Returns: examples/scripts/grpo_agent.py, examples/scripts/grpo_vlm.py\n"
+        "// Next step: Use github_read_file to study the implementation\n"
+        "</example>\n\n"
+        "<example>\n"
+        "// ML Workflow Step: Discover all training examples in TRL\n"
+        "// Task: Exploring available training methods before choosing approach\n"
+        "{\n"
+        "  repo: 'trl',\n"
+        "  org: 'huggingface',\n"
+        "  max_results: 20\n"
+        "}\n"
+        "// Lists all example scripts: PPO, DPO, GRPO, reward modeling, etc.\n"
+        "</example>\n\n"
+        "<example>\n"
+        "// ML Workflow Step: Find LoRA fine-tuning examples\n"
+        "// Task: Learning parameter-efficient fine-tuning with PEFT\n"
+        "{\n"
+        "  keyword: 'lora',\n"
+        "  repo: 'peft',\n"
+        "  org: 'huggingface'\n"
+        "}\n"
+        "// Discovers LoRA configuration and training examples\n"
+        "</example>",
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "keyword": {
                 "type": "string",
-                "description": "Keyword to fuzzy match against file paths (e.g., 'grpo', 'bert'). Optional.",
+                "description": "Keyword to fuzzy match against file paths (e.g., 'grpo', 'sft').",
             },
             "repo": {
                 "type": "string",
