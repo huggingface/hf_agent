@@ -27,6 +27,15 @@ This starts an interactive chat session with the agent. Type your messages and t
 
 The agent will automatically discover and register all tools from configured MCP servers.
 
+
+### Env Setup
+```bash
+ANTHROPIC_API_KEY=<one-key-to-rule-them-all>
+HF_TOKEN=<hf-token-to-access-the-hub>
+GITHUB_TOKEN=<gh-pat-key-for-not-reinventing-the-wheel>
+HF_NAMESPACE=<hf-namespace-to-use>
+```
+
 ## Architecture
 
 ### Component Overview
@@ -59,16 +68,20 @@ The agent will automatically discover and register all tools from configured MCP
 │  │  │  │  │ ContextManager             │  │  │  │  │         │
 │  │  │  │  │ • Message history          │  │  │  │  │         │
 │  │  │  │  │   (litellm.Message[])      │  │  │  │  │         │
+│  │  │  │  │ • Auto-compaction (180k)   │  │  │  │  │         │
 │  │  │  │  └────────────────────────────┘  │  │  │  │         │
 │  │  │  │                                  │  │  │  │         │
 │  │  │  │  ┌────────────────────────────┐  │  │  │  │         │
 │  │  │  │  │ ToolRouter                 │  │  │  │  │         │
-│  │  │  │  │  ├─ bash                   │  │  │  │  │         │
-│  │  │  │  │  ├─ read_file              │  │  │  │  │         │
-│  │  │  │  │  ├─ write_file             │  │  │  │  │         │
-│  │  │  │  │  └─ McpConnectionManager   │  │  │  │  │         │
-│  │  │  │  │      ├─ mcp__server1__*    │  │  │  │  │         │
-│  │  │  │  │      └─ mcp__server2__*    │  │  │  │  │         │
+│  │  │  │  │  ├─ explore_hf_docs        │  │  │  │  │         │
+│  │  │  │  │  ├─ fetch_hf_docs          │  │  │  │  │         │
+│  │  │  │  │  ├─ search_hf_api_endpoints│  │  │  │  │         │
+│  │  │  │  │  ├─ plan_tool              │  │  │  │  │         │
+│  │  │  │  │  ├─ hf_jobs*               │  │  │  │  │         │
+│  │  │  │  │  ├─ hf_private_repos*      │  │  │  │  │         │
+│  │  │  │  │  ├─ github_* (3 tools)     │  │  │  │  │         │
+│  │  │  │  │  └─ MCP tools (e.g.,       │  │  │  │  │         │
+│  │  │  │  │      model_search, etc.)   │  │  │  │  │         │
 │  │  │  │  └────────────────────────────┘  │  │  │  │         │
 │  │  │  └──────────────────────────────────┘  │  │  │         │
 │  │  │                                        │  │  │         │
@@ -122,16 +135,20 @@ User Message
 agent/
 ├── config.py                 # Configuration models
 ├── main.py                   # Interactive CLI entry point
+├── prompts/
+│   └── system_prompt.yaml   # Agent behavior and personality
 ├── context_manager/
-│   └── manager.py           # Message history management
+│   └── manager.py           # Message history & auto-compaction
 └── core/
     ├── agent_loop.py        # Main agent loop and handlers
     ├── session.py           # Session management
     ├── mcp_client.py        # MCP SDK integration
     └── tools.py             # ToolRouter and built-in tools
 
-test_integration.py          # Basic integration tests
-test_tools.py                # Tool execution tests
+configs/
+└── main_agent_config.json   # Model and MCP server configuration
+
+tests/                       # Integration and unit tests
 eval/                        # Evaluation suite (see eval/README.md)
 ```
 
@@ -144,6 +161,7 @@ The agent emits the following events via `event_queue`:
 - `assistant_message` - LLM response text
 - `tool_call` - Tool being called with arguments
 - `tool_output` - Tool execution result
+- `approval_request` - Requesting user approval for sensitive operations
 - `turn_complete` - Agent finished processing
 - `error` - Error occurred during processing
 - `interrupted` - Agent was interrupted
@@ -178,18 +196,21 @@ def create_builtin_tools() -> list[ToolSpec]:
 
 ### Adding MCP Servers
 
-Add to your config:
+Edit `configs/main_agent_config.json`:
 
-```python
-config = Config(
-    model_name="anthropic/claude-sonnet-4-5-20250929",
-    mcp_servers=[
-        MCPServerConfig(
-            name="your_server",
-            command="command",
-            args=["arg1", "arg2"],
-            env={"KEY": "value"}
-        )
-    ]
-)
+```json
+{
+  "model_name": "anthropic/claude-sonnet-4-5-20250929",
+  "mcpServers": {
+    "your-server-name": {
+      "transport": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${YOUR_TOKEN}"
+      }
+    }
+  }
+}
 ```
+
+Note: Environment variables like `${YOUR_TOKEN}` are auto-substituted from `.env`.
