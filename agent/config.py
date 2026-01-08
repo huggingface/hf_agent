@@ -19,6 +19,9 @@ class Config(BaseModel):
 
     model_name: str
     mcpServers: dict[str, MCPServerConfig] = {}
+    save_sessions: bool = True
+    session_dataset_repo: str = "smolagents/hf-agent-sessions"
+    auto_save_interval: int = 3  # Save every N user turns (0 = disabled)
 
 
 def substitute_env_vars(obj: Any) -> Any:

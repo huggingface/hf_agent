@@ -5,7 +5,6 @@ Tools for exploring and fetching HuggingFace documentation and API specification
 
 import asyncio
 import os
-import time
 from typing import Any
 
 import httpx
@@ -21,21 +20,15 @@ async def _fetch_html_page(hf_token: str, endpoint: str) -> str:
     url = f"{base_url}/{endpoint}"
     headers = {"Authorization": f"Bearer {hf_token}"}
 
-    fetch_start = time.perf_counter()
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
-
-    fetch_time = time.perf_counter() - fetch_start
-    print(f"[DEBUG] _fetch_html_page: Fetched in {fetch_time:.2f}s")
 
     return response.text
 
 
 def _parse_sidebar_navigation(html_content: str) -> list[dict[str, str]]:
     """Parse the sidebar navigation and extract all links"""
-    parse_start = time.perf_counter()
-
     soup = BeautifulSoup(html_content, "html.parser")
     sidebar = soup.find("nav", class_=lambda x: x and "flex-auto" in x)
 
@@ -52,11 +45,6 @@ def _parse_sidebar_navigation(html_content: str) -> list[dict[str, str]]:
         # Make URL absolute
         page_url = f"https://huggingface.co{href}" if href.startswith("/") else href
         nav_data.append({"title": title, "url": page_url})
-
-    parse_time = time.perf_counter() - parse_start
-    print(
-        f"[DEBUG] _parse_sidebar_navigation: Parsed in {parse_time:.2f}s, found {len(nav_data)} links"
-    )
 
     return nav_data
 
@@ -96,17 +84,10 @@ async def _fetch_all_glimpses(
     hf_token: str, nav_data: list[dict[str, str]]
 ) -> list[dict[str, str]]:
     """Fetch glimpses for all pages in parallel"""
-    glimpse_start = time.perf_counter()
-
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         result_items = await asyncio.gather(
             *[_fetch_single_glimpse(client, hf_token, item) for item in nav_data]
         )
-
-    glimpse_time = time.perf_counter() - glimpse_start
-    print(
-        f"[DEBUG] _fetch_all_glimpses: Fetched {len(result_items)} glimpses in {glimpse_time:.2f}s"
-    )
 
     return list(result_items)
 
@@ -130,9 +111,6 @@ def _format_exploration_results(
 
 async def explore_hf_docs(hf_token: str, endpoint: str) -> str:
     """Main function to explore documentation structure"""
-    start_time = time.perf_counter()
-    print(f"[DEBUG] explore_hf_docs: Starting for endpoint '{endpoint}'")
-
     # Fetch HTML page
     html_content = await _fetch_html_page(hf_token, endpoint)
 
@@ -147,9 +125,6 @@ async def explore_hf_docs(hf_token: str, endpoint: str) -> str:
 
     # Format results
     result = _format_exploration_results(endpoint, result_items)
-
-    total_time = time.perf_counter() - start_time
-    print(f"[DEBUG] explore_hf_docs: Total time {total_time:.2f}s")
 
     return result
 
@@ -199,11 +174,7 @@ async def _fetch_openapi_spec() -> dict[str, Any]:
     global _openapi_spec_cache
 
     if _openapi_spec_cache is not None:
-        print("[DEBUG] _fetch_openapi_spec: Using cached spec")
         return _openapi_spec_cache
-
-    start_time = time.perf_counter()
-    print("[DEBUG] _fetch_openapi_spec: Fetching from API")
 
     url = "https://huggingface.co/.well-known/openapi.json"
 
@@ -213,9 +184,6 @@ async def _fetch_openapi_spec() -> dict[str, Any]:
 
     spec = response.json()
     _openapi_spec_cache = spec
-
-    fetch_time = time.perf_counter() - start_time
-    print(f"[DEBUG] _fetch_openapi_spec: Fetched and cached in {fetch_time:.2f}s")
 
     return spec
 
@@ -457,9 +425,7 @@ async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
     Returns:
         Tuple of (search_results, success)
     """
-    start_time = time.perf_counter()
     tag = arguments.get("tag", "")
-    print(f"[DEBUG] search_openapi: Starting for tag '{tag}'")
 
     if not tag:
         return "Error: No tag provided", False
@@ -473,9 +439,6 @@ async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
 
         # Format results
         formatted = _format_openapi_results(results, tag)
-
-        total_time = time.perf_counter() - start_time
-        print(f"[DEBUG] search_openapi: Total time {total_time:.2f}s")
 
         return formatted, True
 
@@ -497,9 +460,7 @@ async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
     Returns:
         Tuple of (full_markdown_content, success)
     """
-    start_time = time.perf_counter()
     url = arguments.get("url", "")
-    print(f"[DEBUG] fetch_hf_docs: Starting for URL '{url}'")
 
     if not url:
         return "Error: No URL provided", False
@@ -521,24 +482,14 @@ async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
         # Make request with auth
         headers = {"Authorization": f"Bearer {hf_token}"}
 
-        fetch_start = time.perf_counter()
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
 
-        fetch_time = time.perf_counter() - fetch_start
         content = response.text
-        content_size_kb = len(content) / 1024
-
-        print(
-            f"[DEBUG] fetch_hf_docs: Fetched {content_size_kb:.1f}KB in {fetch_time:.2f}s"
-        )
 
         # Return the markdown content directly
         result = f"Documentation from: {url}\n\n{content}"
-
-        total_time = time.perf_counter() - start_time
-        print(f"[DEBUG] fetch_hf_docs: Total time {total_time:.2f}s")
 
         return result, True
 
