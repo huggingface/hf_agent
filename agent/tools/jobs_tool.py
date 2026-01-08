@@ -7,6 +7,7 @@ Refactored to use official huggingface-hub library instead of custom HTTP client
 import asyncio
 import base64
 import os
+import re
 from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import HfApi
@@ -40,6 +41,20 @@ GPU_FLAVORS = [
     "h100",
     "h100x8",
 ]
+
+# Detailed specs for display (vCPU/RAM/GPU VRAM)
+CPU_FLAVORS_DESC = (
+    "cpu-basic(2vCPU/16GB), cpu-upgrade(8vCPU/32GB), cpu-performance, cpu-xl"
+)
+GPU_FLAVORS_DESC = (
+    "t4-small(4vCPU/15GB/GPU 16GB), t4-medium(8vCPU/30GB/GPU 16GB), "
+    "l4x1(8vCPU/30GB/GPU 24GB), l4x4(48vCPU/186GB/GPU 96GB), "
+    "l40sx1(8vCPU/62GB/GPU 48GB), l40sx4(48vCPU/382GB/GPU 192GB), l40sx8(192vCPU/1534GB/GPU 384GB), "
+    "a10g-small(4vCPU/14GB/GPU 24GB), a10g-large(12vCPU/46GB/GPU 24GB), "
+    "a10g-largex2(24vCPU/92GB/GPU 48GB), a10g-largex4(48vCPU/184GB/GPU 96GB), "
+    "a100-large(12vCPU/142GB/GPU 80GB), h100(23vCPU/240GB/GPU 80GB), h100x8(184vCPU/1920GB/GPU 640GB), "
+    "zero-a10g(dynamic alloc)"
+)
 SPECIALIZED_FLAVORS = ["inf2x6"]
 ALL_FLAVORS = CPU_FLAVORS + GPU_FLAVORS + SPECIALIZED_FLAVORS
 
@@ -60,6 +75,44 @@ OperationType = Literal[
 
 # Constants
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
+
+
+def _filter_uv_install_output(logs: list[str]) -> list[str]:
+    """
+    Filter out UV package installation output from logs.
+
+    Replaces installation details with "[installs truncated]" and keeps
+    the "Installed X packages in Y ms/s" summary line.
+
+    Args:
+        logs: List of log lines
+
+    Returns:
+        Filtered list of log lines
+    """
+    if not logs:
+        return logs
+
+    # Regex pattern to match: "Installed X packages in Y ms" or "Installed X package in Y s"
+    install_pattern = re.compile(
+        r"^Installed\s+\d+\s+packages?\s+in\s+\d+(?:\.\d+)?\s*(?:ms|s)$"
+    )
+
+    # Find the index of the "Installed X packages" line
+    install_line_idx = None
+    for idx, line in enumerate(logs):
+        if install_pattern.match(line.strip()):
+            install_line_idx = idx
+            break
+
+    # If pattern found, replace installation details with truncation message
+    if install_line_idx is not None and install_line_idx > 0:
+        # Keep logs from the "Installed X packages" line onward
+        # Add truncation message before the "Installed" line
+        return ["[installs truncated]"] + logs[install_line_idx:]
+
+    # If pattern not found, return original logs
+    return logs
 
 
 def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -375,8 +428,11 @@ class HfJobsTool:
                 namespace=self.namespace,
             )
 
+            # Filter out UV package installation output
+            filtered_logs = _filter_uv_install_output(all_logs)
+
             # Format all logs for the agent
-            log_text = "\n".join(all_logs) if all_logs else "(no logs)"
+            log_text = "\n".join(filtered_logs) if filtered_logs else "(no logs)"
 
             response = f"""{job_type} job completed!
 
@@ -741,12 +797,12 @@ HF_JOBS_TOOL_SPEC = {
         "1. **Python mode:** Provide 'script' + 'dependencies' → auto-handles pip install\n"
         "2. **Docker mode:** Provide 'image' + 'command' → full control\n"
         "(script and command are mutually exclusive)\n\n"
-        "## Hardware:\n"
-        "CPU: cpu-basic (default), cpu-upgrade, cpu-performance, cpu-xl\n"
-        "GPU: t4-small, t4-medium, l4x1, a10g-small, a10g-large, a100-large, h100\n\n"
+        "## Available Hardware (vCPU/RAM/GPU):\n"
+        f"CPU: {CPU_FLAVORS_DESC}\n"
+        f"GPU: {GPU_FLAVORS_DESC}\n"
         "## Examples:\n\n"
         "**Fine-tune LLM and push to Hub:**\n"
-        "{'operation': 'run', 'script': 'from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer\\nmodel = AutoModelForCausalLM.from_pretrained(\"gpt2\")\\n# ... training code ...\\nmodel.push_to_hub(\"user-name/my-finetuned-model\")', 'dependencies': ['transformers', 'torch', 'datasets'], 'hardware_flavor': 'a10g-large', 'timeout': '4h', 'env': {'CUSTOM_VAR': 'value'}}\n\n"
+        "{'operation': 'run', 'script': 'from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer\\nmodel = AutoModelForCausalLM.from_pretrained(\"Qwen/Qwen3-4B-Thinking-2507\")\\n# ... training code ...\\nmodel.push_to_hub(\"user-name/my-finetuned-model\")', 'dependencies': ['transformers', 'torch', 'datasets'], 'hardware_flavor': 'a10g-large', 'timeout': '4h', 'env': {'CUSTOM_VAR': 'value'}}\n\n"
         "**Generate dataset daily and upload:**\n"
         "{'operation': 'scheduled run', 'script': 'from datasets import Dataset\\nimport pandas as pd\\n# scrape/generate data\\ndf = pd.DataFrame(data)\\nds = Dataset.from_pandas(df)\\nds.push_to_hub(\"user-name/daily-dataset\")', 'dependencies': ['datasets', 'pandas'], 'schedule': '@daily'}\n\n"
         "**Run custom training with Docker:**\n"
@@ -807,7 +863,7 @@ HF_JOBS_TOOL_SPEC = {
             # Hardware and environment
             "hardware_flavor": {
                 "type": "string",
-                "description": "Hardware type. CPU: cpu-basic (default), cpu-upgrade, cpu-performance, cpu-xl. GPU: t4-small, t4-medium, l4x1, a10g-small, a10g-large, a100-large, h100. Use with 'run'/'scheduled run'.",
+                "description": f"Hardware type. Available CPU flavors: {CPU_FLAVORS}. Available GPU flavors: {GPU_FLAVORS}. Use with 'run'/'scheduled run'.",
             },
             "timeout": {
                 "type": "string",

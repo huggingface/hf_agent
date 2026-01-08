@@ -452,3 +452,86 @@ async def test_list_jobs_with_status_filter():
         assert "job-3" in result["formatted"]
         assert "job-1" not in result["formatted"]
         assert result["resultsShared"] == 1
+
+
+def test_filter_uv_install_output():
+    """Test filtering of UV package installation output"""
+    from agent.tools.jobs_tool import _filter_uv_install_output
+
+    # Test case 1: Logs with UV installation output
+    logs_with_install = [
+        "Resolved 68 packages in 1.01s",
+        "Installed 68 packages in 251ms",
+        "Hello from the script!",
+        "Script execution completed",
+    ]
+
+    filtered = _filter_uv_install_output(logs_with_install)
+    assert len(filtered) == 4
+    assert filtered[0] == "[installs truncated]"
+    assert filtered[1] == "Installed 68 packages in 251ms"
+    assert filtered[2] == "Hello from the script!"
+    assert filtered[3] == "Script execution completed"
+
+    # Test case 2: Logs without UV installation output
+    logs_without_install = [
+        "Script started",
+        "Processing data...",
+        "Done!",
+    ]
+
+    filtered = _filter_uv_install_output(logs_without_install)
+    assert len(filtered) == 3
+    assert filtered == logs_without_install
+
+    # Test case 3: Empty logs
+    assert _filter_uv_install_output([]) == []
+
+    # Test case 4: Different time formats (ms vs s)
+    logs_with_seconds = [
+        "Downloading packages...",
+        "Installed 10 packages in 2s",
+        "Running main.py",
+    ]
+
+    filtered = _filter_uv_install_output(logs_with_seconds)
+    assert len(filtered) == 3
+    assert filtered[0] == "[installs truncated]"
+    assert filtered[1] == "Installed 10 packages in 2s"
+    assert filtered[2] == "Running main.py"
+
+    # Test case 5: Single package
+    logs_single_package = [
+        "Resolving dependencies",
+        "Installed 1 package in 50ms",
+        "Import successful",
+    ]
+
+    filtered = _filter_uv_install_output(logs_single_package)
+    assert len(filtered) == 3
+    assert filtered[0] == "[installs truncated]"
+    assert filtered[1] == "Installed 1 package in 50ms"
+    assert filtered[2] == "Import successful"
+
+    # Test case 6: Decimal time values
+    logs_decimal_time = [
+        "Starting installation",
+        "Installed 25 packages in 125.5ms",
+        "All dependencies ready",
+    ]
+
+    filtered = _filter_uv_install_output(logs_decimal_time)
+    assert len(filtered) == 3
+    assert filtered[0] == "[installs truncated]"
+    assert filtered[1] == "Installed 25 packages in 125.5ms"
+    assert filtered[2] == "All dependencies ready"
+
+    # Test case 7: "Installed" line is first (no truncation needed)
+    logs_install_first = [
+        "Installed 5 packages in 100ms",
+        "Running script...",
+    ]
+
+    filtered = _filter_uv_install_output(logs_install_first)
+    # No truncation message if "Installed" is the first line
+    assert filtered == logs_install_first

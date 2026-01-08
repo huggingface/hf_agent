@@ -26,7 +26,7 @@ system_prompt: |
    - Invoke multiple independent tools simultaneously for efficiency
 
   # Available Tools
-  
+
   You have access to the following main categories of tools. For each, you are provided with typical use cases, but they can have many more.
 
   - Hugging Face Hub
@@ -168,4 +168,3 @@ system_prompt: |
   3. Sort by trending or downloads.
   4. Report top results with short descriptions and links.
   </example>
-

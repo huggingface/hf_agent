@@ -120,7 +120,6 @@ async def event_listener(
                 print(format_error(error))
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
-                print("Agent shutdown")
                 break
             elif event.event_type == "processing":
                 print("Processing...", flush=True)
@@ -228,11 +227,15 @@ async def event_listener(
 
                             # Build repo URL
                             type_path = "" if repo_type == "model" else f"{repo_type}s"
-                            repo_url = f"https://huggingface.co/{type_path}/{repo_id}".replace("//", "/")
+                            repo_url = (
+                                f"https://huggingface.co/{type_path}/{repo_id}".replace(
+                                    "//", "/"
+                                )
+                            )
 
                             print(f"Repository: {repo_id}")
                             print(f"Type: {repo_type}")
-                            print(f"Private: Yes")
+                            print("Private: Yes")
                             print(f"URL: {repo_url}")
 
                             # Show file preview for upload_file operation
@@ -243,9 +246,9 @@ async def event_listener(
 
                                 if isinstance(file_content, str):
                                     # Calculate metrics
-                                    all_lines = file_content.split('\n')
+                                    all_lines = file_content.split("\n")
                                     line_count = len(all_lines)
-                                    size_bytes = len(file_content.encode('utf-8'))
+                                    size_bytes = len(file_content.encode("utf-8"))
                                     size_kb = size_bytes / 1024
                                     size_mb = size_kb / 1024
 
@@ -257,8 +260,10 @@ async def event_listener(
 
                                     # Show preview
                                     preview_lines = all_lines[:5]
-                                    preview = '\n'.join(preview_lines)
-                                    print(f"Content preview (first 5 lines):\n{preview}")
+                                    preview = "\n".join(preview_lines)
+                                    print(
+                                        f"Content preview (first 5 lines):\n{preview}"
+                                    )
                                     if len(all_lines) > 5:
                                         print("...")
 
@@ -327,6 +332,8 @@ async def main():
     print(f"{Colors.YELLOW} {banner}{Colors.RESET}")
     print("Type your messages below. Type 'exit', 'quit', or '/quit' to end.\n")
     print(format_separator())
+    # Wait for agent to initialize
+    print("Initializing agent...")
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
@@ -342,7 +349,7 @@ async def main():
     config = load_config(config_path)
 
     # Create tool router
-    print(f"Config: {config.mcpServers}")
+    print(f"Loading MCP servers: {', '.join(config.mcpServers.keys())}")
     tool_router = ToolRouter(config.mcpServers)
 
     # Create prompt session for input
@@ -368,8 +375,6 @@ async def main():
         )
     )
 
-    # Wait for agent to initialize
-    print("Initializing agent...")
     await ready_event.wait()
 
     submission_id = 0
@@ -416,8 +421,7 @@ async def main():
     )
     await submission_queue.put(shutdown_submission)
 
-    # Wait for tasks to complete
-    await asyncio.wait_for(agent_task, timeout=2.0)
+    await asyncio.wait_for(agent_task, timeout=5.0)
     listener_task.cancel()
 
     print("✨ Goodbye!\n")
