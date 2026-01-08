@@ -25,19 +25,7 @@ class Config(BaseModel):
 
     # Permission control parameters
     confirm_cpu_jobs: bool = True
-    """
-    If True, agent must ask for user confirmation before launching CPU-only jobs.
-    If False, agent can run CPU-only jobs automatically without confirmation.
-    Default: True (require confirmation for safety)
-    """
-    
     auto_file_upload: bool = False
-    """
-    If True, agent may upload files automatically without additional prompts
-    (user has given prior permission via this config).
-    If False, agent must ask for user permission before uploading any file.
-    Default: False (ask permission for safety)
-    """
 
 
 def substitute_env_vars(obj: Any) -> Any:
