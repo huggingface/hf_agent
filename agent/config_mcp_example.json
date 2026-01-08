@@ -1,9 +1,8 @@
 {
-  "model_name": "anthropic/claude-opus-4-5-20251101",
-  "save_sessions": true,
-  "session_dataset_repo": "smolagents/hf-agent-sessions",
+  "model_name": "anthropic/claude-sonnet-4-5-20250929",
+  "system_prompt_path": "",
   "confirm_cpu_jobs": false,
-  "auto_file_upload": false,
+  "auto_file_upload": true,
   "mcpServers": {
     "hf-mcp-server": {
       "transport": "http",
