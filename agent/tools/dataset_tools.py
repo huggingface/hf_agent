@@ -27,7 +27,7 @@ def list_splits(dataset: str) -> ToolResult:
     params = {"dataset": dataset}
     
     try:
-        response = httpx.get(url, params=params, timeout=30.0)
+        response = httpx.get(url, params=params, timeout=15.0)
         response.raise_for_status()
         data = response.json()
         
@@ -77,7 +77,7 @@ def download_rows(
     split: str,
     config: str | None = None,
     offset: int = 0,
-    length: int = 100,
+    length: int = 5,
 ) -> ToolResult:
     """
     Download rows from a dataset split.
@@ -87,7 +87,7 @@ def download_rows(
         split: Split name (e.g., "train", "test", "validation")
         config: Optional config name (for datasets with multiple configs)
         offset: Starting row index (default: 0)
-        length: Number of rows to fetch (default: 100, max recommended: 1000)
+        length: Number of rows to fetch (default: 5, max recommended: 1000)
     
     Returns:
         ToolResult with row data
@@ -106,7 +106,7 @@ def download_rows(
         params["config"] = config
     
     try:
-        response = httpx.get(url, params=params, timeout=60.0)
+        response = httpx.get(url, params=params, timeout=30.0)
         response.raise_for_status()
         data = response.json()
         
@@ -138,7 +138,7 @@ def download_rows(
         if rows:
             first_row = rows[0].get("row", {})
             formatted_parts.append(f"\nExample row (first row):")
-            for key, value in list(first_row.items())[:5]:  # Show first 5 fields
+            for key, value in list(first_row.items())[:20]:  # Show up to 20 fields
                 value_str = str(value)
                 if len(value_str) > 200:
                     value_str = value_str[:200] + "..."
@@ -179,7 +179,9 @@ DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC = {
         "## When to use\n"
         "- When you need to know what splits are available for a dataset\n"
         "- Before downloading rows to identify the correct split name\n"
-        "- To check dataset structure and organization\n\n"
+        "- To check dataset structure and organization\n"
+        "- **CRITICAL: Always use this tool BEFORE training/fine-tuning models via hf_jobs** "
+        "to understand the dataset structure and ensure you're using the correct splits\n\n"
         "## Example\n"
         "{\n"
         '  "dataset": "facebook/research-plan-gen"\n'
@@ -204,27 +206,32 @@ DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC = {
         "Fetches a specified number of rows starting from a given offset. Useful for "
         "sampling data, inspecting dataset contents, or processing datasets in batches.\n\n"
         "## When to use\n"
+        "- **CRITICAL: Always use this tool BEFORE training/fine-tuning models via hf_jobs** "
+        "to inspect and understand the dataset structure, data format, column names, and data types. "
+        "This helps avoid costly mistakes and ensures proper data preprocessing.\n"
         "- When you need to inspect or sample data from a dataset\n"
+        "- To understand the data format and structure before writing training scripts\n"
+        "- To verify column names and data types match your expectations\n"
         "- To download specific rows for analysis or processing\n"
         "- To fetch data in batches (use offset and length parameters)\n\n"
         "## When NOT to use\n"
         "- For downloading entire large datasets (use huggingface_hub or datasets library instead)\n"
         "- When you need to process all data (use streaming or local download)\n\n"
         "## Examples\n"
-        "// Get first 100 rows from training split\n"
+        "// Inspect first 5 rows to understand dataset structure (recommended before training)\n"
         "{\n"
         '  "dataset": "facebook/research-plan-gen",\n'
         '  "split": "train",\n'
         '  "config": "arxiv",\n'
         '  "offset": 0,\n'
-        '  "length": 100\n'
+        '  "length": 5\n'
         "}\n\n"
-        "// Get next batch (rows 100-200)\n"
+        "// Get next batch (rows 5-10)\n"
         "{\n"
         '  "dataset": "facebook/research-plan-gen",\n'
         '  "split": "train",\n'
-        '  "offset": 100,\n'
-        '  "length": 100\n'
+        '  "offset": 5,\n'
+        '  "length": 5\n'
         "}"
     ),
     "parameters": {
@@ -249,8 +256,8 @@ DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC = {
             },
             "length": {
                 "type": "integer",
-                "description": "Number of rows to fetch (default: 100, max recommended: 1000).",
-                "default": 100,
+                "description": "Number of rows to fetch (default: 5, max recommended: 1000). Use small values (1-5) for quick inspection before training.",
+                "default": 5,
             },
         },
         "required": ["dataset", "split"],
@@ -275,7 +282,7 @@ async def hf_datasets_download_rows_handler(arguments: Dict[str, Any]) -> tuple[
             split=arguments["split"],
             config=arguments.get("config"),
             offset=arguments.get("offset", 0),
-            length=arguments.get("length", 100),
+            length=arguments.get("length", 5),
         )
         return result["formatted"], not result.get("isError", False)
     except Exception as e:
