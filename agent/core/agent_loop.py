@@ -37,8 +37,12 @@ def _validate_tool_args(tool_args: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def _needs_approval(tool_name: str, tool_args: dict) -> bool:
+def _needs_approval(tool_name: str, tool_args: dict, yolo_mode: bool = False) -> bool:
     """Check if a tool call requires user approval before execution"""
+    # Yolo mode: skip all approvals
+    if yolo_mode:
+        return False
+
     # If args are malformed, skip approval (validation error will be shown later)
     args_valid, _ = _validate_tool_args(tool_args)
     if not args_valid:
@@ -143,7 +147,7 @@ class Handlers:
                     tool_name = tc.function.name
                     tool_args = json.loads(tc.function.arguments)
 
-                    if _needs_approval(tool_name, tool_args):
+                    if _needs_approval(tool_name, tool_args, session.config.yolo_mode):
                         approval_required_tools.append(tc)
                     else:
                         non_approval_tools.append(tc)

@@ -73,10 +73,12 @@ async def event_listener(
     turn_complete_event: asyncio.Event,
     ready_event: asyncio.Event,
     prompt_session: PromptSession,
+    config=None,
 ) -> None:
     """Background task that listens for events and displays them"""
     submission_id = [1000]  # Use list to make it mutable in closure
     last_tool_name = [None]  # Track last tool called
+    yolo_mode = [False]  # Track yolo mode state
 
     while True:
         try:
@@ -131,6 +133,28 @@ async def event_listener(
                 # Handle batch approval format
                 tools_data = event.data.get("tools", []) if event.data else []
                 count = event.data.get("count", 0) if event.data else 0
+
+                # If yolo mode is active, auto-approve everything
+                if yolo_mode[0]:
+                    approvals = [
+                        {
+                            "tool_call_id": t.get("tool_call_id", ""),
+                            "approved": True,
+                            "feedback": None,
+                        }
+                        for t in tools_data
+                    ]
+                    print(f"\n⚡ YOLO MODE: Auto-approving {count} item(s)")
+                    submission_id[0] += 1
+                    approval_submission = Submission(
+                        id=f"approval_{submission_id[0]}",
+                        operation=Operation(
+                            op_type=OpType.EXEC_APPROVAL,
+                            data={"approvals": approvals},
+                        ),
+                    )
+                    await submission_queue.put(approval_submission)
+                    continue
 
                 print("\n" + format_separator())
                 print(
@@ -266,16 +290,37 @@ async def event_listener(
 
                     # Get user decision for this item
                     response = await prompt_session.prompt_async(
-                        f"Approve item {i}? (y=yes, n=no, or provide feedback to reject): "
+                        f"Approve item {i}? (y=yes, yolo=approve all, n=no, or provide feedback): "
                     )
 
-                    response = response.strip()
-                    approved = response.lower() in ["y", "yes"]
-                    feedback = (
-                        None
-                        if approved or response.lower() in ["n", "no"]
-                        else response
-                    )
+                    response = response.strip().lower()
+
+                    # Handle yolo mode activation
+                    if response == "yolo":
+                        yolo_mode[0] = True
+                        print(
+                            "⚡ YOLO MODE ACTIVATED - Auto-approving all future tool calls"
+                        )
+                        # Auto-approve this item and all remaining
+                        approvals.append(
+                            {
+                                "tool_call_id": tool_call_id,
+                                "approved": True,
+                                "feedback": None,
+                            }
+                        )
+                        for remaining in tools_data[i:]:
+                            approvals.append(
+                                {
+                                    "tool_call_id": remaining.get("tool_call_id", ""),
+                                    "approved": True,
+                                    "feedback": None,
+                                }
+                            )
+                        break
+
+                    approved = response in ["y", "yes"]
+                    feedback = None if approved or response in ["n", "no"] else response
 
                     approvals.append(
                         {
@@ -369,6 +414,7 @@ async def main():
             turn_complete_event,
             ready_event,
             prompt_session,
+            config,
         )
     )
 
