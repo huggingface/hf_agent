@@ -20,7 +20,7 @@ class Config(BaseModel):
     model_name: str
     mcpServers: dict[str, MCPServerConfig] = {}
     save_sessions: bool = True
-    session_dataset_repo: str = "smolagents/hf-agent-sessions"
+    session_dataset_repo: str = "akseljoonas/hf-agent-sessions"
     auto_save_interval: int = 3  # Save every N user turns (0 = disabled)
     yolo_mode: bool = False  # Auto-approve all tool calls without confirmation
 

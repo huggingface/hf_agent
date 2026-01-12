@@ -427,9 +427,9 @@ class Handlers:
         if session.config.save_sessions:
             print("💾 Saving session...")
             repo_id = session.config.session_dataset_repo
-            local_path = session.save_and_upload_detached(repo_id)
-            if local_path:
-                print("✅ Session saved locally, upload in progress")
+            _ = session.save_and_upload_detached(repo_id)
+            # if local_path:
+            # print("✅ Session saved locally, upload in progress")
 
         session.is_running = False
         await session.send_event(Event(event_type="shutdown"))
@@ -444,7 +444,7 @@ async def process_submission(session: Session, submission) -> bool:
         bool: True to continue, False to shutdown
     """
     op = submission.operation
-    print(f"📨 Received: {op.op_type.value}")
+    # print(f"📨 Received: {op.op_type.value}")
 
     if op.op_type == OpType.USER_INPUT:
         text = op.data.get("text", "") if op.data else ""
