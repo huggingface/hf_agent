@@ -6,6 +6,7 @@ Refactored to use official huggingface-hub library instead of custom HTTP client
 
 import asyncio
 import base64
+import http.client
 import os
 import re
 from typing import Any, Dict, Literal, Optional
@@ -346,21 +347,60 @@ class HfJobsTool:
     ) -> tuple[str, list[str]]:
         """
         Stream job logs until completion, printing them in real-time.
+        Implements retry logic to handle connection drops during long-running jobs.
 
         Returns:
             tuple: (final_status, all_logs)
         """
         all_logs = []
+        terminal_states = {"COMPLETED", "FAILED", "CANCELED", "ERROR"}
+        max_retries = 100  # Allow many retries for 8h+ jobs
+        retry_delay = 5  # Seconds between retries
 
-        # Fetch logs - generator streams logs as they arrive and ends when job completes
-        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+        for _ in range(max_retries):
+            try:
+                # Fetch logs - generator streams logs as they arrive
+                logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
 
-        # Stream logs in real-time
-        for log_line in logs_gen:
-            print("\t" + log_line)
-            all_logs.append(log_line)
+                # Stream logs in real-time
+                for log_line in logs_gen:
+                    print("\t" + log_line)
+                    all_logs.append(log_line)
 
-        # After logs complete, fetch final job status
+                # If we get here, streaming completed normally
+                break
+
+            except (
+                ConnectionError,
+                TimeoutError,
+                http.client.IncompleteRead,
+            ) as e:
+                # Connection dropped - check if job is still running
+                try:
+                    job_info = await _async_call(
+                        self.api.inspect_job, job_id=job_id, namespace=namespace
+                    )
+                    current_status = job_info.status.stage
+
+                    if current_status in terminal_states:
+                        # Job finished, no need to retry
+                        print(f"\tJob reached terminal state: {current_status}")
+                        break
+
+                    # Job still running, retry connection
+                    print(
+                        f"\tConnection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                except (ConnectionError, TimeoutError, OSError):
+                    # Can't even check job status, wait and retry
+                    print(f"\tConnection error, retrying in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+        # Fetch final job status
         job_info = await _async_call(
             self.api.inspect_job, job_id=job_id, namespace=namespace
         )
