@@ -174,11 +174,8 @@ async def event_listener(
                             python_version = arguments.get("python")
                             script_args = arguments.get("script_args", [])
 
-                            # Show script (truncate if too long)
-                            script_display = (
-                                script if len(script) < 200 else script[:200] + "..."
-                            )
-                            print(f"Script: {script_display}")
+                            # Show full script
+                            print(f"Script:\n{script}")
                             if dependencies:
                                 print(f"Dependencies: {', '.join(dependencies)}")
                             if python_version:
