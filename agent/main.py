@@ -124,7 +124,7 @@ async def event_listener(
             elif event.event_type == "shutdown":
                 break
             elif event.event_type == "processing":
-                print("Processing...", flush=True)
+                pass  # print("Processing...", flush=True)
             elif event.event_type == "compacted":
                 old_tokens = event.data.get("old_tokens", 0) if event.data else 0
                 new_tokens = event.data.get("new_tokens", 0) if event.data else 0
@@ -351,7 +351,9 @@ async def event_listener(
 
 async def get_user_input(prompt_session: PromptSession) -> str:
     """Get user input asynchronously"""
-    return await prompt_session.prompt_async("You: ")
+    from prompt_toolkit.formatted_text import HTML
+
+    return await prompt_session.prompt_async(HTML("\n<b><cyan>></cyan></b> "))
 
 
 async def main():
@@ -451,7 +453,7 @@ async def main():
                     op_type=OpType.USER_INPUT, data={"text": user_input}
                 ),
             )
-            print(f"Main submitting: {submission.operation.op_type}")
+            # print(f"Main submitting: {submission.operation.op_type}")
             await submission_queue.put(submission)
 
     except KeyboardInterrupt:
