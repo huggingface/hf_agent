@@ -22,6 +22,7 @@ class Config(BaseModel):
     save_sessions: bool = True
     session_dataset_repo: str = "smolagents/hf-agent-sessions"
     auto_save_interval: int = 3  # Save every N user turns (0 = disabled)
+    yolo_mode: bool = False  # Auto-approve all tool calls without confirmation
 
 
 def substitute_env_vars(obj: Any) -> Any:
