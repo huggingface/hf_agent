@@ -78,7 +78,6 @@ async def event_listener(
     """Background task that listens for events and displays them"""
     submission_id = [1000]  # Use list to make it mutable in closure
     last_tool_name = [None]  # Track last tool called
-    yolo_mode = [False]  # Track yolo mode state
 
     while True:
         try:
@@ -135,7 +134,7 @@ async def event_listener(
                 count = event.data.get("count", 0) if event.data else 0
 
                 # If yolo mode is active, auto-approve everything
-                if yolo_mode[0]:
+                if config and config.yolo_mode:
                     approvals = [
                         {
                             "tool_call_id": t.get("tool_call_id", ""),
@@ -297,7 +296,7 @@ async def event_listener(
 
                     # Handle yolo mode activation
                     if response == "yolo":
-                        yolo_mode[0] = True
+                        config.yolo_mode = True
                         print(
                             "⚡ YOLO MODE ACTIVATED - Auto-approving all future tool calls"
                         )
