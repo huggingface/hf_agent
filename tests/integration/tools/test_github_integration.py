@@ -88,9 +88,9 @@ class TestListHuggingFaceRepos:
         Should find major repos: transformers, datasets, trl.
         """
         result = list_repos(
-            org="huggingface",
-            sort_by="stars",
-            max_results=20,
+            owner="huggingface",
+            sort="stars",
+            limit=20,
         )
 
         assert not result.get("isError", False), f"List failed: {result['formatted']}"

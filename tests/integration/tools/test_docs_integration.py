@@ -58,7 +58,7 @@ class TestExploreVariousEndpoints:
         """Explore transformers documentation."""
         result, success = await explore_hf_docs_handler({"endpoint": "transformers"})
 
-        assert success
+        assert success, f"Explore failed: {result}"
         # Should find key pages
         assert any(term in result.lower() for term in ["trainer", "model", "tokenizer"])
 
@@ -67,5 +67,5 @@ class TestExploreVariousEndpoints:
         """Explore datasets documentation."""
         result, success = await explore_hf_docs_handler({"endpoint": "datasets"})
 
-        assert success
+        assert success, f"Explore failed: {result}"
         assert "dataset" in result.lower()

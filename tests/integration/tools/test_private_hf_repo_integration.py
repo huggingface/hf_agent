@@ -26,9 +26,18 @@ def repo_tool():
 
 
 @pytest.fixture
-def test_repo_id():
-    """Generate unique test repo ID."""
-    return f"test-integration-{uuid.uuid4().hex[:8]}"
+def hf_namespace():
+    """Get the authenticated user's namespace."""
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=os.environ.get("HF_TOKEN"))
+    return api.whoami()["name"]
+
+
+@pytest.fixture
+def test_repo_id(hf_namespace):
+    """Generate unique test repo ID with full namespace."""
+    return f"{hf_namespace}/test-integration-{uuid.uuid4().hex[:8]}"
 
 
 class TestCreateListReadCleanup:
@@ -64,7 +73,7 @@ class TestCreateListReadCleanup:
                 or "exists" in create_result["formatted"].lower()
             )
 
-            # Step 2: Upload file
+            # Step 2: Upload file (with create_if_missing for robustness)
             test_content = "# Test File\n\nprint('hello from integration test')"
             upload_result = await repo_tool.execute(
                 {
@@ -75,6 +84,7 @@ class TestCreateListReadCleanup:
                         "repo_id": test_repo_id,
                         "repo_type": "dataset",
                         "commit_message": "Integration test upload",
+                        "create_if_missing": True,
                     },
                 }
             )
