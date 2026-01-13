@@ -37,7 +37,13 @@ eval = [
 # Development and testing dependencies
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.24.0",
+    "responses>=0.25.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 # All dependencies (agent + eval + dev)
 all = [

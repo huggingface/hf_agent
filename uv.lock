@@ -920,24 +920,10 @@ agent = [
     { name = "requests" },
     { name = "thefuzz" },
 ]
-all = [
-    { name = "datasets" },
-    { name = "fastmcp" },
-    { name = "huggingface-hub" },
-    { name = "inspect-ai" },
-    { name = "litellm" },
-    { name = "lmnr" },
-    { name = "nbconvert" },
-    { name = "nbformat" },
-    { name = "pandas" },
-    { name = "prompt-toolkit" },
-    { name = "pytest" },
-    { name = "requests" },
-    { name = "tenacity" },
-    { name = "thefuzz" },
-]
 dev = [
     { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "responses" },
 ]
 eval = [
     { name = "datasets" },
@@ -952,7 +938,6 @@ requires-dist = [
     { name = "datasets", marker = "extra == 'agent'", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=4.3.0" },
     { name = "fastmcp", marker = "extra == 'agent'", specifier = ">=2.4.0" },
-    { name = "hf-agent", extras = ["agent", "eval", "dev"], marker = "extra == 'all'" },
     { name = "huggingface-hub", marker = "extra == 'agent'", specifier = ">=1.0.1" },
     { name = "inspect-ai", marker = "extra == 'eval'", specifier = ">=0.3.149" },
     { name = "litellm", marker = "extra == 'agent'", specifier = ">=1.0.0" },
@@ -963,12 +948,14 @@ requires-dist = [
     { name = "prompt-toolkit", marker = "extra == 'agent'", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.12.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", marker = "extra == 'agent'", specifier = ">=2.32.5" },
+    { name = "responses", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "tenacity", marker = "extra == 'eval'", specifier = ">=8.0.0" },
     { name = "thefuzz", marker = "extra == 'agent'", specifier = ">=0.22.1" },
 ]
-provides-extras = ["agent", "eval", "dev", "all"]
+provides-extras = ["agent", "eval", "dev"]
 
 [[package]]
 name = "hf-xet"
@@ -2729,6 +2716,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-asyncio"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/2c/8af215c0f776415f3590cac4f9086ccefd6fd463befeae41cd4d3f193e5a/pytest_asyncio-1.3.0.tar.gz", hash = "sha256:d7f52f36d231b80ee124cd216ffb19369aa168fc10095013c6b014a34d3ee9e5", size = 50087, upload-time = "2025-11-10T16:07:47.256Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/35/f8b19922b6a25bc0880171a2f1a003eaeb93657475193ab516fd87cac9da/pytest_asyncio-1.3.0-py3-none-any.whl", hash = "sha256:611e26147c7f77640e6d0a92a38ed17c3e9848063698d5c93d5aa7aa11cebff5", size = 15075, upload-time = "2025-11-10T16:07:45.537Z" },
+]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -3049,6 +3049,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c9/74/b3ff8e6c8446842c3f5c837e9c3dfcfe2018ea6ecef224c710c85ef728f4/requests-2.32.5.tar.gz", hash = "sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf", size = 134517, upload-time = "2025-08-18T20:46:02.573Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl", hash = "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6", size = 64738, upload-time = "2025-08-18T20:46:00.542Z" },
+]
+
+[[package]]
+name = "responses"
+version = "0.25.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/95/89c054ad70bfef6da605338b009b2e283485835351a9935c7bfbfaca7ffc/responses-0.25.8.tar.gz", hash = "sha256:9374d047a575c8f781b94454db5cab590b6029505f488d12899ddb10a4af1cf4", size = 79320, upload-time = "2025-08-08T19:01:46.709Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/4c/cc276ce57e572c102d9542d383b2cfd551276581dc60004cb94fe8774c11/responses-0.25.8-py3-none-any.whl", hash = "sha256:0c710af92def29c8352ceadff0c3fe340ace27cf5af1bbe46fb71275bcd2831c", size = 34769, upload-time = "2025-08-08T19:01:45.018Z" },
 ]
 
 [[package]]
