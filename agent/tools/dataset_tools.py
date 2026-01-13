@@ -289,40 +289,35 @@ def _format_messages_structure(messages_data: Any) -> str | None:
     # Show example message structure
     # Priority: 1) message with tool_calls, 2) first assistant message, 3) first non-system message
     example = None
+    fallback = None
     for msg in messages_data:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role", "")
-        if "tool_calls" in msg or "function_call" in msg:
+        # Check for actual tool_calls/function_call values (not None)
+        if msg.get("tool_calls") or msg.get("function_call"):
             example = msg
             break
         if role == "assistant" and example is None:
             example = msg
-        if role != "system" and example is None:
-            example = msg
+        elif role != "system" and fallback is None:
+            fallback = msg
+    if example is None:
+        example = fallback
 
     if example:
         lines.append("")
         lines.append("**Example message structure:**")
+        # Build a copy with truncated content but keep all keys
+        example_clean = {}
         for key, val in example.items():
-            if key == "content":
-                val_preview = (
-                    str(val)[:100] + "..." if len(str(val)) > 100 else str(val)
-                )
-                lines.append(f"  - {key}: {val_preview}")
-            elif key == "tool_calls" and isinstance(val, list) and val:
-                lines.append(f"  - {key}: [{len(val)} tool call(s)]")
-                # Show first tool call structure
-                if isinstance(val[0], dict):
-                    tc = val[0]
-                    lines.append(f"    - type: {tc.get('type', 'function')}")
-                    if "function" in tc:
-                        lines.append(
-                            f"    - function.name: {tc['function'].get('name', '?')}"
-                        )
-                        lines.append("    - function.arguments: <json string>")
+            if key == "content" and isinstance(val, str) and len(val) > 100:
+                example_clean[key] = val[:100] + "..."
             else:
-                lines.append(f"  - {key}: {val}")
+                example_clean[key] = val
+        lines.append("```json")
+        lines.append(json.dumps(example_clean, indent=2, ensure_ascii=False))
+        lines.append("```")
 
     return "\n".join(lines)
 
