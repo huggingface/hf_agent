@@ -37,13 +37,12 @@ from agent.tools.github_read_file import (
 )
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
-from agent.tools.private_hf_repo_tools import (
-    PRIVATE_HF_REPO_TOOL_SPEC,
-    private_hf_repo_handler,
-)
 
-# NOTE: Utils tool disabled - date/time now loaded into system prompt at initialization
-# from agent.tools.utils_tools import UTILS_TOOL_SPEC, utils_handler
+# NOTE: Private HF repo tool disabled - system prompt handles pushing to hub pretty well now
+# from agent.tools.private_hf_repo_tools import (
+#     PRIVATE_HF_REPO_TOOL_SPEC,
+#     private_hf_repo_handler,
+# )
 
 # Suppress aiohttp deprecation warning
 warnings.filterwarnings(
@@ -281,20 +280,15 @@ def create_builtin_tools() -> list[ToolSpec]:
             parameters=HF_JOBS_TOOL_SPEC["parameters"],
             handler=hf_jobs_handler,
         ),
-        ToolSpec(
-            name=PRIVATE_HF_REPO_TOOL_SPEC["name"],
-            description=PRIVATE_HF_REPO_TOOL_SPEC["description"],
-            parameters=PRIVATE_HF_REPO_TOOL_SPEC["parameters"],
-            handler=private_hf_repo_handler,
-        ),
-        # NOTE: Utils tool disabled - date/time now loaded into system prompt at initialization (less tool calls=more reliablity)
+        # NOTE: Private HF repo tool disabled - system prompt now reliably instructs agent to push to hub
         # ToolSpec(
-        #     name=UTILS_TOOL_SPEC["name"],
-        #     description=UTILS_TOOL_SPEC["description"],
-        #     parameters=UTILS_TOOL_SPEC["parameters"],
-        #     handler=utils_handler,
+        #     name=PRIVATE_HF_REPO_TOOL_SPEC["name"],
+        #     description=PRIVATE_HF_REPO_TOOL_SPEC["description"],
+        #     parameters=PRIVATE_HF_REPO_TOOL_SPEC["parameters"],
+        #     handler=private_hf_repo_handler,
         # ),
-        # GitHub tools
+
+
         # NOTE: Github search code tool disabled - a bit buggy
         # ToolSpec(
         #     name=GITHUB_SEARCH_CODE_TOOL_SPEC["name"],
