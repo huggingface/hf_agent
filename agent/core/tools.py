@@ -13,6 +13,10 @@ from lmnr import observe
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
+from agent.tools.dataset_tools import (
+    HF_INSPECT_DATASET_TOOL_SPEC,
+    hf_inspect_dataset_handler,
+)
 from agent.tools.docs_tools import (
     EXPLORE_HF_DOCS_TOOL_SPEC,
     HF_DOCS_FETCH_TOOL_SPEC,
@@ -256,6 +260,13 @@ def create_builtin_tools() -> list[ToolSpec]:
             description=HF_DOCS_FETCH_TOOL_SPEC["description"],
             parameters=HF_DOCS_FETCH_TOOL_SPEC["parameters"],
             handler=hf_docs_fetch_handler,
+        ),
+        # Dataset inspection tool (unified)
+        ToolSpec(
+            name=HF_INSPECT_DATASET_TOOL_SPEC["name"],
+            description=HF_INSPECT_DATASET_TOOL_SPEC["description"],
+            parameters=HF_INSPECT_DATASET_TOOL_SPEC["parameters"],
+            handler=hf_inspect_dataset_handler,
         ),
         # Planning and job management tools
         ToolSpec(
