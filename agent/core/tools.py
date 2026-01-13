@@ -287,7 +287,8 @@ def create_builtin_tools() -> list[ToolSpec]:
         #     parameters=PRIVATE_HF_REPO_TOOL_SPEC["parameters"],
         #     handler=private_hf_repo_handler,
         # ),
-        # GitHub tools
+
+
         # NOTE: Github search code tool disabled - a bit buggy
         # ToolSpec(
         #     name=GITHUB_SEARCH_CODE_TOOL_SPEC["name"],
