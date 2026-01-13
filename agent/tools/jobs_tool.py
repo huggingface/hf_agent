@@ -11,6 +11,7 @@ import os
 import re
 from typing import Any, Dict, Literal, Optional
 
+import httpx
 from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
 
@@ -373,7 +374,11 @@ class HfJobsTool:
             except (
                 ConnectionError,
                 TimeoutError,
+                OSError,
                 http.client.IncompleteRead,
+                httpx.RemoteProtocolError,
+                httpx.ReadError,
+                HfHubHTTPError,
             ) as e:
                 # Connection dropped - check if job is still running
                 try:
