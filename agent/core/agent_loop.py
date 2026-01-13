@@ -55,8 +55,8 @@ def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = Non
             return False
         
         # Check if this is a CPU-only job
-        args = tool_args.get("args", {})
-        hardware_flavor = args.get("flavor") or args.get("hardware") or args.get("hardware_flavor") or "cpu-basic"
+        # hardware_flavor is at top level of tool_args, not nested in args
+        hardware_flavor = tool_args.get("hardware_flavor") or tool_args.get("flavor") or tool_args.get("hardware") or "cpu-basic"
         is_cpu_job = hardware_flavor in CPU_FLAVORS
         
         if is_cpu_job:
