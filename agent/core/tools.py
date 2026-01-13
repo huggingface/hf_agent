@@ -14,10 +14,8 @@ from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from agent.config import MCPServerConfig
 from agent.tools.dataset_tools import (
-    DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC,
-    DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC,
-    hf_datasets_download_rows_handler,
-    hf_datasets_list_splits_handler,
+    HF_INSPECT_DATASET_TOOL_SPEC,
+    hf_inspect_dataset_handler,
 )
 from agent.tools.docs_tools import (
     EXPLORE_HF_DOCS_TOOL_SPEC,
@@ -263,18 +261,12 @@ def create_builtin_tools() -> list[ToolSpec]:
             parameters=HF_DOCS_FETCH_TOOL_SPEC["parameters"],
             handler=hf_docs_fetch_handler,
         ),
-        # Datasets server tools
+        # Dataset inspection tool (unified)
         ToolSpec(
-            name=DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC["name"],
-            description=DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC["description"],
-            parameters=DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC["parameters"],
-            handler=hf_datasets_list_splits_handler,
-        ),
-        ToolSpec(
-            name=DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC["name"],
-            description=DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC["description"],
-            parameters=DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC["parameters"],
-            handler=hf_datasets_download_rows_handler,
+            name=HF_INSPECT_DATASET_TOOL_SPEC["name"],
+            description=HF_INSPECT_DATASET_TOOL_SPEC["description"],
+            parameters=HF_INSPECT_DATASET_TOOL_SPEC["parameters"],
+            handler=hf_inspect_dataset_handler,
         ),
         # Planning and job management tools
         ToolSpec(
