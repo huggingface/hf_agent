@@ -1,290 +1,397 @@
 """
-Hugging Face Dataset Tool - Query datasets via the Datasets Server API
+Dataset Inspection Tool - Comprehensive dataset analysis in one call
 
-Allows downloading rows and listing splits from Hugging Face datasets.
+Combines /is-valid, /splits, /info, /first-rows, and /parquet endpoints
+to provide everything needed for ML tasks in a single tool call.
 """
 
-from typing import Any, Dict
+import asyncio
+import os
+from typing import Any
 
 import httpx
 
 from agent.tools.types import ToolResult
 
-
-def list_splits(dataset: str) -> ToolResult:
-    """
-    List all available splits for a dataset.
-    
-    Args:
-        dataset: Dataset identifier (e.g., "facebook/research-plan-gen")
-    
-    Returns:
-        ToolResult with split information
-    """
-    base_url = "https://datasets-server.huggingface.co"
-    url = f"{base_url}/splits"
-    
-    params = {"dataset": dataset}
-    
-    try:
-        response = httpx.get(url, params=params, timeout=15.0)
-        response.raise_for_status()
-        data = response.json()
-        
-        splits = data.get("splits", [])
-        if not splits:
-            return {
-                "formatted": f"No splits found for dataset '{dataset}'",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": False,
-            }
-        
-        # Format splits information
-        split_info = []
-        for split in splits:
-            split_name = split.get("split", "unknown")
-            num_rows = split.get("num_examples", "unknown")
-            split_info.append(f"- **{split_name}**: {num_rows} rows")
-        
-        formatted = f"Available splits for dataset '{dataset}':\n\n" + "\n".join(split_info)
-        
-        return {
-            "formatted": formatted,
-            "totalResults": len(splits),
-            "resultsShared": len(splits),
-            "isError": False,
-        }
-    
-    except httpx.HTTPStatusError as e:
-        return {
-            "formatted": f"HTTP error {e.response.status_code}: {str(e)}",
-            "totalResults": 0,
-            "resultsShared": 0,
-            "isError": True,
-        }
-    except Exception as e:
-        return {
-            "formatted": f"Failed to list splits: {str(e)}",
-            "totalResults": 0,
-            "resultsShared": 0,
-            "isError": True,
-        }
+BASE_URL = "https://datasets-server.huggingface.co"
 
 
-def download_rows(
+def _get_headers() -> dict:
+    """Get auth headers for private/gated datasets"""
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
+async def inspect_dataset(
     dataset: str,
-    split: str,
     config: str | None = None,
-    offset: int = 0,
-    length: int = 5,
+    split: str | None = None,
+    sample_rows: int = 3,
 ) -> ToolResult:
     """
-    Download rows from a dataset split.
-    
-    Args:
-        dataset: Dataset identifier (e.g., "facebook/research-plan-gen")
-        split: Split name (e.g., "train", "test", "validation")
-        config: Optional config name (for datasets with multiple configs)
-        offset: Starting row index (default: 0)
-        length: Number of rows to fetch (default: 5, max recommended: 1000)
-    
-    Returns:
-        ToolResult with row data
+    Get comprehensive dataset info in one call.
+    All API calls made in parallel for speed.
     """
-    base_url = "https://datasets-server.huggingface.co"
-    url = f"{base_url}/rows"
-    
-    params = {
-        "dataset": dataset,
-        "split": split,
-        "offset": offset,
-        "length": length,
+    headers = _get_headers()
+    output_parts = []
+    errors = []
+
+    async with httpx.AsyncClient(timeout=15, headers=headers) as client:
+        # Phase 1: Parallel calls for structure info (no dependencies)
+        is_valid_task = client.get(f"{BASE_URL}/is-valid", params={"dataset": dataset})
+        splits_task = client.get(f"{BASE_URL}/splits", params={"dataset": dataset})
+        parquet_task = client.get(f"{BASE_URL}/parquet", params={"dataset": dataset})
+
+        results = await asyncio.gather(
+            is_valid_task,
+            splits_task,
+            parquet_task,
+            return_exceptions=True,
+        )
+
+        # Process is-valid
+        if not isinstance(results[0], Exception):
+            try:
+                output_parts.append(_format_status(results[0].json()))
+            except Exception as e:
+                errors.append(f"is-valid: {e}")
+
+        # Process splits and auto-detect config/split
+        configs = []
+        if not isinstance(results[1], Exception):
+            try:
+                splits_data = results[1].json()
+                configs = _extract_configs(splits_data)
+                if not config:
+                    config = configs[0]["name"] if configs else "default"
+                if not split:
+                    split = configs[0]["splits"][0] if configs else "train"
+                output_parts.append(_format_structure(configs))
+            except Exception as e:
+                errors.append(f"splits: {e}")
+
+        if not config:
+            config = "default"
+        if not split:
+            split = "train"
+
+        # Process parquet (will be added at the end)
+        parquet_section = None
+        if not isinstance(results[2], Exception):
+            try:
+                parquet_section = _format_parquet_files(results[2].json())
+            except Exception:
+                pass  # Silently skip if no parquet
+
+        # Phase 2: Parallel calls for content (depend on config/split)
+        info_task = client.get(
+            f"{BASE_URL}/info", params={"dataset": dataset, "config": config}
+        )
+        rows_task = client.get(
+            f"{BASE_URL}/first-rows",
+            params={"dataset": dataset, "config": config, "split": split},
+            timeout=30,
+        )
+
+        content_results = await asyncio.gather(
+            info_task,
+            rows_task,
+            return_exceptions=True,
+        )
+
+        # Process info (schema)
+        if not isinstance(content_results[0], Exception):
+            try:
+                output_parts.append(_format_schema(content_results[0].json(), config))
+            except Exception as e:
+                errors.append(f"info: {e}")
+
+        # Process sample rows
+        if not isinstance(content_results[1], Exception):
+            try:
+                output_parts.append(
+                    _format_samples(
+                        content_results[1].json(), config, split, sample_rows
+                    )
+                )
+            except Exception as e:
+                errors.append(f"rows: {e}")
+
+        # Add parquet section at the end if available
+        if parquet_section:
+            output_parts.append(parquet_section)
+
+    # Combine output
+    formatted = f"# {dataset}\n\n" + "\n\n".join(output_parts)
+    if errors:
+        formatted += f"\n\n**Warnings:** {'; '.join(errors)}"
+
+    return {
+        "formatted": formatted,
+        "totalResults": 1,
+        "resultsShared": 1,
+        "isError": len(output_parts) == 0,
     }
-    
-    if config:
-        params["config"] = config
-    
-    try:
-        response = httpx.get(url, params=params, timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
-        
-        rows = data.get("rows", [])
-        features = data.get("features", [])
-        
-        if not rows:
-            return {
-                "formatted": f"No rows found for dataset '{dataset}', split '{split}' at offset {offset}",
-                "totalResults": 0,
-                "resultsShared": 0,
-                "isError": False,
-            }
-        
-        # Format a summary of the rows
-        formatted_parts = [
-            f"Downloaded {len(rows)} rows from dataset '{dataset}'",
-            f"Split: {split}",
-            f"Offset: {offset}",
-        ]
-        
-        if config:
-            formatted_parts.append(f"Config: {config}")
-        
-        formatted_parts.append(f"\nFeatures: {', '.join([f.get('name', 'unknown') for f in features])}")
-        formatted_parts.append(f"\nTotal rows in response: {len(rows)}")
-        
-        # Show first row as example
-        if rows:
-            first_row = rows[0].get("row", {})
-            formatted_parts.append(f"\nExample row (first row):")
-            for key, value in list(first_row.items())[:20]:  # Show up to 20 fields
-                value_str = str(value)
-                if len(value_str) > 200:
-                    value_str = value_str[:200] + "..."
-                formatted_parts.append(f"  - {key}: {value_str}")
-        
-        formatted = "\n".join(formatted_parts)
-        
-        return {
-            "formatted": formatted,
-            "totalResults": len(rows),
-            "resultsShared": len(rows),
-            "isError": False,
-        }
-    
-    except httpx.HTTPStatusError as e:
-        return {
-            "formatted": f"HTTP error {e.response.status_code}: {str(e)}",
-            "totalResults": 0,
-            "resultsShared": 0,
-            "isError": True,
-        }
-    except Exception as e:
-        return {
-            "formatted": f"Failed to download rows: {str(e)}",
-            "totalResults": 0,
-            "resultsShared": 0,
-            "isError": True,
-        }
 
 
-# Tool specifications
-DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC = {
-    "name": "hf_datasets_list_splits",
+def _format_status(data: dict) -> str:
+    """Format /is-valid response as status line"""
+    available = [
+        k
+        for k in ["viewer", "preview", "search", "filter", "statistics"]
+        if data.get(k)
+    ]
+    if available:
+        return f"## Status\n✓ Valid ({', '.join(available)})"
+    return "## Status\n✗ Dataset may have issues"
+
+
+def _extract_configs(splits_data: dict) -> list[dict]:
+    """Group splits by config"""
+    configs: dict[str, dict] = {}
+    for s in splits_data.get("splits", []):
+        cfg = s.get("config", "default")
+        if cfg not in configs:
+            configs[cfg] = {"name": cfg, "splits": []}
+        configs[cfg]["splits"].append(s.get("split"))
+    return list(configs.values())
+
+
+def _format_structure(configs: list) -> str:
+    """Format splits as markdown table"""
+    lines = ["## Structure", "| Config | Split |", "|--------|-------|"]
+    for cfg in configs:
+        for split_name in cfg["splits"]:
+            lines.append(f"| {cfg['name']} | {split_name} |")
+    return "\n".join(lines)
+
+
+def _format_schema(info: dict, config: str) -> str:
+    """Extract features and format as table"""
+    features = info.get("dataset_info", {}).get("features", {})
+    lines = [f"## Schema ({config})", "| Column | Type |", "|--------|------|"]
+    for col_name, col_info in features.items():
+        col_type = _get_type_str(col_info)
+        lines.append(f"| {col_name} | {col_type} |")
+    return "\n".join(lines)
+
+
+def _get_type_str(col_info: dict) -> str:
+    """Convert feature info to readable type string"""
+    dtype = col_info.get("dtype") or col_info.get("_type", "unknown")
+    if col_info.get("_type") == "ClassLabel":
+        names = col_info.get("names", [])
+        if names and len(names) <= 5:
+            return f"ClassLabel ({', '.join(f'{n}={i}' for i, n in enumerate(names))})"
+        return f"ClassLabel ({len(names)} classes)"
+    return str(dtype)
+
+
+def _format_samples(rows_data: dict, config: str, split: str, limit: int) -> str:
+    """Format sample rows, truncate long values"""
+    rows = rows_data.get("rows", [])[:limit]
+    lines = [f"## Sample Rows ({config}/{split})"]
+
+    messages_col_data = None
+
+    for i, row_wrapper in enumerate(rows, 1):
+        row = row_wrapper.get("row", {})
+        lines.append(f"**Row {i}:**")
+        for key, val in row.items():
+            # Check for messages column and capture first one for format analysis
+            if key.lower() == "messages" and messages_col_data is None:
+                messages_col_data = val
+
+            val_str = str(val)
+            if len(val_str) > 150:
+                val_str = val_str[:150] + "..."
+            lines.append(f"- {key}: {val_str}")
+
+    # If we found a messages column, add format analysis
+    if messages_col_data is not None:
+        messages_format = _format_messages_structure(messages_col_data)
+        if messages_format:
+            lines.append("")
+            lines.append(messages_format)
+
+    return "\n".join(lines)
+
+
+def _format_messages_structure(messages_data: Any) -> str | None:
+    """
+    Analyze and format the structure of a messages column.
+    Common in chat/instruction datasets.
+    """
+    import json
+
+    # Parse if string
+    if isinstance(messages_data, str):
+        try:
+            messages_data = json.loads(messages_data)
+        except json.JSONDecodeError:
+            return None
+
+    if not isinstance(messages_data, list) or not messages_data:
+        return None
+
+    lines = ["## Messages Column Format"]
+
+    # Analyze message structure
+    roles_seen = set()
+    has_tool_calls = False
+    has_tool_results = False
+    message_keys = set()
+
+    for msg in messages_data:
+        if not isinstance(msg, dict):
+            continue
+
+        message_keys.update(msg.keys())
+
+        role = msg.get("role", "")
+        if role:
+            roles_seen.add(role)
+
+        if "tool_calls" in msg or "function_call" in msg:
+            has_tool_calls = True
+        if role in ("tool", "function") or msg.get("tool_call_id"):
+            has_tool_results = True
+
+    # Format the analysis
+    lines.append(
+        f"**Roles:** {', '.join(sorted(roles_seen)) if roles_seen else 'unknown'}"
+    )
+
+    # Show common message keys with presence indicators
+    common_keys = [
+        "role",
+        "content",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "function_call",
+    ]
+    key_status = []
+    for key in common_keys:
+        if key in message_keys:
+            key_status.append(f"{key} ✓")
+        else:
+            key_status.append(f"{key} ✗")
+    lines.append(f"**Message keys:** {', '.join(key_status)}")
+
+    if has_tool_calls:
+        lines.append("**Tool calls:** ✓ Present")
+    if has_tool_results:
+        lines.append("**Tool results:** ✓ Present")
+
+    # Show example message structure
+    if messages_data and isinstance(messages_data[0], dict):
+        lines.append("")
+        lines.append("**Example message structure:**")
+        example = messages_data[0]
+        for key, val in example.items():
+            if key == "content":
+                val_preview = (
+                    str(val)[:100] + "..." if len(str(val)) > 100 else str(val)
+                )
+                lines.append(f"  - {key}: {val_preview}")
+            elif key == "tool_calls" and isinstance(val, list) and val:
+                lines.append(f"  - {key}: [{len(val)} tool call(s)]")
+                # Show first tool call structure
+                if isinstance(val[0], dict):
+                    tc = val[0]
+                    lines.append(f"    - type: {tc.get('type', 'function')}")
+                    if "function" in tc:
+                        lines.append(
+                            f"    - function.name: {tc['function'].get('name', '?')}"
+                        )
+                        lines.append("    - function.arguments: <json string>")
+            else:
+                lines.append(f"  - {key}: {val}")
+
+    return "\n".join(lines)
+
+
+def _format_parquet_files(data: dict) -> str | None:
+    """Format parquet file info, return None if no files"""
+    files = data.get("parquet_files", [])
+    if not files:
+        return None
+
+    # Group by config/split
+    groups: dict[str, dict] = {}
+    for f in files:
+        key = f"{f.get('config', 'default')}/{f.get('split', 'train')}"
+        if key not in groups:
+            groups[key] = {"count": 0, "size": 0}
+        groups[key]["count"] += 1
+        groups[key]["size"] += f.get("size", 0)
+
+    lines = ["## Files (Parquet)"]
+    for key, info in groups.items():
+        size_mb = info["size"] / (1024 * 1024)
+        lines.append(f"- {key}: {info['count']} file(s) ({size_mb:.1f} MB)")
+    return "\n".join(lines)
+
+
+# Tool specification
+HF_INSPECT_DATASET_TOOL_SPEC = {
+    "name": "hf_inspect_dataset",
     "description": (
-        "List all available splits for a Hugging Face dataset.\n\n"
-        "Use this to discover what splits (train, test, validation, etc.) are available "
-        "for a dataset before downloading rows.\n\n"
-        "## When to use\n"
-        "- When you need to know what splits are available for a dataset\n"
-        "- Before downloading rows to identify the correct split name\n"
-        "- To check dataset structure and organization\n"
-        "- **CRITICAL: Always use this tool BEFORE training/fine-tuning models via hf_jobs** "
-        "to understand the dataset structure and ensure you're using the correct splits\n\n"
-        "## Example\n"
-        "{\n"
-        '  "dataset": "facebook/research-plan-gen"\n'
-        "}"
+        "Inspect a Hugging Face dataset comprehensively in one call.\n\n"
+        "## What you get\n"
+        "- Status check (validates dataset works without errors)\n"
+        "- All configs and splits\n"
+        "- Column names and types (schema)\n"
+        "- Sample rows to understand data format\n"
+        "- Parquet file structure and sizes\n\n"
+        "## CRITICAL\n"
+        "**Always inspect datasets before writing training code** to understand:\n"
+        "- Column names for your dataloader\n"
+        "- Data types and format\n"
+        "- Available splits (train/test/validation)\n\n"
+        "Supports private/gated datasets when HF_TOKEN is set.\n\n"
+        "## Examples\n"
+        '{"dataset": "stanfordnlp/imdb"}\n'
+        '{"dataset": "nyu-mll/glue", "config": "mrpc", "sample_rows": 5}\n'
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "dataset": {
                 "type": "string",
-                "description": "Dataset identifier in format 'org/dataset-name' (e.g., 'facebook/research-plan-gen'). Required.",
+                "description": "Dataset ID in 'org/name' format (e.g., 'stanfordnlp/imdb')",
+            },
+            "config": {
+                "type": "string",
+                "description": "Config/subset name. Auto-detected if not specified.",
+            },
+            "split": {
+                "type": "string",
+                "description": "Split for sample rows. Auto-detected if not specified.",
+            },
+            "sample_rows": {
+                "type": "integer",
+                "description": "Number of sample rows to show (default: 3, max: 10)",
+                "default": 3,
             },
         },
         "required": ["dataset"],
     },
 }
 
-DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC = {
-    "name": "hf_datasets_download_rows",
-    "description": (
-        "Download rows from a Hugging Face dataset split via the Datasets Server API.\n\n"
-        "Fetches a specified number of rows starting from a given offset. Useful for "
-        "sampling data, inspecting dataset contents, or processing datasets in batches.\n\n"
-        "## When to use\n"
-        "- **CRITICAL: Always use this tool BEFORE training/fine-tuning models via hf_jobs** "
-        "to inspect and understand the dataset structure, data format, column names, and data types. "
-        "This helps avoid costly mistakes and ensures proper data preprocessing.\n"
-        "- When you need to inspect or sample data from a dataset\n"
-        "- To understand the data format and structure before writing training scripts\n"
-        "- To verify column names and data types match your expectations\n"
-        "- To download specific rows for analysis or processing\n"
-        "- To fetch data in batches (use offset and length parameters)\n\n"
-        "## When NOT to use\n"
-        "- For downloading entire large datasets (use huggingface_hub or datasets library instead)\n"
-        "- When you need to process all data (use streaming or local download)\n\n"
-        "## Examples\n"
-        "// Inspect first 5 rows to understand dataset structure (recommended before training)\n"
-        "{\n"
-        '  "dataset": "facebook/research-plan-gen",\n'
-        '  "split": "train",\n'
-        '  "config": "arxiv",\n'
-        '  "offset": 0,\n'
-        '  "length": 5\n'
-        "}\n\n"
-        "// Get next batch (rows 5-10)\n"
-        "{\n"
-        '  "dataset": "facebook/research-plan-gen",\n'
-        '  "split": "train",\n'
-        '  "offset": 5,\n'
-        '  "length": 5\n'
-        "}"
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "dataset": {
-                "type": "string",
-                "description": "Dataset identifier in format 'org/dataset-name' (e.g., 'facebook/research-plan-gen'). Required.",
-            },
-            "split": {
-                "type": "string",
-                "description": "Split name (e.g., 'train', 'test', 'validation'). Required.",
-            },
-            "config": {
-                "type": "string",
-                "description": "Config name (only needed for datasets with multiple configs). Optional.",
-            },
-            "offset": {
-                "type": "integer",
-                "description": "Starting row index (default: 0).",
-                "default": 0,
-            },
-            "length": {
-                "type": "integer",
-                "description": "Number of rows to fetch (default: 5, max recommended: 1000). Use small values (1-5) for quick inspection before training.",
-                "default": 5,
-            },
-        },
-        "required": ["dataset", "split"],
-    },
-}
 
-
-async def hf_datasets_list_splits_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
-    """Handler for listing dataset splits"""
+async def hf_inspect_dataset_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
+    """Handler for agent tool router"""
     try:
-        result = list_splits(dataset=arguments["dataset"])
-        return result["formatted"], not result.get("isError", False)
-    except Exception as e:
-        return f"Error: {str(e)}", False
-
-
-async def hf_datasets_download_rows_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
-    """Handler for downloading dataset rows"""
-    try:
-        result = download_rows(
+        result = await inspect_dataset(
             dataset=arguments["dataset"],
-            split=arguments["split"],
             config=arguments.get("config"),
-            offset=arguments.get("offset", 0),
-            length=arguments.get("length", 5),
+            split=arguments.get("split"),
+            sample_rows=min(arguments.get("sample_rows", 3), 10),
         )
         return result["formatted"], not result.get("isError", False)
     except Exception as e:
-        return f"Error: {str(e)}", False
-
+        return f"Error inspecting dataset: {str(e)}", False

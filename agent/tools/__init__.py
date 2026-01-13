@@ -19,10 +19,8 @@ from agent.tools.github_search_code import (
     github_search_code_handler,
 )
 from agent.tools.dataset_tools import (
-    DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC,
-    DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC,
-    hf_datasets_download_rows_handler,
-    hf_datasets_list_splits_handler,
+    HF_INSPECT_DATASET_TOOL_SPEC,
+    hf_inspect_dataset_handler,
 )
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, HfJobsTool, hf_jobs_handler
 from agent.tools.types import ToolResult
@@ -40,8 +38,6 @@ __all__ = [
     "github_read_file_handler",
     "GITHUB_SEARCH_CODE_TOOL_SPEC",
     "github_search_code_handler",
-    "DATASETS_SERVER_LIST_SPLITS_TOOL_SPEC",
-    "hf_datasets_list_splits_handler",
-    "DATASETS_SERVER_DOWNLOAD_ROWS_TOOL_SPEC",
-    "hf_datasets_download_rows_handler",
+    "HF_INSPECT_DATASET_TOOL_SPEC",
+    "hf_inspect_dataset_handler",
 ]
