@@ -287,10 +287,23 @@ def _format_messages_structure(messages_data: Any) -> str | None:
         lines.append("**Tool results:** ✓ Present")
 
     # Show example message structure
-    if messages_data and isinstance(messages_data[0], dict):
+    # Priority: 1) message with tool_calls, 2) first assistant message, 3) first non-system message
+    example = None
+    for msg in messages_data:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        if "tool_calls" in msg or "function_call" in msg:
+            example = msg
+            break
+        if role == "assistant" and example is None:
+            example = msg
+        if role != "system" and example is None:
+            example = msg
+
+    if example:
         lines.append("")
         lines.append("**Example message structure:**")
-        example = messages_data[0]
         for key, val in example.items():
             if key == "content":
                 val_preview = (
