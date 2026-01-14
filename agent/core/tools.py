@@ -301,13 +301,6 @@ def create_builtin_tools() -> list[ToolSpec]:
             parameters=HF_REPO_GIT_TOOL_SPEC["parameters"],
             handler=hf_repo_git_handler,
         ),
-        # NOTE: Github search code tool disabled - a bit buggy
-        # ToolSpec(
-        #     name=GITHUB_SEARCH_CODE_TOOL_SPEC["name"],
-        #     description=GITHUB_SEARCH_CODE_TOOL_SPEC["description"],
-        #     parameters=GITHUB_SEARCH_CODE_TOOL_SPEC["parameters"],
-        #     handler=github_search_code_handler,
-        # ),
         ToolSpec(
             name=GITHUB_FIND_EXAMPLES_TOOL_SPEC["name"],
             description=GITHUB_FIND_EXAMPLES_TOOL_SPEC["description"],
