@@ -35,8 +35,6 @@ from agent.tools.github_read_file import (
     GITHUB_READ_FILE_TOOL_SPEC,
     github_read_file_handler,
 )
-from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
-from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
 from agent.tools.hf_repo_files_tool import (
     HF_REPO_FILES_TOOL_SPEC,
     hf_repo_files_handler,
@@ -45,6 +43,8 @@ from agent.tools.hf_repo_git_tool import (
     HF_REPO_GIT_TOOL_SPEC,
     hf_repo_git_handler,
 )
+from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
+from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
 
 # NOTE: Private HF repo tool disabled - replaced by hf_repo_files and hf_repo_git
 # from agent.tools.private_hf_repo_tools import (
@@ -57,7 +57,7 @@ warnings.filterwarnings(
     "ignore", category=DeprecationWarning, module="aiohttp.connector"
 )
 
-NOT_ALLOWED_TOOL_NAMES = ["hf_jobs", "hf_doc_search", "hf_doc_fetch"]
+NOT_ALLOWED_TOOL_NAMES = ["hf_jobs", "hf_doc_search", "hf_doc_fetch", "hf_whoami"]
 
 
 def convert_mcp_content_to_string(content: list) -> str:
@@ -301,8 +301,6 @@ def create_builtin_tools() -> list[ToolSpec]:
             parameters=HF_REPO_GIT_TOOL_SPEC["parameters"],
             handler=hf_repo_git_handler,
         ),
-
-
         # NOTE: Github search code tool disabled - a bit buggy
         # ToolSpec(
         #     name=GITHUB_SEARCH_CODE_TOOL_SPEC["name"],
