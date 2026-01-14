@@ -169,12 +169,29 @@ def _extract_configs(splits_data: dict) -> list[SplitConfig]:
     return list(configs.values())
 
 
-def _format_structure(configs: list[SplitConfig]) -> str:
+def _format_structure(
+    configs: list[SplitConfig], max_rows: int = 10
+) -> str:
     """Format configs and splits as a markdown table."""
     lines = ["## Structure (configs & splits)", "| Config | Split |", "|--------|-------|"]
+
+    total_splits = sum(len(cfg["splits"]) for cfg in configs)
+    added_rows = 0
+
     for cfg in configs:
         for split_name in cfg["splits"]:
+            if added_rows >= max_rows:
+                break
             lines.append(f"| {cfg['name']} | {split_name} |")
+            added_rows += 1
+        if added_rows >= max_rows:
+            break
+
+    if total_splits > added_rows:
+        lines.append(
+            f"| ... | ... |  (_showing {added_rows} of {total_splits} config/split rows_) |"
+        )
+
     return "\n".join(lines)
 
 
@@ -332,8 +349,12 @@ def _format_messages_structure(messages_data: Any) -> str | None:
     return "\n".join(lines)
 
 
-def _format_parquet_files(data: dict) -> str | None:
-    """Format parquet file info, return None if no files"""
+def _format_parquet_files(data: dict, max_rows: int = 10) -> str | None:
+    """Format parquet file info, return None if no files.
+
+    We cap the number of rendered lines to keep output manageable for
+    datasets with many parquet groups.
+    """
     files = data.get("parquet_files", [])
     if not files:
         return None
@@ -351,9 +372,19 @@ def _format_parquet_files(data: dict) -> str | None:
         groups[key]["size"] += int(size)
 
     lines = ["## Files (Parquet)"]
-    for key, info in groups.items():
+    items = list(groups.items())
+    total_groups = len(items)
+
+    shown = 0
+    for key, info in items[:max_rows]:
         size_mb = info["size"] / (1024 * 1024)
         lines.append(f"- {key}: {info['count']} file(s) ({size_mb:.1f} MB)")
+        shown += 1
+
+    if total_groups > shown:
+        lines.append(
+            f"- ... (_showing {shown} of {total_groups} parquet groups_)"
+        )
     return "\n".join(lines)
 
 

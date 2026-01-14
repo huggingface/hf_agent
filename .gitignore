@@ -16,4 +16,4 @@ wheels/
 /logs
 hf-agent-leaderboard/
 .cursor/
-session_logs/skills/
+session_logs/
