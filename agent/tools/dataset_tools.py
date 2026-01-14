@@ -7,13 +7,23 @@ to provide everything needed for ML tasks in a single tool call.
 
 import asyncio
 import os
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 
 from agent.tools.types import ToolResult
 
 BASE_URL = "https://datasets-server.huggingface.co"
+
+# Truncation limit for long sample values in the output
+MAX_SAMPLE_VALUE_LEN = 150
+
+
+class SplitConfig(TypedDict):
+    """Typed representation of a dataset config and its splits."""
+
+    name: str
+    splits: list[str]
 
 
 def _get_headers() -> dict:
@@ -148,9 +158,9 @@ def _format_status(data: dict) -> str:
     return "## Status\n✗ Dataset may have issues"
 
 
-def _extract_configs(splits_data: dict) -> list[dict]:
+def _extract_configs(splits_data: dict) -> list[SplitConfig]:
     """Group splits by config"""
-    configs: dict[str, dict] = {}
+    configs: dict[str, SplitConfig] = {}
     for s in splits_data.get("splits", []):
         cfg = s.get("config", "default")
         if cfg not in configs:
@@ -159,12 +169,29 @@ def _extract_configs(splits_data: dict) -> list[dict]:
     return list(configs.values())
 
 
-def _format_structure(configs: list) -> str:
-    """Format splits as markdown table"""
-    lines = ["## Structure", "| Config | Split |", "|--------|-------|"]
+def _format_structure(
+    configs: list[SplitConfig], max_rows: int = 10
+) -> str:
+    """Format configs and splits as a markdown table."""
+    lines = ["## Structure (configs & splits)", "| Config | Split |", "|--------|-------|"]
+
+    total_splits = sum(len(cfg["splits"]) for cfg in configs)
+    added_rows = 0
+
     for cfg in configs:
         for split_name in cfg["splits"]:
+            if added_rows >= max_rows:
+                break
             lines.append(f"| {cfg['name']} | {split_name} |")
+            added_rows += 1
+        if added_rows >= max_rows:
+            break
+
+    if total_splits > added_rows:
+        lines.append(
+            f"| ... | ... |  (_showing {added_rows} of {total_splits} config/split rows_) |"
+        )
+
     return "\n".join(lines)
 
 
@@ -205,8 +232,8 @@ def _format_samples(rows_data: dict, config: str, split: str, limit: int) -> str
                 messages_col_data = val
 
             val_str = str(val)
-            if len(val_str) > 150:
-                val_str = val_str[:150] + "..."
+            if len(val_str) > MAX_SAMPLE_VALUE_LEN:
+                val_str = val_str[:MAX_SAMPLE_VALUE_LEN] + "..."
             lines.append(f"- {key}: {val_str}")
 
     # If we found a messages column, add format analysis
@@ -322,8 +349,8 @@ def _format_messages_structure(messages_data: Any) -> str | None:
     return "\n".join(lines)
 
 
-def _format_parquet_files(data: dict) -> str | None:
-    """Format parquet file info, return None if no files"""
+def _format_parquet_files(data: dict, max_rows: int = 10) -> str | None:
+    """Format parquet file info, return None if no files."""
     files = data.get("parquet_files", [])
     if not files:
         return None
@@ -334,13 +361,26 @@ def _format_parquet_files(data: dict) -> str | None:
         key = f"{f.get('config', 'default')}/{f.get('split', 'train')}"
         if key not in groups:
             groups[key] = {"count": 0, "size": 0}
+        size = f.get("size") or 0
+        if not isinstance(size, (int, float)):
+            size = 0
         groups[key]["count"] += 1
-        groups[key]["size"] += f.get("size", 0)
+        groups[key]["size"] += int(size)
 
     lines = ["## Files (Parquet)"]
-    for key, info in groups.items():
+    items = list(groups.items())
+    total_groups = len(items)
+
+    shown = 0
+    for key, info in items[:max_rows]:
         size_mb = info["size"] / (1024 * 1024)
         lines.append(f"- {key}: {info['count']} file(s) ({size_mb:.1f} MB)")
+        shown += 1
+
+    if total_groups > shown:
+        lines.append(
+            f"- ... (_showing {shown} of {total_groups} parquet groups_)"
+        )
     return "\n".join(lines)
 
 
@@ -351,7 +391,7 @@ HF_INSPECT_DATASET_TOOL_SPEC = {
         "Inspect a Hugging Face dataset comprehensively in one call.\n\n"
         "## What you get\n"
         "- Status check (validates dataset works without errors)\n"
-        "- All configs and splits\n"
+        "- All configs and splits (row counts/shares may be '?' when metadata is missing)\n"
         "- Column names and types (schema)\n"
         "- Sample rows to understand data format\n"
         "- Parquet file structure and sizes\n\n"
