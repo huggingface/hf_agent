@@ -9,9 +9,52 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
+from whoosh.analysis import StemmingAnalyzer
+from whoosh.fields import ID, TEXT, Schema
+from whoosh.filedb.filestore import RamStorage
+from whoosh.qparser import MultifieldParser, OrGroup
 
 # Cache for OpenAPI spec to avoid repeated fetches
 _openapi_spec_cache: dict[str, Any] | None = None
+
+# Simple in-memory caches for docs and search indexes
+_DOCS_CACHE: dict[str, list[dict[str, str]]] = {}
+_INDEX_CACHE: dict[str, tuple[Any, MultifieldParser]] = {}
+_CACHE_LOCK = asyncio.Lock()
+
+# Result limiting defaults
+DEFAULT_MAX_RESULTS = 20
+MAX_RESULTS_CAP = 50
+
+# High-level endpoints that bundle related documentation sections
+COMPOSITE_ENDPOINTS: dict[str, list[str]] = {
+    "optimum": [
+        "optimum",
+        "optimum-habana",
+        "optimum-neuron",
+        "optimum-intel",
+        "optimum-executorch",
+        "optimum-tpu",
+    ],
+    "courses": [
+        "llm-course",
+        "robotics-course",
+        "mcp-course",
+        "smol-course",
+        "agents-course",
+        "deep-rl-course",
+        "computer-vision-course",
+        "audio-course",
+        "ml-games-course",
+        "diffusion-course",
+        "ml-for-3d-course",
+        "cookbook",
+    ],
+}
+
+
+def _expand_endpoint(endpoint: str) -> list[str]:
+    return COMPOSITE_ENDPOINTS.get(endpoint, [endpoint])
 
 
 async def _fetch_html_page(hf_token: str, endpoint: str) -> str:
@@ -52,7 +95,7 @@ def _parse_sidebar_navigation(html_content: str) -> list[dict[str, str]]:
 async def _fetch_single_glimpse(
     client: httpx.AsyncClient, hf_token: str, item: dict[str, str]
 ) -> dict[str, str]:
-    """Fetch a glimpse (first 300 chars) for a single page"""
+    """Fetch a short glimpse for a single page"""
     md_url = f"{item['url']}.md"
     headers = {"Authorization": f"Bearer {hf_token}"}
 
@@ -60,9 +103,10 @@ async def _fetch_single_glimpse(
         response = await client.get(md_url, headers=headers)
         response.raise_for_status()
 
-        content = response.text
-        glimpse = content[:300].strip()
-        if len(content) > 300:
+        content = response.text.strip()
+        snippet_length = 200
+        glimpse = content[:snippet_length].strip()
+        if len(content) > snippet_length:
             glimpse += "..."
 
         return {
@@ -70,6 +114,7 @@ async def _fetch_single_glimpse(
             "url": item["url"],
             "md_url": md_url,
             "glimpse": glimpse,
+            "content": content,
         }
     except Exception as e:
         return {
@@ -77,6 +122,7 @@ async def _fetch_single_glimpse(
             "url": item["url"],
             "md_url": md_url,
             "glimpse": f"[Could not fetch glimpse: {str(e)[:50]}]",
+            "content": "",
         }
 
 
@@ -92,39 +138,225 @@ async def _fetch_all_glimpses(
     return list(result_items)
 
 
+async def _load_single_endpoint(hf_token: str, endpoint: str) -> list[dict[str, str]]:
+    """Fetch docs for a single endpoint."""
+    html_content = await _fetch_html_page(hf_token, endpoint)
+    nav_data = _parse_sidebar_navigation(html_content)
+    if not nav_data:
+        raise ValueError(f"No navigation links found for endpoint '{endpoint}'")
+
+    docs = await _fetch_all_glimpses(hf_token, nav_data)
+    for doc in docs:
+        doc["section"] = endpoint
+    return docs
+
+
+async def _get_docs(hf_token: str, endpoint: str) -> list[dict[str, str]]:
+    """Return docs for a single endpoint or expanded composite."""
+    async with _CACHE_LOCK:
+        cached = _DOCS_CACHE.get(endpoint)
+    if cached is not None:
+        return cached
+
+    docs: list[dict[str, str]] = []
+    for member in _expand_endpoint(endpoint):
+        async with _CACHE_LOCK:
+            member_cached = _DOCS_CACHE.get(member)
+        if member_cached is None:
+            member_cached = await _load_single_endpoint(hf_token, member)
+            async with _CACHE_LOCK:
+                _DOCS_CACHE[member] = member_cached
+        docs.extend(member_cached)
+
+    async with _CACHE_LOCK:
+        _DOCS_CACHE[endpoint] = docs
+    return docs
+
+
+async def _ensure_index(
+    endpoint: str, docs: list[dict[str, str]]
+) -> tuple[Any, MultifieldParser]:
+    async with _CACHE_LOCK:
+        cached = _INDEX_CACHE.get(endpoint)
+    if cached is not None:
+        return cached
+
+    analyzer = StemmingAnalyzer()
+    schema = Schema(
+        title=TEXT(stored=True, analyzer=analyzer),
+        url=ID(stored=True, unique=True),
+        md_url=ID(stored=True),
+        section=ID(stored=True),
+        glimpse=TEXT(stored=True, analyzer=analyzer),
+        content=TEXT(stored=False, analyzer=analyzer),
+    )
+    storage = RamStorage()
+    index = storage.create_index(schema)
+    writer = index.writer()
+    for doc in docs:
+        writer.add_document(
+            title=doc.get("title", ""),
+            url=doc.get("url", ""),
+            md_url=doc.get("md_url", ""),
+            section=doc.get("section", endpoint),
+            glimpse=doc.get("glimpse", ""),
+            content=doc.get("content", ""),
+        )
+    writer.commit()
+
+    parser = MultifieldParser(
+        ["title", "content"],
+        schema=schema,
+        fieldboosts={"title": 2.0, "content": 1.0},
+        group=OrGroup,
+    )
+
+    async with _CACHE_LOCK:
+        _INDEX_CACHE[endpoint] = (index, parser)
+    return index, parser
+
+
+async def _search_docs(
+    endpoint: str,
+    docs: list[dict[str, str]],
+    query: str,
+    limit: int | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """
+    Run a Whoosh search over documentation entries.
+
+    Returns (results, fallback_message). If fallback_message is not None, the caller
+    should surface fallback information to the user.
+    """
+    index, parser = await _ensure_index(endpoint, docs)
+
+    try:
+        query_obj = parser.parse(query)
+    except Exception:
+        return (
+            [],
+            "Query contained unsupported syntax; showing default ordering instead.",
+        )
+
+    with index.searcher() as searcher:
+        whoosh_results = searcher.search(query_obj, limit=limit or None)
+        matches: list[dict[str, Any]] = []
+        for hit in whoosh_results:
+            matches.append(
+                {
+                    "title": hit["title"],
+                    "url": hit["url"],
+                    "md_url": hit.get("md_url", ""),
+                    "section": hit.get("section", endpoint),
+                    "glimpse": hit["glimpse"],
+                    "score": round(hit.score, 2),
+                }
+            )
+
+    if not matches:
+        return [], "No strong matches found; showing default ordering instead."
+
+    return matches, None
+
+
 def _format_exploration_results(
-    endpoint: str, result_items: list[dict[str, str]]
+    endpoint: str,
+    result_items: list[dict[str, str]],
+    total_items: int,
+    query: str | None = None,
+    fallback_message: str | None = None,
 ) -> str:
     """Format the exploration results as a readable string"""
     base_url = "https://huggingface.co/docs"
     url = f"{base_url}/{endpoint}"
     result = f"Documentation structure for: {url}\n\n"
-    result += f"Found {len(result_items)} pages:\n\n"
+
+    if query:
+        result += (
+            f"Query: '{query}' → showing {len(result_items)} result(s)"
+            f" out of {total_items} pages"
+        )
+        if fallback_message:
+            result += f" ({fallback_message})"
+        result += "\n\n"
+    else:
+        result += (
+            f"Found {len(result_items)} page(s) (total available: {total_items}).\n\n"
+        )
 
     for i, item in enumerate(result_items, 1):
         result += f"{i}. **{item['title']}**\n"
         result += f"   URL: {item['url']}\n"
+        result += f"   Section: {item.get('section', endpoint)}\n"
+        if query and "score" in item:
+            result += f"   Relevance score: {item['score']:.2f}\n"
         result += f"   Glimpse: {item['glimpse']}\n\n"
 
     return result
 
 
-async def explore_hf_docs(hf_token: str, endpoint: str) -> str:
+async def explore_hf_docs(
+    hf_token: str,
+    endpoint: str,
+    query: str | None = None,
+    max_results: int | None = None,
+) -> str:
     """Main function to explore documentation structure"""
-    # Fetch HTML page
-    html_content = await _fetch_html_page(hf_token, endpoint)
+    cached_items = await _get_docs(hf_token, endpoint)
 
-    # Parse navigation
-    nav_data = _parse_sidebar_navigation(html_content)
+    total_count = len(cached_items)
+    if max_results is None:
+        limit = DEFAULT_MAX_RESULTS
+        limit_note = f"Showing top {DEFAULT_MAX_RESULTS} results (set max_results to adjust)."
+    else:
+        limit = max_results if max_results > 0 else None
+        limit_note = None
+        if limit is None:
+            return "Error: max_results must be greater than zero."
 
-    if not nav_data:
-        raise ValueError(f"No navigation links found for endpoint '{endpoint}'")
+    if limit > MAX_RESULTS_CAP:
+        limit_note = (
+            f"Requested {limit} results but showing top {MAX_RESULTS_CAP} (maximum allowed)."
+        )
+        limit = MAX_RESULTS_CAP
 
-    # Fetch all glimpses in parallel
-    result_items = await _fetch_all_glimpses(hf_token, nav_data)
+    selected_items: list[dict[str, Any]]
+    fallback_message: str | None = None
 
-    # Format results
-    result = _format_exploration_results(endpoint, result_items)
+    if query:
+        search_results, fallback_message = await _search_docs(
+            endpoint,
+            cached_items,
+            query,
+            limit,
+        )
+
+        if search_results:
+            selected_items = search_results
+        else:
+            selected_items = cached_items[:limit] if limit else cached_items
+    else:
+        selected_items = cached_items[:limit] if limit else cached_items
+
+    if not selected_items:
+        return f"No documentation entries available for endpoint '{endpoint}'."
+
+    note = None
+    if fallback_message or limit_note:
+        pieces = []
+        if fallback_message:
+            pieces.append(fallback_message)
+        if limit_note:
+            pieces.append(limit_note)
+        note = "; ".join(pieces)
+
+    result = _format_exploration_results(
+        endpoint,
+        selected_items,
+        total_items=total_count,
+        query=query,
+        fallback_message=note,
+    )
 
     return result
 
@@ -140,6 +372,8 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
         Tuple of (structured_navigation_with_glimpses, success)
     """
     endpoint = arguments.get("endpoint", "")
+    query = arguments.get("query")
+    max_results = arguments.get("max_results")
 
     if not endpoint:
         return "Error: No endpoint provided", False
@@ -153,7 +387,20 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
     endpoint = endpoint.lstrip("/")
 
     try:
-        result = await explore_hf_docs(hf_token, endpoint)
+        try:
+            max_results_int = int(max_results) if max_results is not None else None
+        except (TypeError, ValueError):
+            return "Error: max_results must be an integer", False
+
+        if max_results_int is not None and max_results_int <= 0:
+            return "Error: max_results must be greater than zero", False
+
+        result = await explore_hf_docs(
+            hf_token,
+            endpoint,
+            query=query.strip() if isinstance(query, str) and query.strip() else None,
+            max_results=max_results_int,
+        )
         return result, True
 
     except httpx.HTTPStatusError as e:
@@ -509,7 +756,7 @@ async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
 EXPLORE_HF_DOCS_TOOL_SPEC = {
     "name": "explore_hf_docs",
     "description": (
-        "Explore Hugging Face documentation structure and discover available pages with 300-character previews. "
+        "Explore Hugging Face documentation structure and discover available pages with 200-character previews. "
         "⚠️ MANDATORY: ALWAYS use this BEFORE implementing any ML task (training, fine-tuning, data processing, inference). "
         "Your training data may be outdated - current documentation is the source of truth. "
         "**Use when:** (1) Starting any implementation task, (2) User asks 'how to' questions, "
@@ -519,6 +766,7 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
         "Returns: Sidebar navigation with titles, URLs, and glimpses of all pages in the selected documentation. "
         "**Then:** Use fetch_hf_docs with specific URLs from results to get full content. "
         "**Critical for reliability:** Never implement based on internal knowledge without checking current docs first - APIs change frequently."
+        " By default returns the top 20 results; set max_results (max 50) to adjust."
     ),
     "parameters": {
         "type": "object",
@@ -541,19 +789,8 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "peft",
                     "accelerate",
                     "optimum",
-                    "optimum-habana",
-                    "optimum-neuron",
-                    "optimum-intel",
-                    "optimum-executorch",
-                    "optimum-tpu",
                     "tokenizers",
-                    "llm-course",
-                    "robotics-course",
-                    "mcp-course",
-                    "smol-course",
-                    "agents-course",
-                    "deep-rl-course",
-                    "computer-vision-course",
+                    "courses",
                     "evaluate",
                     "tasks",
                     "dataset-viewer",
@@ -564,16 +801,11 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "safetensors",
                     "tgi",
                     "setfit",
-                    "audio-course",
                     "lerobot",
                     "autotrain",
                     "tei",
                     "bitsandbytes",
-                    "cookbook",
                     "sentence_transformers",
-                    "ml-games-course",
-                    "diffusion-course",
-                    "ml-for-3d-course",
                     "chat-ui",
                     "leaderboards",
                     "lighteval",
@@ -585,6 +817,7 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                 ],
                 "description": (
                     "The documentation endpoint to explore. Each endpoint corresponds to a major section of the Hugging Face documentation:\n\n"
+                    "• courses — All Hugging Face courses (LLM, robotics, MCP, smol (llm training), agents, deep RL, computer vision, games, diffusion, 3D, audio) and the cookbook recipes. Probably the best place for examples.\n"
                     "• hub — Find answers to questions about models/datasets/spaces, auth, versioning, metadata.\n"
                     "• transformers — Core model library: architectures, configs, tokenizers, training & inference APIs.\n"
                     "• diffusers — Diffusion pipelines, schedulers, fine-tuning, training, and deployment patterns.\n"
@@ -599,20 +832,8 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• inference-endpoints — Managed, scalable model deployments on HF infrastructure.\n"
                     "• peft — Parameter-efficient fine-tuning methods (LoRA, adapters, etc.).\n"
                     "• accelerate — Hardware-agnostic, distributed and mixed-precision training orchestration.\n"
-                    "• optimum — Hardware-aware optimization and model export tooling.\n"
-                    "• optimum-habana — Training and inference on Habana Gaudi accelerators.\n"
-                    "• optimum-neuron — Optimization workflows for AWS Inferentia/Trainium.\n"
-                    "• optimum-intel — Intel CPU/GPU optimizations (OpenVINO, IPEX).\n"
-                    "• optimum-executorch — Exporting models to ExecuTorch for edge/mobile.\n"
-                    "• optimum-tpu — TPU-specific training and optimization paths.\n"
+                    "• optimum — Hardware-aware optimization and model export tooling, including Habana, Neuron, Intel, ExecuTorch, and TPU variants.\n"
                     "• tokenizers — Fast tokenizer internals, training, and low-level APIs.\n"
-                    "• llm-course — End-to-end LLM concepts, training, and deployment.\n"
-                    "• robotics-course — Learning-based robotics foundations.\n"
-                    "• mcp-course — Model Context Protocol concepts and usage.\n"
-                    "• smol-course — Small-model and efficiency-focused workflows.\n"
-                    "• agents-course — Tool-using, planning, and multi-step agent design.\n"
-                    "• deep-rl-course — Deep reinforcement learning foundations.\n"
-                    "• computer-vision-course — Vision models, datasets, and pipelines.\n"
                     "• evaluate — Metrics, evaluation workflows, and training-loop integration.\n"
                     "• tasks — Canonical task definitions and model categorization.\n"
                     "• dataset-viewer — Dataset preview, streaming views, and viewer internals.\n"
@@ -623,16 +844,11 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• safetensors — Safe, fast tensor serialization format.\n"
                     "• tgi — High-throughput text generation server for LLMs.\n"
                     "• setfit — Few-shot text classification via sentence embeddings.\n"
-                    "• audio-course — Speech and audio models, datasets, and tasks.\n"
                     "• lerobot — Robotics datasets, policies, and learning workflows.\n"
                     "• autotrain — No/low-code model training on Hugging Face.\n"
                     "• tei — Optimized inference server for embedding workloads.\n"
                     "• bitsandbytes — Quantization and memory-efficient optimizers.\n"
-                    "• cookbook — Practical, task-oriented recipes across the ecosystem.\n"
                     "• sentence_transformers — Embedding models, training recipes, similarity/search workflows.\n"
-                    "• ml-games-course — Game-based ML and reinforcement learning experiments.\n"
-                    "• diffusion-course — Diffusion model theory and hands-on practice.\n"
-                    "• ml-for-3d-course — 3D representations, models, and learning techniques.\n"
                     "• chat-ui — Reference chat interfaces for LLM deployment.\n"
                     "• leaderboards — Evaluation leaderboards and submission mechanics.\n"
                     "• lighteval — Lightweight, reproducible LLM evaluation framework.\n"
@@ -642,6 +858,21 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• kernels — Lightweight execution environments and notebook-style workflows.\n"
                     "• google-cloud — GCP deployment and serving workflows.\n"
                 ),
+            },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Optional keyword query to rank and filter documentation pages. Fuzzy matching is used "
+                    "against titles, URLs, and glimpses to surface the most relevant content."
+                ),
+            },
+            "max_results": {
+                "type": "integer",
+                "description": (
+                    "Optional cap on number of results to return. Defaults to 20 when omitted and cannot exceed 50."
+                ),
+                "minimum": 1,
+                "maximum": 50,
             },
         },
         "required": ["endpoint"],
