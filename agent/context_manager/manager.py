@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from huggingface_hub import HfApi
 from jinja2 import Template
 from litellm import Message, acompletion
 
@@ -24,7 +25,8 @@ class ContextManager:
         prompt_file_suffix: str = "system_prompt_v2.yaml",
     ):
         self.system_prompt = self._load_system_prompt(
-            tool_specs or [], prompt_file_suffix="system_prompt_v2.yaml"
+            tool_specs or [],
+            prompt_file_suffix="system_prompt_v2.yaml",
         )
         self.max_context = max_context
         self.compact_size = int(max_context * compact_size)
@@ -58,6 +60,7 @@ class ContextManager:
             current_date=current_date,
             current_time=current_time,
             current_timezone=current_timezone,
+            hf_user_info=HfApi().whoami().get("name"),
         )
 
     def add_message(self, message: Message, token_count: int = None) -> None:
