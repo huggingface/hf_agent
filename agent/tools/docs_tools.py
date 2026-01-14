@@ -1,166 +1,374 @@
 """
-Documentation search tools for the HF Agent
-Tools for exploring and fetching HuggingFace documentation and API specifications
+Documentation search tools for exploring HuggingFace and Gradio documentation.
 """
 
 import asyncio
+import json
 import os
 from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
+from whoosh.analysis import StemmingAnalyzer
+from whoosh.fields import ID, TEXT, Schema
+from whoosh.filedb.filestore import RamStorage
+from whoosh.qparser import MultifieldParser, OrGroup
 
-# Cache for OpenAPI spec to avoid repeated fetches
-_openapi_spec_cache: dict[str, Any] | None = None
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_MAX_RESULTS = 20
+MAX_RESULTS_CAP = 50
+
+GRADIO_LLMS_TXT_URL = "https://gradio.app/llms.txt"
+GRADIO_SEARCH_URL = "https://playground-worker.pages.dev/api/prompt"
+
+COMPOSITE_ENDPOINTS: dict[str, list[str]] = {
+    "optimum": [
+        "optimum",
+        "optimum-habana",
+        "optimum-neuron",
+        "optimum-intel",
+        "optimum-executorch",
+        "optimum-tpu",
+    ],
+    "courses": [
+        "llm-course",
+        "robotics-course",
+        "mcp-course",
+        "smol-course",
+        "agents-course",
+        "deep-rl-course",
+        "computer-vision-course",
+        "audio-course",
+        "ml-games-course",
+        "diffusion-course",
+        "ml-for-3d-course",
+        "cookbook",
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# Caches
+# ---------------------------------------------------------------------------
+
+_docs_cache: dict[str, list[dict[str, str]]] = {}
+_index_cache: dict[str, tuple[Any, MultifieldParser]] = {}
+_cache_lock = asyncio.Lock()
+_openapi_cache: dict[str, Any] | None = None
+
+# ---------------------------------------------------------------------------
+# Gradio Documentation
+# ---------------------------------------------------------------------------
 
 
-async def _fetch_html_page(hf_token: str, endpoint: str) -> str:
-    """Fetch the HTML page for a given endpoint"""
-    base_url = "https://huggingface.co/docs"
-    url = f"{base_url}/{endpoint}"
+async def _fetch_gradio_docs(query: str | None = None) -> str:
+    """
+    Fetch Gradio documentation.
+    Without query: Get full documentation from llms.txt
+    With query: Run embedding search on guides/demos for relevant content
+    """
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        if not query:
+            resp = await client.get(GRADIO_LLMS_TXT_URL)
+            resp.raise_for_status()
+            return resp.text
+
+        resp = await client.post(
+            GRADIO_SEARCH_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Origin": "https://gradio-docs-mcp.up.railway.app",
+            },
+            json={
+                "prompt_to_embed": query,
+                "SYSTEM_PROMPT": "$INSERT_GUIDES_DOCS_DEMOS",
+                "FALLBACK_PROMPT": "No results found",
+            },
+        )
+        resp.raise_for_status()
+        return resp.json().get("SYS_PROMPT", "No results found")
+
+
+# ---------------------------------------------------------------------------
+# HF Documentation - Fetching
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_endpoint_docs(hf_token: str, endpoint: str) -> list[dict[str, str]]:
+    """Fetch all docs for an endpoint by parsing sidebar and fetching each page."""
+    url = f"https://huggingface.co/docs/{endpoint}"
     headers = {"Authorization": f"Bearer {hf_token}"}
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        response = await client.get(url, headers=headers)
-        response.raise_for_status()
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
 
-    return response.text
+        soup = BeautifulSoup(resp.text, "html.parser")
+        sidebar = soup.find("nav", class_=lambda x: x and "flex-auto" in x)
+        if not sidebar:
+            raise ValueError(f"Could not find navigation sidebar for '{endpoint}'")
+
+        nav_items = []
+        for link in sidebar.find_all("a", href=True):
+            href = link["href"]
+            page_url = f"https://huggingface.co{href}" if href.startswith("/") else href
+            nav_items.append({"title": link.get_text(strip=True), "url": page_url})
+
+        if not nav_items:
+            raise ValueError(f"No navigation links found for '{endpoint}'")
+
+        async def fetch_page(item: dict[str, str]) -> dict[str, str]:
+            md_url = f"{item['url']}.md"
+            try:
+                r = await client.get(md_url, headers=headers)
+                r.raise_for_status()
+                content = r.text.strip()
+                glimpse = content[:200] + "..." if len(content) > 200 else content
+            except Exception as e:
+                content, glimpse = "", f"[Could not fetch: {str(e)[:50]}]"
+            return {
+                "title": item["title"],
+                "url": item["url"],
+                "md_url": md_url,
+                "glimpse": glimpse,
+                "content": content,
+                "section": endpoint,
+            }
+
+        return list(await asyncio.gather(*[fetch_page(item) for item in nav_items]))
 
 
-def _parse_sidebar_navigation(html_content: str) -> list[dict[str, str]]:
-    """Parse the sidebar navigation and extract all links"""
-    soup = BeautifulSoup(html_content, "html.parser")
-    sidebar = soup.find("nav", class_=lambda x: x and "flex-auto" in x)
+async def _get_docs(hf_token: str, endpoint: str) -> list[dict[str, str]]:
+    """Get docs for endpoint with caching. Expands composite endpoints."""
+    async with _cache_lock:
+        if endpoint in _docs_cache:
+            return _docs_cache[endpoint]
 
-    if not sidebar:
-        raise ValueError("Could not find navigation sidebar")
+    sub_endpoints = COMPOSITE_ENDPOINTS.get(endpoint, [endpoint])
+    all_docs: list[dict[str, str]] = []
 
-    links = sidebar.find_all("a", href=True)
-    nav_data = []
+    for sub in sub_endpoints:
+        async with _cache_lock:
+            if sub in _docs_cache:
+                all_docs.extend(_docs_cache[sub])
+                continue
 
-    for link in links:
-        title = link.get_text(strip=True)
-        href = link["href"]
+        docs = await _fetch_endpoint_docs(hf_token, sub)
+        async with _cache_lock:
+            _docs_cache[sub] = docs
+        all_docs.extend(docs)
 
-        # Make URL absolute
-        page_url = f"https://huggingface.co{href}" if href.startswith("/") else href
-        nav_data.append({"title": title, "url": page_url})
-
-    return nav_data
+    async with _cache_lock:
+        _docs_cache[endpoint] = all_docs
+    return all_docs
 
 
-async def _fetch_single_glimpse(
-    client: httpx.AsyncClient, hf_token: str, item: dict[str, str]
-) -> dict[str, str]:
-    """Fetch a glimpse (first 300 chars) for a single page"""
-    md_url = f"{item['url']}.md"
-    headers = {"Authorization": f"Bearer {hf_token}"}
+# ---------------------------------------------------------------------------
+# HF Documentation - Search
+# ---------------------------------------------------------------------------
+
+
+async def _build_search_index(
+    endpoint: str, docs: list[dict[str, str]]
+) -> tuple[Any, MultifieldParser]:
+    """Build or retrieve cached Whoosh search index."""
+    async with _cache_lock:
+        if endpoint in _index_cache:
+            return _index_cache[endpoint]
+
+    analyzer = StemmingAnalyzer()
+    schema = Schema(
+        title=TEXT(stored=True, analyzer=analyzer),
+        url=ID(stored=True, unique=True),
+        md_url=ID(stored=True),
+        section=ID(stored=True),
+        glimpse=TEXT(stored=True, analyzer=analyzer),
+        content=TEXT(stored=False, analyzer=analyzer),
+    )
+    storage = RamStorage()
+    index = storage.create_index(schema)
+    writer = index.writer()
+    for doc in docs:
+        writer.add_document(
+            title=doc.get("title", ""),
+            url=doc.get("url", ""),
+            md_url=doc.get("md_url", ""),
+            section=doc.get("section", endpoint),
+            glimpse=doc.get("glimpse", ""),
+            content=doc.get("content", ""),
+        )
+    writer.commit()
+
+    parser = MultifieldParser(
+        ["title", "content"],
+        schema=schema,
+        fieldboosts={"title": 2.0, "content": 1.0},
+        group=OrGroup,
+    )
+
+    async with _cache_lock:
+        _index_cache[endpoint] = (index, parser)
+    return index, parser
+
+
+async def _search_docs(
+    endpoint: str, docs: list[dict[str, str]], query: str, limit: int
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Search docs using Whoosh. Returns (results, fallback_message)."""
+    index, parser = await _build_search_index(endpoint, docs)
 
     try:
-        response = await client.get(md_url, headers=headers)
-        response.raise_for_status()
+        query_obj = parser.parse(query)
+    except Exception:
+        return [], "Query contained unsupported syntax; showing default ordering."
 
-        content = response.text
-        glimpse = content[:300].strip()
-        if len(content) > 300:
-            glimpse += "..."
+    with index.searcher() as searcher:
+        results = searcher.search(query_obj, limit=limit)
+        matches = [
+            {
+                "title": hit["title"],
+                "url": hit["url"],
+                "md_url": hit.get("md_url", ""),
+                "section": hit.get("section", endpoint),
+                "glimpse": hit["glimpse"],
+                "score": round(hit.score, 2),
+            }
+            for hit in results
+        ]
 
-        return {
-            "title": item["title"],
-            "url": item["url"],
-            "md_url": md_url,
-            "glimpse": glimpse,
-        }
-    except Exception as e:
-        return {
-            "title": item["title"],
-            "url": item["url"],
-            "md_url": md_url,
-            "glimpse": f"[Could not fetch glimpse: {str(e)[:50]}]",
-        }
-
-
-async def _fetch_all_glimpses(
-    hf_token: str, nav_data: list[dict[str, str]]
-) -> list[dict[str, str]]:
-    """Fetch glimpses for all pages in parallel"""
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        result_items = await asyncio.gather(
-            *[_fetch_single_glimpse(client, hf_token, item) for item in nav_data]
-        )
-
-    return list(result_items)
+    if not matches:
+        return [], "No strong matches found; showing default ordering."
+    return matches, None
 
 
-def _format_exploration_results(
-    endpoint: str, result_items: list[dict[str, str]]
+# ---------------------------------------------------------------------------
+# HF Documentation - Formatting
+# ---------------------------------------------------------------------------
+
+
+def _format_results(
+    endpoint: str,
+    items: list[dict[str, Any]],
+    total: int,
+    query: str | None = None,
+    note: str | None = None,
 ) -> str:
-    """Format the exploration results as a readable string"""
-    base_url = "https://huggingface.co/docs"
-    url = f"{base_url}/{endpoint}"
-    result = f"Documentation structure for: {url}\n\n"
-    result += f"Found {len(result_items)} pages:\n\n"
+    """Format search results as readable text."""
+    base_url = f"https://huggingface.co/docs/{endpoint}"
+    out = f"Documentation structure for: {base_url}\n\n"
 
-    for i, item in enumerate(result_items, 1):
-        result += f"{i}. **{item['title']}**\n"
-        result += f"   URL: {item['url']}\n"
-        result += f"   Glimpse: {item['glimpse']}\n\n"
+    if query:
+        out += f"Query: '{query}' → showing {len(items)} result(s) out of {total} pages"
+        if note:
+            out += f" ({note})"
+        out += "\n\n"
+    else:
+        out += f"Found {len(items)} page(s) (total available: {total}).\n"
+        if note:
+            out += f"({note})\n"
+        out += "\n"
 
-    return result
+    for i, item in enumerate(items, 1):
+        out += f"{i}. **{item['title']}**\n"
+        out += f"   URL: {item['url']}\n"
+        out += f"   Section: {item.get('section', endpoint)}\n"
+        if query and "score" in item:
+            out += f"   Relevance score: {item['score']:.2f}\n"
+        out += f"   Glimpse: {item['glimpse']}\n\n"
+
+    return out
 
 
-async def explore_hf_docs(hf_token: str, endpoint: str) -> str:
-    """Main function to explore documentation structure"""
-    # Fetch HTML page
-    html_content = await _fetch_html_page(hf_token, endpoint)
-
-    # Parse navigation
-    nav_data = _parse_sidebar_navigation(html_content)
-
-    if not nav_data:
-        raise ValueError(f"No navigation links found for endpoint '{endpoint}'")
-
-    # Fetch all glimpses in parallel
-    result_items = await _fetch_all_glimpses(hf_token, nav_data)
-
-    # Format results
-    result = _format_exploration_results(endpoint, result_items)
-
-    return result
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
 
 
 async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
-    """
-    Explore the documentation structure for a given endpoint by parsing the sidebar navigation
-
-    Args:
-        arguments: Dictionary with 'endpoint' parameter (e.g., 'trl', 'transformers', etc.)
-
-    Returns:
-        Tuple of (structured_navigation_with_glimpses, success)
-    """
-    endpoint = arguments.get("endpoint", "")
+    """Explore documentation structure with optional search query."""
+    endpoint = arguments.get("endpoint", "").lstrip("/")
+    query = arguments.get("query")
+    max_results = arguments.get("max_results")
 
     if not endpoint:
         return "Error: No endpoint provided", False
 
-    # Get HF token from environment
-    hf_token = os.environ.get("HF_TOKEN")
+    # Gradio uses its own API
+    if endpoint.lower() == "gradio":
+        try:
+            clean_query = (
+                query.strip() if isinstance(query, str) and query.strip() else None
+            )
+            content = await _fetch_gradio_docs(clean_query)
+            header = "# Gradio Documentation\n\n"
+            if clean_query:
+                header += f"Query: '{clean_query}'\n\n"
+            header += "Source: https://gradio.app/docs\n\n---\n\n"
+            return header + content, True
+        except httpx.HTTPStatusError as e:
+            return f"HTTP error fetching Gradio docs: {e.response.status_code}", False
+        except httpx.RequestError as e:
+            return f"Request error fetching Gradio docs: {str(e)}", False
+        except Exception as e:
+            return f"Error fetching Gradio docs: {str(e)}", False
 
+    # HF docs
+    hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
         return "Error: HF_TOKEN environment variable not set", False
 
-    endpoint = endpoint.lstrip("/")
+    try:
+        max_results_int = int(max_results) if max_results is not None else None
+    except (TypeError, ValueError):
+        return "Error: max_results must be an integer", False
+
+    if max_results_int is not None and max_results_int <= 0:
+        return "Error: max_results must be greater than zero", False
 
     try:
-        result = await explore_hf_docs(hf_token, endpoint)
-        return result, True
+        docs = await _get_docs(hf_token, endpoint)
+        total = len(docs)
+
+        # Determine limit
+        if max_results_int is None:
+            limit = DEFAULT_MAX_RESULTS
+            limit_note = f"Showing top {DEFAULT_MAX_RESULTS} results (set max_results to adjust)."
+        elif max_results_int > MAX_RESULTS_CAP:
+            limit = MAX_RESULTS_CAP
+            limit_note = f"Requested {max_results_int} but showing top {MAX_RESULTS_CAP} (maximum)."
+        else:
+            limit = max_results_int
+            limit_note = None
+
+        # Search or paginate
+        clean_query = (
+            query.strip() if isinstance(query, str) and query.strip() else None
+        )
+        fallback_msg = None
+
+        if clean_query:
+            results, fallback_msg = await _search_docs(
+                endpoint, docs, clean_query, limit
+            )
+            if not results:
+                results = docs[:limit]
+        else:
+            results = docs[:limit]
+
+        # Combine notes
+        notes = []
+        if fallback_msg:
+            notes.append(fallback_msg)
+        if limit_note:
+            notes.append(limit_note)
+        note = "; ".join(notes) if notes else None
+
+        return _format_results(endpoint, results, total, clean_query, note), True
 
     except httpx.HTTPStatusError as e:
-        return (
-            f"HTTP error: {e.response.status_code} - {e.response.text[:200]}",
-            False,
-        )
+        return f"HTTP error: {e.response.status_code} - {e.response.text[:200]}", False
     except httpx.RequestError as e:
         return f"Request error: {str(e)}", False
     except ValueError as e:
@@ -169,330 +377,26 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
         return f"Unexpected error: {str(e)}", False
 
 
-async def _fetch_openapi_spec() -> dict[str, Any]:
-    """Fetch and cache the HuggingFace OpenAPI specification"""
-    global _openapi_spec_cache
-
-    if _openapi_spec_cache is not None:
-        return _openapi_spec_cache
-
-    url = "https://huggingface.co/.well-known/openapi.json"
-
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-
-    spec = response.json()
-    _openapi_spec_cache = spec
-
-    return spec
-
-
-def _extract_all_tags(spec: dict[str, Any]) -> list[str]:
-    """Extract all unique tags from the OpenAPI spec"""
-    tags = set()
-
-    # Get tags from the tags section
-    for tag_obj in spec.get("tags", []):
-        if "name" in tag_obj:
-            tags.add(tag_obj["name"])
-
-    # Also get tags from paths (in case some aren't in the tags section)
-    for path, path_item in spec.get("paths", {}).items():
-        for method, operation in path_item.items():
-            if method in ["get", "post", "put", "delete", "patch", "head", "options"]:
-                for tag in operation.get("tags", []):
-                    tags.add(tag)
-
-    return sorted(list(tags))
-
-
-def _search_openapi_by_tag(spec: dict[str, Any], tag: str) -> list[dict[str, Any]]:
-    """Search for API endpoints with a specific tag"""
-    results = []
-    paths = spec.get("paths", {})
-    servers = spec.get("servers", [])
-    base_url = (
-        servers[0].get("url", "https://huggingface.co")
-        if servers
-        else "https://huggingface.co"
-    )
-
-    for path, path_item in paths.items():
-        for method, operation in path_item.items():
-            if method not in [
-                "get",
-                "post",
-                "put",
-                "delete",
-                "patch",
-                "head",
-                "options",
-            ]:
-                continue
-
-            operation_tags = operation.get("tags", [])
-            if tag in operation_tags:
-                # Extract parameters
-                parameters = operation.get("parameters", [])
-                request_body = operation.get("requestBody", {})
-                responses = operation.get("responses", {})
-
-                results.append(
-                    {
-                        "path": path,
-                        "method": method.upper(),
-                        "operationId": operation.get("operationId", ""),
-                        "summary": operation.get("summary", ""),
-                        "description": operation.get("description", ""),
-                        "parameters": parameters,
-                        "request_body": request_body,
-                        "responses": responses,
-                        "base_url": base_url,
-                    }
-                )
-
-    return results
-
-
-def _generate_curl_example(endpoint: dict[str, Any]) -> str:
-    """Generate a curl command example for an endpoint"""
-    method = endpoint["method"]
-    path = endpoint["path"]
-    base_url = endpoint["base_url"]
-
-    # Build the full URL with example path parameters
-    full_path = path
-    for param in endpoint.get("parameters", []):
-        if param.get("in") == "path" and param.get("required"):
-            param_name = param["name"]
-            example = param.get(
-                "example", param.get("schema", {}).get("example", f"<{param_name}>")
-            )
-            full_path = full_path.replace(f"{{{param_name}}}", str(example))
-
-    curl = f"curl -X {method} \\\n  '{base_url}{full_path}'"
-
-    # Add query parameters if any
-    query_params = [p for p in endpoint.get("parameters", []) if p.get("in") == "query"]
-    if query_params and query_params[0].get("required"):
-        param = query_params[0]
-        example = param.get("example", param.get("schema", {}).get("example", "value"))
-        curl += f"?{param['name']}={example}"
-
-    # Add headers
-    curl += " \\\n  -H 'Authorization: Bearer $HF_TOKEN'"
-
-    # Add request body if applicable
-    if method in ["POST", "PUT", "PATCH"] and endpoint.get("request_body"):
-        content = endpoint["request_body"].get("content", {})
-        if "application/json" in content:
-            curl += " \\\n  -H 'Content-Type: application/json'"
-            schema = content["application/json"].get("schema", {})
-            example = schema.get("example", "{}")
-            if isinstance(example, dict):
-                import json
-
-                example = json.dumps(example, indent=2)
-            curl += f" \\\n  -d '{example}'"
-
-    return curl
-
-
-def _format_parameters(parameters: list[dict[str, Any]]) -> str:
-    """Format parameter information from OpenAPI spec"""
-    if not parameters:
-        return ""
-
-    # Group parameters by type
-    path_params = [p for p in parameters if p.get("in") == "path"]
-    query_params = [p for p in parameters if p.get("in") == "query"]
-    header_params = [p for p in parameters if p.get("in") == "header"]
-
-    output = []
-
-    if path_params:
-        output.append("**Path Parameters:**")
-        for param in path_params:
-            name = param.get("name", "")
-            required = " (required)" if param.get("required") else " (optional)"
-            description = param.get("description", "")
-            param_type = param.get("schema", {}).get("type", "string")
-            example = param.get("example") or param.get("schema", {}).get("example", "")
-
-            output.append(f"- `{name}` ({param_type}){required}: {description}")
-            if example:
-                output.append(f"  Example: `{example}`")
-
-    if query_params:
-        if output:
-            output.append("")
-        output.append("**Query Parameters:**")
-        for param in query_params:
-            name = param.get("name", "")
-            required = " (required)" if param.get("required") else " (optional)"
-            description = param.get("description", "")
-            param_type = param.get("schema", {}).get("type", "string")
-            example = param.get("example") or param.get("schema", {}).get("example", "")
-
-            output.append(f"- `{name}` ({param_type}){required}: {description}")
-            if example:
-                output.append(f"  Example: `{example}`")
-
-    if header_params:
-        if output:
-            output.append("")
-        output.append("**Header Parameters:**")
-        for param in header_params:
-            name = param.get("name", "")
-            required = " (required)" if param.get("required") else " (optional)"
-            description = param.get("description", "")
-
-            output.append(f"- `{name}`{required}: {description}")
-
-    return "\n".join(output)
-
-
-def _format_response_info(responses: dict[str, Any]) -> str:
-    """Format response information from OpenAPI spec"""
-    if not responses:
-        return "No response information available"
-
-    output = []
-    for status_code, response_obj in list(responses.items())[
-        :3
-    ]:  # Show first 3 status codes
-        desc = response_obj.get("description", "")
-        output.append(f"- **{status_code}**: {desc}")
-
-        content = response_obj.get("content", {})
-        if "application/json" in content:
-            schema = content["application/json"].get("schema", {})
-            if "type" in schema:
-                output.append(f"  Returns: {schema.get('type', 'object')}")
-
-    return "\n".join(output)
-
-
-def _format_openapi_results(results: list[dict[str, Any]], tag: str) -> str:
-    """Format OpenAPI search results as markdown with curl examples"""
-    if not results:
-        return f"No API endpoints found with tag '{tag}'"
-
-    output = f"# API Endpoints for tag: `{tag}`\n\n"
-    output += f"Found {len(results)} endpoint(s)\n\n"
-    output += "---\n\n"
-
-    for i, endpoint in enumerate(results, 1):
-        output += f"## {i}. {endpoint['method']} {endpoint['path']}\n\n"
-
-        if endpoint["summary"]:
-            output += f"**Summary:** {endpoint['summary']}\n\n"
-
-        if endpoint["description"]:
-            desc = endpoint["description"][:300]
-            if len(endpoint["description"]) > 300:
-                desc += "..."
-            output += f"**Description:** {desc}\n\n"
-
-        # Parameters
-        params_info = _format_parameters(endpoint.get("parameters", []))
-        if params_info:
-            output += params_info + "\n\n"
-
-        # Curl example
-        output += "**Usage:**\n```bash\n"
-        output += _generate_curl_example(endpoint)
-        output += "\n```\n\n"
-
-        # Response info
-        output += "**Returns:**\n"
-        output += _format_response_info(endpoint["responses"])
-        output += "\n\n"
-
-        output += "---\n\n"
-
-    return output
-
-
-async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
-    """
-    Search the HuggingFace OpenAPI specification by tag
-
-    Args:
-        arguments: Dictionary with 'tag' parameter
-
-    Returns:
-        Tuple of (search_results, success)
-    """
-    tag = arguments.get("tag", "")
-
-    if not tag:
-        return "Error: No tag provided", False
-
-    try:
-        # Fetch OpenAPI spec (cached after first fetch)
-        spec = await _fetch_openapi_spec()
-
-        # Search for endpoints with this tag
-        results = _search_openapi_by_tag(spec, tag)
-
-        # Format results
-        formatted = _format_openapi_results(results, tag)
-
-        return formatted, True
-
-    except httpx.HTTPStatusError as e:
-        return f"HTTP error fetching OpenAPI spec: {e.response.status_code}", False
-    except httpx.RequestError as e:
-        return f"Request error: {str(e)}", False
-    except Exception as e:
-        return f"Error searching OpenAPI spec: {str(e)}", False
-
-
 async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
-    """
-    Fetch full documentation content from a specific HF docs page
-
-    Args:
-        arguments: Dictionary with 'url' parameter (full URL to the doc page)
-
-    Returns:
-        Tuple of (full_markdown_content, success)
-    """
+    """Fetch full markdown content of a documentation page."""
     url = arguments.get("url", "")
-
     if not url:
         return "Error: No URL provided", False
 
-    # Get HF token from environment
     hf_token = os.environ.get("HF_TOKEN")
-
     if not hf_token:
-        return (
-            "Error: HF_TOKEN environment variable not set",
-            False,
-        )
+        return "Error: HF_TOKEN environment variable not set", False
 
-    # Add .md extension if not already present
     if not url.endswith(".md"):
         url = f"{url}.md"
 
     try:
-        # Make request with auth
-        headers = {"Authorization": f"Bearer {hf_token}"}
-
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-
-        content = response.text
-
-        # Return the markdown content directly
-        result = f"Documentation from: {url}\n\n{content}"
-
-        return result, True
-
+            resp = await client.get(
+                url, headers={"Authorization": f"Bearer {hf_token}"}
+            )
+            resp.raise_for_status()
+        return f"Documentation from: {url}\n\n{resp.text}", True
     except httpx.HTTPStatusError as e:
         return (
             f"HTTP error fetching {url}: {e.response.status_code} - {e.response.text[:200]}",
@@ -504,12 +408,304 @@ async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
         return f"Error fetching documentation: {str(e)}", False
 
 
-# Tool specifications for documentation search
+# ---------------------------------------------------------------------------
+# OpenAPI Search
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_openapi_spec() -> dict[str, Any]:
+    """Fetch and cache HuggingFace OpenAPI specification."""
+    global _openapi_cache
+    if _openapi_cache is not None:
+        return _openapi_cache
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        resp = await client.get("https://huggingface.co/.well-known/openapi.json")
+        resp.raise_for_status()
+
+    _openapi_cache = resp.json()
+    return _openapi_cache
+
+
+def _extract_all_tags(spec: dict[str, Any]) -> list[str]:
+    """Extract all unique tags from OpenAPI spec."""
+    tags = set()
+    for tag_obj in spec.get("tags", []):
+        if "name" in tag_obj:
+            tags.add(tag_obj["name"])
+    for path_item in spec.get("paths", {}).values():
+        for method, op in path_item.items():
+            if method in ["get", "post", "put", "delete", "patch", "head", "options"]:
+                for tag in op.get("tags", []):
+                    tags.add(tag)
+    return sorted(tags)
+
+
+def _generate_curl_example(endpoint: dict[str, Any]) -> str:
+    """Generate curl command example for an endpoint."""
+    method = endpoint["method"]
+    path = endpoint["path"]
+    base_url = endpoint["base_url"]
+
+    # Build URL with path parameters
+    full_path = path
+    for param in endpoint.get("parameters", []):
+        if param.get("in") == "path" and param.get("required"):
+            name = param["name"]
+            example = param.get(
+                "example", param.get("schema", {}).get("example", f"<{name}>")
+            )
+            full_path = full_path.replace(f"{{{name}}}", str(example))
+
+    curl = f"curl -X {method} \\\n  '{base_url}{full_path}'"
+
+    # Add query parameters
+    query_params = [p for p in endpoint.get("parameters", []) if p.get("in") == "query"]
+    if query_params and query_params[0].get("required"):
+        param = query_params[0]
+        example = param.get("example", param.get("schema", {}).get("example", "value"))
+        curl += f"?{param['name']}={example}"
+
+    curl += " \\\n  -H 'Authorization: Bearer $HF_TOKEN'"
+
+    # Add request body
+    if method in ["POST", "PUT", "PATCH"] and endpoint.get("request_body"):
+        content = endpoint["request_body"].get("content", {})
+        if "application/json" in content:
+            curl += " \\\n  -H 'Content-Type: application/json'"
+            schema = content["application/json"].get("schema", {})
+            example = schema.get("example", "{}")
+            if isinstance(example, dict):
+                example = json.dumps(example, indent=2)
+            curl += f" \\\n  -d '{example}'"
+
+    return curl
+
+
+def _format_parameters(parameters: list[dict[str, Any]]) -> str:
+    """Format parameter information from OpenAPI spec."""
+    if not parameters:
+        return ""
+
+    path_params = [p for p in parameters if p.get("in") == "path"]
+    query_params = [p for p in parameters if p.get("in") == "query"]
+    header_params = [p for p in parameters if p.get("in") == "header"]
+
+    output = []
+
+    for label, params in [
+        ("Path Parameters", path_params),
+        ("Query Parameters", query_params),
+        ("Header Parameters", header_params),
+    ]:
+        if not params:
+            continue
+        if output:
+            output.append("")
+        output.append(f"**{label}:**")
+        for p in params:
+            name = p.get("name", "")
+            required = " (required)" if p.get("required") else " (optional)"
+            desc = p.get("description", "")
+            ptype = p.get("schema", {}).get("type", "string")
+            example = p.get("example") or p.get("schema", {}).get("example", "")
+
+            output.append(f"- `{name}` ({ptype}){required}: {desc}")
+            if example:
+                output.append(f"  Example: `{example}`")
+
+    return "\n".join(output)
+
+
+def _format_response_info(responses: dict[str, Any]) -> str:
+    """Format response information from OpenAPI spec."""
+    if not responses:
+        return "No response information available"
+
+    output = []
+    for status, resp_obj in list(responses.items())[:3]:
+        desc = resp_obj.get("description", "")
+        output.append(f"- **{status}**: {desc}")
+        content = resp_obj.get("content", {})
+        if "application/json" in content:
+            schema = content["application/json"].get("schema", {})
+            if "type" in schema:
+                output.append(f"  Returns: {schema.get('type', 'object')}")
+
+    return "\n".join(output)
+
+
+def _format_openapi_results(results: list[dict[str, Any]], tag: str) -> str:
+    """Format OpenAPI search results with curl examples."""
+    if not results:
+        return f"No API endpoints found with tag '{tag}'"
+
+    out = f"# API Endpoints for tag: `{tag}`\n\n"
+    out += f"Found {len(results)} endpoint(s)\n\n---\n\n"
+
+    for i, ep in enumerate(results, 1):
+        out += f"## {i}. {ep['method']} {ep['path']}\n\n"
+
+        if ep["summary"]:
+            out += f"**Summary:** {ep['summary']}\n\n"
+
+        if ep["description"]:
+            desc = ep["description"][:300]
+            if len(ep["description"]) > 300:
+                desc += "..."
+            out += f"**Description:** {desc}\n\n"
+
+        params_info = _format_parameters(ep.get("parameters", []))
+        if params_info:
+            out += params_info + "\n\n"
+
+        out += "**Usage:**\n```bash\n"
+        out += _generate_curl_example(ep)
+        out += "\n```\n\n"
+
+        out += "**Returns:**\n"
+        out += _format_response_info(ep["responses"])
+        out += "\n\n---\n\n"
+
+    return out
+
+
+async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
+    """Search HuggingFace OpenAPI specification by tag."""
+    tag = arguments.get("tag", "")
+    if not tag:
+        return "Error: No tag provided", False
+
+    try:
+        spec = await _fetch_openapi_spec()
+        paths = spec.get("paths", {})
+        servers = spec.get("servers", [])
+        base_url = (
+            servers[0].get("url", "https://huggingface.co")
+            if servers
+            else "https://huggingface.co"
+        )
+
+        results = []
+        for path, path_item in paths.items():
+            for method, op in path_item.items():
+                if method not in [
+                    "get",
+                    "post",
+                    "put",
+                    "delete",
+                    "patch",
+                    "head",
+                    "options",
+                ]:
+                    continue
+                if tag not in op.get("tags", []):
+                    continue
+
+                results.append(
+                    {
+                        "path": path,
+                        "method": method.upper(),
+                        "operationId": op.get("operationId", ""),
+                        "summary": op.get("summary", ""),
+                        "description": op.get("description", ""),
+                        "parameters": op.get("parameters", []),
+                        "request_body": op.get("requestBody", {}),
+                        "responses": op.get("responses", {}),
+                        "base_url": base_url,
+                    }
+                )
+
+        return _format_openapi_results(results, tag), True
+
+    except httpx.HTTPStatusError as e:
+        return f"HTTP error fetching OpenAPI spec: {e.response.status_code}", False
+    except httpx.RequestError as e:
+        return f"Request error: {str(e)}", False
+    except Exception as e:
+        return f"Error searching OpenAPI spec: {str(e)}", False
+
+
+async def _get_api_search_tool_spec() -> dict[str, Any]:
+    """Generate OpenAPI tool spec with tags populated at runtime."""
+    spec = await _fetch_openapi_spec()
+    tags = _extract_all_tags(spec)
+
+    return {
+        "name": "search_hf_api_endpoints",
+        "description": (
+            "Search HuggingFace OpenAPI specification by tag to find API endpoints with curl examples. "
+            "**Use when:** (1) Need to interact with HF Hub API directly, (2) Building scripts for repo operations, "
+            "(3) Need authentication patterns, (4) Understanding API parameters and responses, "
+            "(5) Need curl examples for HTTP requests. "
+            "Returns: Endpoint paths, methods, parameters, curl examples with authentication, and response schemas. "
+            "Tags group related operations: repos, models, datasets, inference, spaces, etc."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tag": {
+                    "type": "string",
+                    "enum": tags,
+                    "description": "The API tag to search for. Each tag groups related API endpoints.",
+                },
+            },
+            "required": ["tag"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool Specifications
+# ---------------------------------------------------------------------------
+
+DOC_ENDPOINTS = [
+    "hub",
+    "transformers",
+    "diffusers",
+    "datasets",
+    "gradio",
+    "trackio",
+    "smolagents",
+    "huggingface_hub",
+    "huggingface.js",
+    "transformers.js",
+    "inference-providers",
+    "inference-endpoints",
+    "peft",
+    "accelerate",
+    "optimum",
+    "tokenizers",
+    "courses",
+    "evaluate",
+    "tasks",
+    "dataset-viewer",
+    "trl",
+    "simulate",
+    "sagemaker",
+    "timm",
+    "safetensors",
+    "tgi",
+    "setfit",
+    "lerobot",
+    "autotrain",
+    "tei",
+    "bitsandbytes",
+    "sentence_transformers",
+    "chat-ui",
+    "leaderboards",
+    "lighteval",
+    "argilla",
+    "distilabel",
+    "microsoft-azure",
+    "kernels",
+    "google-cloud",
+]
 
 EXPLORE_HF_DOCS_TOOL_SPEC = {
     "name": "explore_hf_docs",
     "description": (
-        "Explore Hugging Face documentation structure and discover available pages with 300-character previews. "
+        "Explore Hugging Face documentation structure and discover available pages with 200-character previews. "
         "⚠️ MANDATORY: ALWAYS use this BEFORE implementing any ML task (training, fine-tuning, data processing, inference). "
         "Your training data may be outdated - current documentation is the source of truth. "
         "**Use when:** (1) Starting any implementation task, (2) User asks 'how to' questions, "
@@ -519,77 +715,22 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
         "Returns: Sidebar navigation with titles, URLs, and glimpses of all pages in the selected documentation. "
         "**Then:** Use fetch_hf_docs with specific URLs from results to get full content. "
         "**Critical for reliability:** Never implement based on internal knowledge without checking current docs first - APIs change frequently."
+        " By default returns the top 20 results; set max_results (max 50) to adjust."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "endpoint": {
                 "type": "string",
-                "enum": [
-                    "hub",
-                    "transformers",
-                    "diffusers",
-                    "datasets",
-                    "gradio",
-                    "trackio",
-                    "smolagents",
-                    "huggingface_hub",
-                    "huggingface.js",
-                    "transformers.js",
-                    "inference-providers",
-                    "inference-endpoints",
-                    "peft",
-                    "accelerate",
-                    "optimum",
-                    "optimum-habana",
-                    "optimum-neuron",
-                    "optimum-intel",
-                    "optimum-executorch",
-                    "optimum-tpu",
-                    "tokenizers",
-                    "llm-course",
-                    "robotics-course",
-                    "mcp-course",
-                    "smol-course",
-                    "agents-course",
-                    "deep-rl-course",
-                    "computer-vision-course",
-                    "evaluate",
-                    "tasks",
-                    "dataset-viewer",
-                    "trl",
-                    "simulate",
-                    "sagemaker",
-                    "timm",
-                    "safetensors",
-                    "tgi",
-                    "setfit",
-                    "audio-course",
-                    "lerobot",
-                    "autotrain",
-                    "tei",
-                    "bitsandbytes",
-                    "cookbook",
-                    "sentence_transformers",
-                    "ml-games-course",
-                    "diffusion-course",
-                    "ml-for-3d-course",
-                    "chat-ui",
-                    "leaderboards",
-                    "lighteval",
-                    "argilla",
-                    "distilabel",
-                    "microsoft-azure",
-                    "kernels",
-                    "google-cloud",
-                ],
+                "enum": DOC_ENDPOINTS,
                 "description": (
                     "The documentation endpoint to explore. Each endpoint corresponds to a major section of the Hugging Face documentation:\n\n"
+                    "• courses — All Hugging Face courses (LLM, robotics, MCP, smol (llm training), agents, deep RL, computer vision, games, diffusion, 3D, audio) and the cookbook recipes. Probably the best place for examples.\n"
                     "• hub — Find answers to questions about models/datasets/spaces, auth, versioning, metadata.\n"
                     "• transformers — Core model library: architectures, configs, tokenizers, training & inference APIs.\n"
                     "• diffusers — Diffusion pipelines, schedulers, fine-tuning, training, and deployment patterns.\n"
                     "• datasets — Dataset loading, streaming, processing, Arrow format, Hub integration.\n"
-                    "• gradio — UI components and demos for interacting with ML models.\n"
+                    "• gradio — UI components and demos for ML models. Uses Gradio's native API: without query returns full docs (llms.txt), with query uses embedding search for precise results.\n"
                     "• trackio — Experiment tracking, metrics logging, and run comparison.\n"
                     "• smolagents — Lightweight agent abstractions and tool-using patterns.\n"
                     "• huggingface_hub — Python client for Hub operations (auth, upload/download, repo management).\n"
@@ -599,20 +740,8 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• inference-endpoints — Managed, scalable model deployments on HF infrastructure.\n"
                     "• peft — Parameter-efficient fine-tuning methods (LoRA, adapters, etc.).\n"
                     "• accelerate — Hardware-agnostic, distributed and mixed-precision training orchestration.\n"
-                    "• optimum — Hardware-aware optimization and model export tooling.\n"
-                    "• optimum-habana — Training and inference on Habana Gaudi accelerators.\n"
-                    "• optimum-neuron — Optimization workflows for AWS Inferentia/Trainium.\n"
-                    "• optimum-intel — Intel CPU/GPU optimizations (OpenVINO, IPEX).\n"
-                    "• optimum-executorch — Exporting models to ExecuTorch for edge/mobile.\n"
-                    "• optimum-tpu — TPU-specific training and optimization paths.\n"
+                    "• optimum — Hardware-aware optimization and model export tooling, including Habana, Neuron, Intel, ExecuTorch, and TPU variants.\n"
                     "• tokenizers — Fast tokenizer internals, training, and low-level APIs.\n"
-                    "• llm-course — End-to-end LLM concepts, training, and deployment.\n"
-                    "• robotics-course — Learning-based robotics foundations.\n"
-                    "• mcp-course — Model Context Protocol concepts and usage.\n"
-                    "• smol-course — Small-model and efficiency-focused workflows.\n"
-                    "• agents-course — Tool-using, planning, and multi-step agent design.\n"
-                    "• deep-rl-course — Deep reinforcement learning foundations.\n"
-                    "• computer-vision-course — Vision models, datasets, and pipelines.\n"
                     "• evaluate — Metrics, evaluation workflows, and training-loop integration.\n"
                     "• tasks — Canonical task definitions and model categorization.\n"
                     "• dataset-viewer — Dataset preview, streaming views, and viewer internals.\n"
@@ -623,16 +752,11 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• safetensors — Safe, fast tensor serialization format.\n"
                     "• tgi — High-throughput text generation server for LLMs.\n"
                     "• setfit — Few-shot text classification via sentence embeddings.\n"
-                    "• audio-course — Speech and audio models, datasets, and tasks.\n"
                     "• lerobot — Robotics datasets, policies, and learning workflows.\n"
                     "• autotrain — No/low-code model training on Hugging Face.\n"
                     "• tei — Optimized inference server for embedding workloads.\n"
                     "• bitsandbytes — Quantization and memory-efficient optimizers.\n"
-                    "• cookbook — Practical, task-oriented recipes across the ecosystem.\n"
                     "• sentence_transformers — Embedding models, training recipes, similarity/search workflows.\n"
-                    "• ml-games-course — Game-based ML and reinforcement learning experiments.\n"
-                    "• diffusion-course — Diffusion model theory and hands-on practice.\n"
-                    "• ml-for-3d-course — 3D representations, models, and learning techniques.\n"
                     "• chat-ui — Reference chat interfaces for LLM deployment.\n"
                     "• leaderboards — Evaluation leaderboards and submission mechanics.\n"
                     "• lighteval — Lightweight, reproducible LLM evaluation framework.\n"
@@ -642,6 +766,19 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• kernels — Lightweight execution environments and notebook-style workflows.\n"
                     "• google-cloud — GCP deployment and serving workflows.\n"
                 ),
+            },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Optional keyword query to rank and filter documentation pages. "
+                    "For Gradio, use concise queries like 'how to use the image component' or 'audio component demo'."
+                ),
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Max results (default 20, max 50). Ignored for Gradio.",
+                "minimum": 1,
+                "maximum": 50,
             },
         },
         "required": ["endpoint"],
@@ -677,40 +814,3 @@ HF_DOCS_FETCH_TOOL_SPEC = {
         "required": ["url"],
     },
 }
-
-
-async def _get_api_search_tool_spec() -> dict[str, Any]:
-    """
-    Dynamically generate the OpenAPI tool spec with tag enum populated at runtime
-    This must be called async to fetch the OpenAPI spec and extract tags
-    """
-    spec = await _fetch_openapi_spec()
-    tags = _extract_all_tags(spec)
-
-    return {
-        "name": "search_hf_api_endpoints",
-        "description": (
-            "Search HuggingFace OpenAPI specification by tag to find API endpoints with curl examples. "
-            "**Use when:** (1) Need to interact with HF Hub API directly, (2) Building scripts for repo operations, "
-            "(3) Need authentication patterns, (4) Understanding API parameters and responses, "
-            "(5) Need curl examples for HTTP requests. "
-            "Returns: Endpoint paths, methods, parameters, curl examples with authentication, and response schemas. "
-            "**Pattern:** search_hf_api_endpoints (find endpoint) → use curl pattern in implementation. "
-            "Tags group related operations: repos, models, datasets, inference, spaces, etc. "
-            "**Note:** Each result includes curl example with $HF_TOKEN placeholder for authentication. "
-            "**For tool building:** This provides the API foundation for creating Hub interaction scripts."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tag": {
-                    "type": "string",
-                    "enum": tags,
-                    "description": (
-                        "The API tag to search for. Each tag groups related API endpoints. "
-                    ),
-                },
-            },
-            "required": ["tag"],
-        },
-    }

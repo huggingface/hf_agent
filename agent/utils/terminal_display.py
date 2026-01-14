@@ -94,13 +94,18 @@ def format_tool_call(tool_name: str, arguments: str) -> str:
 
 def format_tool_output(output: str, success: bool, truncate: bool = True) -> str:
     """Format tool output with color and optional truncation"""
+    original_length = len(output)
     if truncate:
         output = truncate_to_lines(output, max_lines=6)
 
     if success:
-        return f"{Colors.YELLOW}Tool output:{Colors.RESET}\n{output}"
+        return (
+            f"{Colors.YELLOW}Tool output ({original_length} tkns): {Colors.RESET}\n{output}"
+        )
     else:
-        return f"{Colors.RED}Tool output:{Colors.RESET}\n{output}"
+        return (
+            f"{Colors.RED}Tool output ({original_length} tokens): {Colors.RESET}\n{output}"
+        )
 
 
 def format_turn_complete() -> str:

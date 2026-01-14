@@ -24,6 +24,7 @@ agent = [
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
     "datasets>=4.3.0",  # For session logging to HF datasets
+    "whoosh>=2.7.4",
 ]
 
 # Evaluation/benchmarking dependencies
