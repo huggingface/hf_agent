@@ -350,11 +350,7 @@ def _format_messages_structure(messages_data: Any) -> str | None:
 
 
 def _format_parquet_files(data: dict, max_rows: int = 10) -> str | None:
-    """Format parquet file info, return None if no files.
-
-    We cap the number of rendered lines to keep output manageable for
-    datasets with many parquet groups.
-    """
+    """Format parquet file info, return None if no files."""
     files = data.get("parquet_files", [])
     if not files:
         return None
