@@ -16,7 +16,7 @@ OperationType = Literal[
     "create_branch", "delete_branch",
     "create_tag", "delete_tag",
     "list_refs",
-    "create_pr", "list_prs", "get_pr", "merge_pr", "close_pr", "comment_pr",
+    "create_pr", "list_prs", "get_pr", "merge_pr", "close_pr", "comment_pr", "change_pr_status",
     "create_repo", "update_repo",
 ]
 
@@ -59,6 +59,7 @@ class HfRepoGitTool:
                 "merge_pr": self._merge_pr,
                 "close_pr": self._close_pr,
                 "comment_pr": self._comment_pr,
+                "change_pr_status": self._change_pr_status,
                 "create_repo": self._create_repo,
                 "update_repo": self._update_repo,
             }
@@ -88,9 +89,10 @@ class HfRepoGitTool:
 - `list_refs`: `{"operation": "list_refs", "repo_id": "..."}`
 
 **PRs:**
-- `create_pr`: `{"operation": "create_pr", "repo_id": "...", "title": "..."}`
-- `list_prs`: `{"operation": "list_prs", "repo_id": "..."}`
-- `get_pr`: `{"operation": "get_pr", "repo_id": "...", "pr_num": 1}`
+- `create_pr`: `{"operation": "create_pr", "repo_id": "...", "title": "..."}` (creates draft PR)
+- `list_prs`: `{"operation": "list_prs", "repo_id": "..."}` (shows status: draft/open/merged/closed)
+- `get_pr`: `{"operation": "get_pr", "repo_id": "...", "pr_num": 1}` (shows status)
+- `change_pr_status`: `{"operation": "change_pr_status", "repo_id": "...", "pr_num": 1, "new_status": "open"}` (change draft to open)
 - `merge_pr`: `{"operation": "merge_pr", "repo_id": "...", "pr_num": 1}`
 - `close_pr`: `{"operation": "close_pr", "repo_id": "...", "pr_num": 1}`
 - `comment_pr`: `{"operation": "comment_pr", "repo_id": "...", "pr_num": 1, "comment": "..."}`
@@ -268,7 +270,7 @@ class HfRepoGitTool:
 
         url = f"{_build_repo_url(repo_id, repo_type)}/discussions/{result.num}"
         return {
-            "formatted": f"**PR #{result.num} created:** {title}\n{url}\n\nAdd commits via upload with revision=\"refs/pr/{result.num}\"",
+            "formatted": f"**Draft PR #{result.num} created:** {title}\n{url}\n\nAdd commits via upload with revision=\"refs/pr/{result.num}\"",
             "totalResults": 1,
             "resultsShared": 1,
         }
@@ -296,9 +298,16 @@ class HfRepoGitTool:
         lines = [f"**{repo_id}** - {len(discussions)} discussions", f"{url}/discussions", ""]
 
         for d in discussions[:20]:
-            emoji = "🟢" if d.status == "open" else "🔴"
+            if d.status == "draft":
+                status_label = "[DRAFT]"
+            elif d.status == "open":
+                status_label = "[OPEN]"
+            elif d.status == "merged":
+                status_label = "[MERGED]"
+            else:
+                status_label = "[CLOSED]"
             type_label = "PR" if d.is_pull_request else "D"
-            lines.append(f"{emoji} #{d.num} [{type_label}] {d.title}")
+            lines.append(f"{status_label} #{d.num} [{type_label}] {d.title}")
 
         return {"formatted": "\n".join(lines), "totalResults": len(discussions), "resultsShared": min(20, len(discussions))}
 
@@ -322,7 +331,13 @@ class HfRepoGitTool:
         )
 
         url = f"{_build_repo_url(repo_id, repo_type)}/discussions/{pr_num}"
-        status = "🟢 Open" if pr.status == "open" else "🔴 Closed"
+        status_map = {
+            "draft": "Draft",
+            "open": "Open",
+            "merged": "Merged",
+            "closed": "Closed"
+        }
+        status = status_map.get(pr.status, pr.status.capitalize())
         type_label = "Pull Request" if pr.is_pull_request else "Discussion"
 
         lines = [
@@ -333,7 +348,10 @@ class HfRepoGitTool:
         ]
 
         if pr.is_pull_request:
-            lines.append(f"\nTo add commits: upload with revision=\"refs/pr/{pr_num}\"")
+            if pr.status == "draft":
+                lines.append(f"\nTo add commits: upload with revision=\"refs/pr/{pr_num}\"")
+            elif pr.status == "open":
+                lines.append(f"\nTo add commits: upload with revision=\"refs/pr/{pr_num}\"")
 
         return {"formatted": "\n".join(lines), "totalResults": 1, "resultsShared": 1}
 
@@ -410,6 +428,34 @@ class HfRepoGitTool:
 
         url = f"{_build_repo_url(repo_id, repo_type)}/discussions/{pr_num}"
         return {"formatted": f"**Comment added to #{pr_num}**\n{url}", "totalResults": 1, "resultsShared": 1}
+
+    async def _change_pr_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Change PR/discussion status (mainly to convert draft to open)."""
+        repo_id = args.get("repo_id")
+        pr_num = args.get("pr_num")
+        new_status = args.get("new_status")
+
+        if not repo_id:
+            return self._error("repo_id is required")
+        if not pr_num:
+            return self._error("pr_num is required")
+        if not new_status:
+            return self._error("new_status is required (open or closed)")
+
+        repo_type = args.get("repo_type", "model")
+        comment = args.get("comment", "")
+
+        await _async_call(
+            self.api.change_discussion_status,
+            repo_id=repo_id,
+            discussion_num=int(pr_num),
+            new_status=new_status,
+            comment=comment,
+            repo_type=repo_type,
+        )
+
+        url = f"{_build_repo_url(repo_id, repo_type)}/discussions/{pr_num}"
+        return {"formatted": f"**PR #{pr_num} status changed to {new_status}**\n{url}", "totalResults": 1, "resultsShared": 1}
 
     # =========================================================================
     # REPO MANAGEMENT
@@ -490,7 +536,7 @@ HF_REPO_GIT_TOOL_SPEC = {
         "## Operations\n"
         "**Branches:** create_branch, delete_branch, list_refs\n"
         "**Tags:** create_tag, delete_tag\n"
-        "**PRs:** create_pr, list_prs, get_pr, merge_pr, close_pr, comment_pr\n"
+        "**PRs:** create_pr, list_prs, get_pr, merge_pr, close_pr, comment_pr, change_pr_status\n"
         "**Repo:** create_repo, update_repo\n\n"
         "## Use when\n"
         "- Creating feature branches for experiments\n"
@@ -504,14 +550,17 @@ HF_REPO_GIT_TOOL_SPEC = {
         '{"operation": "create_branch", "repo_id": "my-model", "branch": "experiment-v2"}\n'
         '{"operation": "create_tag", "repo_id": "my-model", "tag": "v1.0", "revision": "main"}\n'
         '{"operation": "create_pr", "repo_id": "org/model", "title": "Fix tokenizer config"}\n'
+        '{"operation": "change_pr_status", "repo_id": "my-model", "pr_num": 1, "new_status": "open"}\n'
         '{"operation": "merge_pr", "repo_id": "my-model", "pr_num": 3}\n'
         '{"operation": "create_repo", "repo_id": "my-new-model", "private": true}\n'
         '{"operation": "update_repo", "repo_id": "my-model", "gated": "auto"}\n\n'
         "## PR Workflow\n"
-        "1. create_pr → creates empty draft PR\n"
+        "1. create_pr → creates draft PR (empty by default)\n"
         "2. Upload files with revision='refs/pr/N' to add commits\n"
-        "3. merge_pr when ready\n\n"
+        "3. change_pr_status with new_status='open' to publish (convert draft to open)\n"
+        "4. merge_pr when ready\n\n"
         "## Notes\n"
+        "- PR status: draft (default), open, merged, closed\n"
         "- delete_branch, delete_tag, merge_pr, create_repo, update_repo require approval\n"
         "- For spaces, create_repo needs space_sdk (gradio/streamlit/docker/static)\n"
         "- gated options: 'auto' (instant), 'manual' (review), false (open)\n"
@@ -524,7 +573,7 @@ HF_REPO_GIT_TOOL_SPEC = {
                 "enum": [
                     "create_branch", "delete_branch",
                     "create_tag", "delete_tag", "list_refs",
-                    "create_pr", "list_prs", "get_pr", "merge_pr", "close_pr", "comment_pr",
+                    "create_pr", "list_prs", "get_pr", "merge_pr", "close_pr", "comment_pr", "change_pr_status",
                     "create_repo", "update_repo",
                 ],
                 "description": "Operation to execute",
@@ -578,6 +627,11 @@ HF_REPO_GIT_TOOL_SPEC = {
                 "type": "string",
                 "enum": ["open", "closed", "all"],
                 "description": "Filter PRs by status (list_prs)",
+            },
+            "new_status": {
+                "type": "string",
+                "enum": ["open", "closed"],
+                "description": "New status for PR/discussion (change_pr_status)",
             },
             "private": {
                 "type": "boolean",
