@@ -169,11 +169,13 @@ def _extract_configs(splits_data: dict) -> list[SplitConfig]:
     return list(configs.values())
 
 
-def _format_structure(
-    configs: list[SplitConfig], max_rows: int = 10
-) -> str:
+def _format_structure(configs: list[SplitConfig], max_rows: int = 10) -> str:
     """Format configs and splits as a markdown table."""
-    lines = ["## Structure (configs & splits)", "| Config | Split |", "|--------|-------|"]
+    lines = [
+        "## Structure (configs & splits)",
+        "| Config | Split |",
+        "|--------|-------|",
+    ]
 
     total_splits = sum(len(cfg["splits"]) for cfg in configs)
     added_rows = 0
@@ -378,9 +380,7 @@ def _format_parquet_files(data: dict, max_rows: int = 10) -> str | None:
         shown += 1
 
     if total_groups > shown:
-        lines.append(
-            f"- ... (_showing {shown} of {total_groups} parquet groups_)"
-        )
+        lines.append(f"- ... (_showing {shown} of {total_groups} parquet groups_)")
     return "\n".join(lines)
 
 
