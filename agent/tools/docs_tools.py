@@ -26,6 +26,10 @@ _CACHE_LOCK = asyncio.Lock()
 DEFAULT_MAX_RESULTS = 20
 MAX_RESULTS_CAP = 50
 
+# Gradio documentation endpoints (hosted separately from HF docs)
+GRADIO_LLMS_TXT_URL = "https://gradio.app/llms.txt"
+GRADIO_EMBEDDING_SEARCH_URL = "https://playground-worker.pages.dev/api/prompt"
+
 # High-level endpoints that bundle related documentation sections
 COMPOSITE_ENDPOINTS: dict[str, list[str]] = {
     "optimum": [
@@ -55,6 +59,51 @@ COMPOSITE_ENDPOINTS: dict[str, list[str]] = {
 
 def _expand_endpoint(endpoint: str) -> list[str]:
     return COMPOSITE_ENDPOINTS.get(endpoint, [endpoint])
+
+
+# ---------------------------------------------------------------------------
+# Gradio documentation helpers (uses gradio.app instead of HF docs)
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_gradio_full_docs() -> str:
+    """Fetch Gradio's full documentation from llms.txt"""
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        response = await client.get(GRADIO_LLMS_TXT_URL)
+        response.raise_for_status()
+    return response.text
+
+
+async def _search_gradio_docs(query: str) -> str:
+    """
+    Run embedding search on Gradio's documentation via their API.
+    Returns the most relevant content for the query.
+    """
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        response = await client.post(
+            GRADIO_EMBEDDING_SEARCH_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Origin": "https://gradio-docs-mcp.up.railway.app",
+            },
+            json={
+                "prompt_to_embed": query,
+                "SYSTEM_PROMPT": "$INSERT_GUIDES_DOCS_DEMOS",
+                "FALLBACK_PROMPT": "No results found",
+            },
+        )
+        response.raise_for_status()
+        result = response.json()
+    return result.get("SYS_PROMPT", "No results found")
+
+
+def _format_gradio_results(content: str, query: str | None = None) -> str:
+    """Format Gradio documentation results"""
+    header = "# Gradio Documentation\n\n"
+    if query:
+        header += f"Search query: '{query}'\n\n"
+    header += "Source: https://gradio.app/docs\n\n---\n\n"
+    return header + content
 
 
 async def _fetch_html_page(hf_token: str, endpoint: str) -> str:
@@ -378,13 +427,36 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
     if not endpoint:
         return "Error: No endpoint provided", False
 
-    # Get HF token from environment
+    endpoint = endpoint.lstrip("/")
+
+    # Special handling for Gradio docs (hosted at gradio.app, not HF docs)
+    if endpoint.lower() == "gradio":
+        try:
+            clean_query = (
+                query.strip() if isinstance(query, str) and query.strip() else None
+            )
+            if clean_query:
+                # Use embedding search for specific queries
+                content = await _search_gradio_docs(clean_query)
+            else:
+                # Fetch full docs when no query provided
+                content = await _fetch_gradio_full_docs()
+            return _format_gradio_results(content, query=clean_query), True
+        except httpx.HTTPStatusError as e:
+            return (
+                f"HTTP error fetching Gradio docs: {e.response.status_code}",
+                False,
+            )
+        except httpx.RequestError as e:
+            return f"Request error fetching Gradio docs: {str(e)}", False
+        except Exception as e:
+            return f"Error fetching Gradio docs: {str(e)}", False
+
+    # Standard HF docs flow for all other endpoints
     hf_token = os.environ.get("HF_TOKEN")
 
     if not hf_token:
         return "Error: HF_TOKEN environment variable not set", False
-
-    endpoint = endpoint.lstrip("/")
 
     try:
         try:
@@ -822,7 +894,7 @@ EXPLORE_HF_DOCS_TOOL_SPEC = {
                     "• transformers — Core model library: architectures, configs, tokenizers, training & inference APIs.\n"
                     "• diffusers — Diffusion pipelines, schedulers, fine-tuning, training, and deployment patterns.\n"
                     "• datasets — Dataset loading, streaming, processing, Arrow format, Hub integration.\n"
-                    "• gradio — UI components and demos for interacting with ML models.\n"
+                    "• gradio — UI components and demos for ML models. Uses Gradio's native API: without query returns full docs (llms.txt), with query uses embedding search for precise results.\n"
                     "• trackio — Experiment tracking, metrics logging, and run comparison.\n"
                     "• smolagents — Lightweight agent abstractions and tool-using patterns.\n"
                     "• huggingface_hub — Python client for Hub operations (auth, upload/download, repo management).\n"
