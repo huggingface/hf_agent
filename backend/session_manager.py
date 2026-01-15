@@ -5,6 +5,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 from agent.config import load_config
@@ -12,6 +13,10 @@ from agent.core.agent_loop import process_submission
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
 from websocket import manager as ws_manager
+
+# Get project root (parent of backend directory)
+PROJECT_ROOT = Path(__file__).parent.parent
+DEFAULT_CONFIG_PATH = str(PROJECT_ROOT / "configs" / "main_agent_config.json")
 
 
 # These dataclasses match agent/main.py structure
@@ -49,8 +54,8 @@ class AgentSession:
 class SessionManager:
     """Manages multiple concurrent agent sessions."""
 
-    def __init__(self, config_path: str = "configs/main_agent_config.json") -> None:
-        self.config = load_config(config_path)
+    def __init__(self, config_path: str | None = None) -> None:
+        self.config = load_config(config_path or DEFAULT_CONFIG_PATH)
         self.sessions: dict[str, AgentSession] = {}
         self._lock = asyncio.Lock()
 
