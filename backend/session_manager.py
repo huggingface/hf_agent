@@ -68,7 +68,7 @@ class SessionManager:
         event_queue: asyncio.Queue = asyncio.Queue()
 
         # Create tool router
-        tool_router = ToolRouter(config=self.config)
+        tool_router = ToolRouter(self.config.mcpServers)
 
         # Create the agent session
         session = Session(event_queue, config=self.config, tool_router=tool_router)
@@ -253,7 +253,7 @@ class SessionManager:
             "session_id": session_id,
             "created_at": agent_session.created_at.isoformat(),
             "is_active": agent_session.is_active,
-            "message_count": len(agent_session.session.context_manager.messages),
+            "message_count": len(agent_session.session.context_manager.items),
         }
 
     def list_sessions(self) -> list[dict[str, Any]]:

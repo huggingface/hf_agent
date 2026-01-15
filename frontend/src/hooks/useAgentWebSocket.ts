@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAgentStore } from '@/store/agentStore';
+import { useSessionStore } from '@/store/sessionStore';
 import type { AgentEvent } from '@/types/events';
 import type { Message } from '@/types/agent';
 
@@ -29,6 +30,8 @@ export function useAgentWebSocket({
     setError,
   } = useAgentStore();
 
+  const { setSessionActive } = useSessionStore();
+
   const handleEvent = useCallback(
     (event: AgentEvent) => {
       if (!sessionId) return;
@@ -37,6 +40,7 @@ export function useAgentWebSocket({
         case 'ready':
           setConnected(true);
           setProcessing(false);
+          setSessionActive(sessionId, true);
           onReady?.();
           break;
 
@@ -136,25 +140,29 @@ export function useAgentWebSocket({
           console.log('Unknown event:', event);
       }
     },
-    [
-      sessionId,
-      addMessage,
-      setProcessing,
-      setConnected,
-      setPendingApprovals,
-      setError,
-      onReady,
-      onError,
-    ]
+    // Zustand setters are stable, so we don't need them in deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId, onReady, onError]
   );
 
   const connect = useCallback(() => {
-    if (!sessionId || wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!sessionId) return;
+    
+    // Don't connect if already connected or connecting
+    if (wsRef.current?.readyState === WebSocket.OPEN || 
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
 
+    // Connect directly to backend (Vite doesn't proxy WebSockets)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
+    // In development, connect directly to backend port 7860
+    // In production, use the same host
+    const isDev = import.meta.env.DEV;
+    const host = isDev ? '127.0.0.1:7860' : window.location.host;
     const wsUrl = `${protocol}//${host}/api/ws/${sessionId}`;
 
+    console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -176,25 +184,28 @@ export function useAgentWebSocket({
       console.error('WebSocket error:', error);
     };
 
-    ws.onclose = () => {
-      console.log('WebSocket closed');
+    ws.onclose = (event) => {
+      console.log('WebSocket closed', event.code, event.reason);
       setConnected(false);
 
-      // Attempt to reconnect with exponential backoff
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
+      // Only reconnect if it wasn't a normal closure and session still exists
+      if (event.code !== 1000 && sessionId) {
+        // Attempt to reconnect with exponential backoff
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          reconnectDelayRef.current = Math.min(
+            reconnectDelayRef.current * 2,
+            WS_MAX_RECONNECT_DELAY
+          );
+          connect();
+        }, reconnectDelayRef.current);
       }
-      reconnectTimeoutRef.current = window.setTimeout(() => {
-        reconnectDelayRef.current = Math.min(
-          reconnectDelayRef.current * 2,
-          WS_MAX_RECONNECT_DELAY
-        );
-        connect();
-      }, reconnectDelayRef.current);
     };
 
     wsRef.current = ws;
-  }, [sessionId, handleEvent, setConnected]);
+  }, [sessionId, handleEvent]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -206,7 +217,7 @@ export function useAgentWebSocket({
       wsRef.current = null;
     }
     setConnected(false);
-  }, [setConnected]);
+  }, []);
 
   const sendPing = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -214,15 +225,24 @@ export function useAgentWebSocket({
     }
   }, []);
 
-  // Connect when sessionId changes
+  // Connect when sessionId changes (with a small delay to ensure session is ready)
   useEffect(() => {
-    if (sessionId) {
-      connect();
+    if (!sessionId) {
+      disconnect();
+      return;
     }
+
+    // Small delay to ensure session is fully created on backend
+    const timeoutId = setTimeout(() => {
+      connect();
+    }, 100);
+
     return () => {
+      clearTimeout(timeoutId);
       disconnect();
     };
-  }, [sessionId, connect, disconnect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   // Heartbeat
   useEffect(() => {

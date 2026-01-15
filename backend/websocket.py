@@ -20,10 +20,11 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, session_id: str) -> None:
         """Accept a WebSocket connection and register it."""
+        logger.info(f"Attempting to accept WebSocket for session {session_id}")
         await websocket.accept()
         self.active_connections[session_id] = websocket
         self.message_queues[session_id] = asyncio.Queue()
-        logger.info(f"WebSocket connected for session {session_id}")
+        logger.info(f"WebSocket connected and registered for session {session_id}")
 
     def disconnect(self, session_id: str) -> None:
         """Remove a WebSocket connection."""
