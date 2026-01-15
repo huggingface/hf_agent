@@ -5,13 +5,30 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from agent.config import load_config
 from agent.core.agent_loop import process_submission
-from agent.core.session import Event, Operation, OpType, Session, Submission
+from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
 from websocket import manager as ws_manager
+
+
+# These dataclasses match agent/main.py structure
+@dataclass
+class Operation:
+    """Operation to be executed by the agent."""
+
+    op_type: OpType
+    data: Optional[dict[str, Any]] = None
+
+
+@dataclass
+class Submission:
+    """Submission to the agent loop."""
+
+    id: str
+    operation: Operation
 
 logger = logging.getLogger(__name__)
 
