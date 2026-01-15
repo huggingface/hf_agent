@@ -8,11 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from websocket import manager as ws_manager
+
 from agent.config import load_config
 from agent.core.agent_loop import process_submission
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
-from websocket import manager as ws_manager
 
 # Get project root (parent of backend directory)
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -34,6 +35,7 @@ class Submission:
 
     id: str
     operation: Operation
+
 
 logger = logging.getLogger(__name__)
 
