@@ -1,0 +1,49 @@
+/**
+ * Agent-related types
+ */
+
+export interface SessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  isActive: boolean;
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  timestamp: string;
+  toolName?: string;
+  toolCallId?: string;
+}
+
+export interface ToolCall {
+  id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  output?: string;
+}
+
+export interface ToolApproval {
+  toolCallId: string;
+  approved: boolean;
+  feedback?: string;
+}
+
+export interface ApprovalBatch {
+  tools: Array<{
+    tool: string;
+    arguments: Record<string, unknown>;
+    tool_call_id: string;
+  }>;
+  count: number;
+}
+
+export interface User {
+  authenticated: boolean;
+  username?: string;
+  name?: string;
+  picture?: string;
+}
