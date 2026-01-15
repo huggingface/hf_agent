@@ -25,6 +25,11 @@ agent = [
     "nbformat>=5.10.4",
     "datasets>=4.3.0",  # For session logging to HF datasets
     "whoosh>=2.7.4",
+    # Web backend dependencies
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+    "websockets>=13.0",
 ]
 
 # Evaluation/benchmarking dependencies
