@@ -6,9 +6,6 @@ import {
   Typography,
   IconButton,
   Drawer,
-  useMediaQuery,
-  useTheme,
-  Button,
   Chip,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -27,8 +24,6 @@ import ApprovalModal from '@/components/ApprovalModal/ApprovalModal';
 const DRAWER_WIDTH = 280;
 
 export default function AppLayout() {
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const { activeSessionId } = useSessionStore();

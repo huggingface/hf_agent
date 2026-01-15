@@ -124,9 +124,11 @@ async def shutdown_session(session_id: str) -> dict:
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     """WebSocket endpoint for real-time events."""
+    logger.info(f"WebSocket connection request for session {session_id}")
     # Verify session exists
     info = session_manager.get_session_info(session_id)
     if not info:
+        logger.warning(f"WebSocket connection rejected: Session {session_id} not found")
         await websocket.close(code=4004, reason="Session not found")
         return
 
