@@ -56,7 +56,9 @@ async def oauth_login(request: Request) -> RedirectResponse:
 
 
 @router.get("/callback")
-async def oauth_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
+async def oauth_callback(
+    request: Request, code: str = "", state: str = ""
+) -> RedirectResponse:
     """Handle OAuth callback."""
     # Verify state
     if state not in oauth_states:

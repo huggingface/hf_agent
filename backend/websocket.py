@@ -33,7 +33,9 @@ class ConnectionManager:
             del self.message_queues[session_id]
         logger.info(f"WebSocket disconnected for session {session_id}")
 
-    async def send_event(self, session_id: str, event_type: str, data: dict[str, Any] | None = None) -> None:
+    async def send_event(
+        self, session_id: str, event_type: str, data: dict[str, Any] | None = None
+    ) -> None:
         """Send an event to a specific session's WebSocket."""
         if session_id not in self.active_connections:
             logger.warning(f"No active connection for session {session_id}")
@@ -49,7 +51,9 @@ class ConnectionManager:
             logger.error(f"Error sending to session {session_id}: {e}")
             self.disconnect(session_id)
 
-    async def broadcast(self, event_type: str, data: dict[str, Any] | None = None) -> None:
+    async def broadcast(
+        self, event_type: str, data: dict[str, Any] | None = None
+    ) -> None:
         """Broadcast an event to all connected sessions."""
         for session_id in list(self.active_connections.keys()):
             await self.send_event(session_id, event_type, data)

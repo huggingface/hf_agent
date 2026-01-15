@@ -7,11 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from agent.config import Config, load_config
+from agent.config import load_config
 from agent.core.agent_loop import process_submission
-from agent.core.session import Event, OpType, Operation, Session, Submission
+from agent.core.session import Event, Operation, OpType, Session, Submission
 from agent.core.tools import ToolRouter
-
 from backend.websocket import manager as ws_manager
 
 logger = logging.getLogger(__name__)
@@ -139,9 +138,7 @@ class SessionManager:
         while True:
             try:
                 event: Event = await event_queue.get()
-                await ws_manager.send_event(
-                    session_id, event.event_type, event.data
-                )
+                await ws_manager.send_event(session_id, event.event_type, event.data)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -156,9 +153,7 @@ class SessionManager:
             logger.warning(f"Session {session_id} not found or inactive")
             return False
 
-        submission = Submission(
-            id=f"sub_{uuid.uuid4().hex[:8]}", operation=operation
-        )
+        submission = Submission(id=f"sub_{uuid.uuid4().hex[:8]}", operation=operation)
         await agent_session.submission_queue.put(submission)
         return True
 
@@ -171,7 +166,9 @@ class SessionManager:
         self, session_id: str, approvals: list[dict[str, Any]]
     ) -> bool:
         """Submit tool approvals to a session."""
-        operation = Operation(op_type=OpType.EXEC_APPROVAL, data={"approvals": approvals})
+        operation = Operation(
+            op_type=OpType.EXEC_APPROVAL, data={"approvals": approvals}
+        )
         return await self.submit(session_id, operation)
 
     async def interrupt(self, session_id: str) -> bool:
