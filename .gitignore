@@ -5,16 +5,66 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
 
 # Virtual environments
-.venv
+.venv/
+venv/
+ENV/
+env/
+
+# Environment and Secrets
 .env
+.env.local
+.env.*
+!.env.example
+*.local
+credentials*.json
+
+# OS-specific
 .DS_Store
+Thumbs.db
+*.swp
+
+# IDE-specific
+.vscode/
+.idea/
+.cursor/
+.history/
+*.sublime-project
+*.sublime-workspace
+
+# Frontend (Node.js)
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/*.local
+frontend/.eslintcache
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Docker
+.docker/
+
+# Project-specific
+session_logs/
+/logs
+hf-agent-leaderboard/
+skills/
 .claude/
 *.jsonl
 *.csv
-/logs
-hf-agent-leaderboard/
-.cursor/
-session_logs/
-skills/
+
+# ML / Data
+data/
+datasets/
+models/
+checkpoint-*/
+runs/
+wandb/
