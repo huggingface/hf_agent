@@ -1,33 +1,72 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Box,
-  AppBar,
-  Toolbar,
+  Drawer,
   Typography,
   IconButton,
-  Drawer,
-  Chip,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
-import UndoIcon from '@mui/icons-material/Undo';
-import CompressIcon from '@mui/icons-material/Compress';
-import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
+import { useLayoutStore } from '@/store/layoutStore';
 import { useAgentWebSocket } from '@/hooks/useAgentWebSocket';
 import SessionSidebar from '@/components/SessionSidebar/SessionSidebar';
+import CodePanel from '@/components/CodePanel/CodePanel';
 import ChatInput from '@/components/Chat/ChatInput';
 import MessageList from '@/components/Chat/MessageList';
-import ApprovalModal from '@/components/ApprovalModal/ApprovalModal';
+import type { Message } from '@/types/agent';
 
 const DRAWER_WIDTH = 280;
 
 export default function AppLayout() {
-  const [mobileOpen, setMobileOpen] = useState(false);
-
   const { activeSessionId } = useSessionStore();
-  const { isConnected, isProcessing, getMessages } = useAgentStore();
+  const { isConnected, isProcessing, getMessages, addMessage } = useAgentStore();
+  const { 
+    isLeftSidebarOpen, 
+    isRightPanelOpen, 
+    rightPanelWidth,
+    setRightPanelWidth,
+    toggleLeftSidebar, 
+    toggleRightPanel 
+  } = useLayoutStore();
+
+  const isResizing = useRef(false);
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizing.current = true;
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'col-resize';
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    isResizing.current = false;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', stopResizing);
+    document.body.style.cursor = 'default';
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isResizing.current) return;
+    const newWidth = window.innerWidth - e.clientX;
+    const maxWidth = window.innerWidth * 0.8;
+    const minWidth = 300;
+    if (newWidth > minWidth && newWidth < maxWidth) {
+      setRightPanelWidth(newWidth);
+    }
+  }, [setRightPanelWidth]);
+
+  useEffect(() => {
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', stopResizing);
+    };
+  }, [handleMouseMove, stopResizing]);
 
   const messages = activeSessionId ? getMessages(activeSessionId) : [];
 
@@ -37,31 +76,18 @@ export default function AppLayout() {
     onError: (error) => console.error('Agent error:', error),
   });
 
-  const handleDrawerToggle = () => {
-    setMobileOpen(!mobileOpen);
-  };
-
-  const handleUndo = useCallback(async () => {
-    if (!activeSessionId) return;
-    try {
-      await fetch(`/api/undo/${activeSessionId}`, { method: 'POST' });
-    } catch (e) {
-      console.error('Undo failed:', e);
-    }
-  }, [activeSessionId]);
-
-  const handleCompact = useCallback(async () => {
-    if (!activeSessionId) return;
-    try {
-      await fetch(`/api/compact/${activeSessionId}`, { method: 'POST' });
-    } catch (e) {
-      console.error('Compact failed:', e);
-    }
-  }, [activeSessionId]);
-
   const handleSendMessage = useCallback(
     async (text: string) => {
       if (!activeSessionId || !text.trim()) return;
+      
+      const userMsg: Message = {
+        id: `user_${Date.now()}`,
+        role: 'user',
+        content: text.trim(),
+        timestamp: new Date().toISOString(),
+      };
+      addMessage(activeSessionId, userMsg);
+
       try {
         await fetch('/api/submit', {
           method: 'POST',
@@ -75,148 +101,180 @@ export default function AppLayout() {
         console.error('Send failed:', e);
       }
     },
-    [activeSessionId]
+    [activeSessionId, addMessage]
   );
-
-  const drawer = <SessionSidebar onClose={() => setMobileOpen(false)} />;
 
   return (
     <Box sx={{ display: 'flex', width: '100%', height: '100%' }}>
-      {/* App Bar */}
-      <AppBar
-        position="fixed"
-        sx={{
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
-          ml: { md: `${DRAWER_WIDTH}px` },
-          bgcolor: 'background.paper',
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-        elevation={0}
-      >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { md: 'none' } }}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
-            HF Agent
-          </Typography>
-          <Chip
-            icon={
-              <FiberManualRecordIcon
-                sx={{
-                  fontSize: 12,
-                  color: isConnected ? 'success.main' : 'error.main',
-                }}
-              />
-            }
-            label={isConnected ? 'Connected' : 'Disconnected'}
-            size="small"
-            variant="outlined"
-            sx={{ mr: 2 }}
-          />
-          <IconButton
-            onClick={handleUndo}
-            disabled={!activeSessionId || isProcessing}
-            title="Undo last turn"
-          >
-            <UndoIcon />
-          </IconButton>
-          <IconButton
-            onClick={handleCompact}
-            disabled={!activeSessionId || isProcessing}
-            title="Compact context"
-          >
-            <CompressIcon />
-          </IconButton>
-        </Toolbar>
-      </AppBar>
-
-      {/* Sidebar Drawer */}
+      {/* Left Sidebar Drawer */}
       <Box
         component="nav"
-        sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}
+        sx={{
+          width: { md: isLeftSidebarOpen ? DRAWER_WIDTH : 0 },
+          flexShrink: { md: 0 },
+          transition: isResizing.current ? 'none' : 'width 0.2s',
+          overflow: 'hidden',
+        }}
       >
-        {/* Mobile drawer */}
         <Drawer
-          variant="temporary"
-          open={mobileOpen}
-          onClose={handleDrawerToggle}
-          ModalProps={{ keepMounted: true }}
-          sx={{
-            display: { xs: 'block', md: 'none' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: DRAWER_WIDTH,
-            },
-          }}
-        >
-          {drawer}
-        </Drawer>
-        {/* Desktop drawer */}
-        <Drawer
-          variant="permanent"
+          variant="persistent"
           sx={{
             display: { xs: 'none', md: 'block' },
             '& .MuiDrawer-paper': {
               boxSizing: 'border-box',
               width: DRAWER_WIDTH,
+              borderRight: '1px solid',
+              borderColor: 'divider',
+              top: '40px', // Below logo bar
+              height: 'calc(100% - 40px)',
             },
           }}
-          open
+          open={isLeftSidebarOpen}
         >
-          {drawer}
+          <SessionSidebar />
         </Drawer>
       </Box>
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <Box
-        component="main"
         sx={{
           flexGrow: 1,
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
+          transition: isResizing.current ? 'none' : 'width 0.2s',
+          position: 'relative',
+          overflow: 'hidden',
         }}
       >
-        <Toolbar /> {/* Spacer for fixed AppBar */}
-        {activeSessionId ? (
-          <>
-            <MessageList messages={messages} isProcessing={isProcessing} />
-            <ChatInput
-              onSend={handleSendMessage}
-              disabled={isProcessing || !isConnected}
+        {/* Top Header Bar (Fixed) */}
+        <Box sx={{ 
+          height: '60px',
+          px: 1, 
+          display: 'flex', 
+          alignItems: 'center', 
+          borderBottom: 1, 
+          borderColor: 'divider',
+          bgcolor: 'background.default',
+          zIndex: 1200,
+        }}>
+          <IconButton onClick={toggleLeftSidebar} size="small">
+            {isLeftSidebarOpen ? <ChevronLeftIcon /> : <MenuIcon />}
+          </IconButton>
+          
+          <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+            <img 
+              src="/hf-logo-white.png" 
+              alt="Hugging Face" 
+              style={{ height: '40px', objectFit: 'contain' }} 
             />
-          </>
-        ) : (
-          <Box
-            sx={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexDirection: 'column',
-              gap: 2,
-            }}
-          >
-            <Typography variant="h5" color="text.secondary">
-              No session selected
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Create a new session from the sidebar to get started
-            </Typography>
           </Box>
-        )}
+
+          <IconButton 
+            onClick={toggleRightPanel} 
+            size="small" 
+            sx={{ visibility: isRightPanelOpen ? 'hidden' : 'visible' }}
+          >
+            <MenuIcon />
+          </IconButton>
+        </Box>
+
+        <Box
+          component="main"
+          sx={{
+            flexGrow: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          {activeSessionId ? (
+            <>
+              <MessageList messages={messages} isProcessing={isProcessing} />
+              <ChatInput
+                onSend={handleSendMessage}
+                disabled={isProcessing || !isConnected}
+              />
+            </>
+          ) : (
+            <Box
+              sx={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <Typography variant="h5" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                NO SESSION SELECTED
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                Initialize a session via the sidebar
+              </Typography>
+            </Box>
+          )}
+        </Box>
       </Box>
 
-      {/* Approval Modal */}
-      <ApprovalModal sessionId={activeSessionId} />
+      {/* Resize Handle */}
+      {isRightPanelOpen && (
+        <Box
+          onMouseDown={startResizing}
+          sx={{
+            width: '4px',
+            cursor: 'col-resize',
+            bgcolor: 'divider',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'background-color 0.2s',
+            zIndex: 1300,
+            overflow: 'hidden',
+            '&:hover': {
+              bgcolor: 'primary.main',
+            },
+          }}
+        >
+          <DragIndicatorIcon 
+            sx={{ 
+              fontSize: '0.8rem', 
+              color: 'text.secondary',
+              pointerEvents: 'none',
+            }} 
+          />
+        </Box>
+      )}
+
+      {/* Right Panel Drawer */}
+      <Box
+        component="nav"
+        sx={{
+          width: { md: isRightPanelOpen ? rightPanelWidth : 0 },
+          flexShrink: { md: 0 },
+          transition: isResizing.current ? 'none' : 'width 0.2s',
+          overflow: 'hidden',
+        }}
+      >
+        <Drawer
+          anchor="right"
+          variant="persistent"
+          sx={{
+            display: { xs: 'none', md: 'block' },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: rightPanelWidth,
+              borderLeft: 'none',
+              top: '40px', // Below logo bar
+              height: 'calc(100% - 40px)',
+            },
+          }}
+          open={isRightPanelOpen}
+        >
+          <CodePanel />
+        </Drawer>
+      </Box>
     </Box>
   );
 }

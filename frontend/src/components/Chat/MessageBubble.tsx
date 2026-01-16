@@ -1,8 +1,6 @@
 import { Box, Paper, Typography, Chip } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
-import PersonIcon from '@mui/icons-material/Person';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
-import BuildIcon from '@mui/icons-material/Build';
+import remarkGfm from 'remark-gfm';
 import type { Message } from '@/types/agent';
 
 interface MessageBubbleProps {
@@ -13,16 +11,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
 
-  const getIcon = () => {
-    if (isUser) return <PersonIcon fontSize="small" />;
-    if (isTool) return <BuildIcon fontSize="small" />;
-    return <SmartToyIcon fontSize="small" />;
-  };
-
   const getBgColor = () => {
-    if (isUser) return 'primary.dark';
+    if (isUser) return 'background.paper';
     if (isTool) return 'background.default';
-    return 'background.paper';
+    return 'transparent';
   };
 
   return (
@@ -36,31 +28,59 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
       <Paper
         elevation={0}
         sx={{
-          p: 2,
+          p: isTool ? 2 : isUser ? 1.5 : 1,
           maxWidth: isTool ? '100%' : '80%',
           width: isTool ? '100%' : 'auto',
           bgcolor: getBgColor(),
-          border: 1,
+          border: (!isUser && !isTool) ? 0 : 1,
           borderColor: 'divider',
+          borderRadius: isUser ? 2 : undefined,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-          {getIcon()}
-          <Typography variant="caption" color="text.secondary">
-            {isUser ? 'You' : isTool ? 'Tool' : 'Assistant'}
-          </Typography>
-          {isTool && message.toolName && (
-            <Chip
-              label={message.toolName}
-              size="small"
-              variant="outlined"
-              sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
-            />
-          )}
-          <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-            {new Date(message.timestamp).toLocaleTimeString()}
-          </Typography>
-        </Box>
+        {isTool && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              Tool
+            </Typography>
+            {message.toolName && (
+              <Chip
+                label={message.toolName}
+                size="small"
+                variant="outlined"
+                sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+              />
+            )}
+          </Box>
+        )}
+
+        {/* Persisted Trace Logs */}
+        {message.trace && message.trace.length > 0 && (
+          <Box
+            sx={{
+              bgcolor: 'background.default',
+              borderRadius: 1,
+              p: 1.5,
+              border: 1,
+              borderColor: 'divider',
+              width: '100%',
+              mb: 2,
+            }}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {message.trace.map((log) => (
+                <Typography
+                  key={log.id}
+                  variant="caption"
+                  component="div"
+                  sx={{ color: 'common.white', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                >
+                  &gt; {log.text}
+                </Typography>
+              ))}
+            </Box>
+          </Box>
+        )}
+
         <Box
           sx={{
             '& p': { m: 0 },
@@ -84,15 +104,34 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               p: 0,
             },
             '& a': {
-              color: 'primary.main',
+              color: 'inherit',
+              textDecoration: 'underline',
             },
             '& ul, & ol': {
               pl: 2,
               my: 1,
             },
+            '& table': {
+              borderCollapse: 'collapse',
+              width: '100%',
+              my: 2,
+              fontSize: '0.875rem',
+            },
+            '& th': {
+              borderBottom: '1px solid',
+              borderColor: 'divider',
+              textAlign: 'left',
+              p: 1,
+              bgcolor: 'action.hover',
+            },
+            '& td': {
+              borderBottom: '1px solid',
+              borderColor: 'divider',
+              p: 1,
+            },
           }}
         >
-          <ReactMarkdown>{message.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </Box>
       </Paper>
     </Box>

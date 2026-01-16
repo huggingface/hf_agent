@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAgentStore } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
+import { useLayoutStore } from '@/store/layoutStore';
 import type { AgentEvent } from '@/types/events';
-import type { Message } from '@/types/agent';
+import type { Message, TraceLog } from '@/types/agent';
 
 const WS_RECONNECT_DELAY = 1000;
 const WS_MAX_RECONNECT_DELAY = 30000;
@@ -28,7 +29,13 @@ export function useAgentWebSocket({
     setConnected,
     setPendingApprovals,
     setError,
+    addTraceLog,
+    clearTraceLogs,
+    setPanelContent,
+    traceLogs,
   } = useAgentStore();
+
+  const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
 
   const { setSessionActive } = useSessionStore();
 
@@ -46,15 +53,18 @@ export function useAgentWebSocket({
 
         case 'processing':
           setProcessing(true);
+          clearTraceLogs();
           break;
 
         case 'assistant_message': {
           const content = (event.data?.content as string) || '';
+          const currentTrace = useAgentStore.getState().traceLogs;
           const message: Message = {
             id: `msg_${Date.now()}`,
             role: 'assistant',
             content,
             timestamp: new Date().toISOString(),
+            trace: currentTrace.length > 0 ? [...currentTrace] : undefined,
           };
           addMessage(sessionId, message);
           break;
@@ -62,16 +72,36 @@ export function useAgentWebSocket({
 
         case 'tool_call': {
           const toolName = (event.data?.tool as string) || 'unknown';
-          const args = event.data?.arguments || {};
-          const message: Message = {
+          const args = (event.data?.arguments as Record<string, any>) || {};
+          const log: TraceLog = {
             id: `tool_${Date.now()}`,
-            role: 'tool',
-            content: `Calling ${toolName}...`,
+            type: 'call',
+            text: `Calling ${toolName} with ${JSON.stringify(args)}`,
+            tool: toolName,
             timestamp: new Date().toISOString(),
-            toolName,
           };
-          addMessage(sessionId, message);
-          // Store tool call args for display
+          addTraceLog(log);
+          
+          // Auto-expand Right Panel for specific tools
+          if (toolName === 'hf_jobs' && (args.operation === 'run' || args.operation === 'scheduled run') && args.script) {
+            setPanelContent({
+              title: 'Compute Job Script',
+              content: args.script,
+              language: 'python'
+            });
+            setRightPanelOpen(true);
+            setLeftSidebarOpen(false);
+                    } else if (toolName === 'hf_repo_files' && args.operation === 'upload' && args.content) {
+                      setPanelContent({
+                        title: `File Upload: ${args.path || 'unnamed'} `,
+                        content: args.content,
+                        parameters: args,
+                        language: args.path?.endsWith('.py') ? 'python' : undefined
+                      });
+                      setRightPanelOpen(true);
+                      setLeftSidebarOpen(false);
+                    }
+
           console.log('Tool call:', toolName, args);
           break;
         }
@@ -80,14 +110,7 @@ export function useAgentWebSocket({
           const toolName = (event.data?.tool as string) || 'unknown';
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
-          const message: Message = {
-            id: `tool_out_${Date.now()}`,
-            role: 'tool',
-            content: output,
-            timestamp: new Date().toISOString(),
-            toolName,
-          };
-          addMessage(sessionId, message);
+          // Only log output to console, not to trace logs per user request
           console.log('Tool output:', toolName, success);
           break;
         }

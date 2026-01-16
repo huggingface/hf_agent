@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Message, ApprovalBatch, User } from '@/types/agent';
+import type { Message, ApprovalBatch, User, TraceLog } from '@/types/agent';
 
 interface AgentStore {
   // State per session (keyed by session ID)
@@ -9,6 +9,8 @@ interface AgentStore {
   pendingApprovals: ApprovalBatch | null;
   user: User | null;
   error: string | null;
+  traceLogs: TraceLog[];
+  panelContent: { title: string; content: string; language?: string; parameters?: any } | null;
 
   // Actions
   addMessage: (sessionId: string, message: Message) => void;
@@ -19,6 +21,9 @@ interface AgentStore {
   setUser: (user: User | null) => void;
   setError: (error: string | null) => void;
   getMessages: (sessionId: string) => Message[];
+  addTraceLog: (log: TraceLog) => void;
+  clearTraceLogs: () => void;
+  setPanelContent: (content: { title: string; content: string; language?: string; parameters?: any } | null) => void;
 }
 
 export const useAgentStore = create<AgentStore>((set, get) => ({
@@ -28,6 +33,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   pendingApprovals: null,
   user: null,
   error: null,
+  traceLogs: [],
+  panelContent: null,
 
   addMessage: (sessionId: string, message: Message) => {
     set((state) => {
@@ -72,5 +79,19 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   getMessages: (sessionId: string) => {
     return get().messagesBySession[sessionId] || [];
+  },
+
+  addTraceLog: (log: TraceLog) => {
+    set((state) => ({
+      traceLogs: [...state.traceLogs, log],
+    }));
+  },
+
+  clearTraceLogs: () => {
+    set({ traceLogs: [] });
+  },
+
+  setPanelContent: (content) => {
+    set({ panelContent: content });
   },
 }));
