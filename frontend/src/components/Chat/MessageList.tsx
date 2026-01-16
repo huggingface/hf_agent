@@ -1,6 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { Box, Typography, CircularProgress } from '@mui/material';
+import { Box, Typography } from '@mui/material';
+import { useAgentStore } from '@/store/agentStore';
+import { useSessionStore } from '@/store/sessionStore';
 import MessageBubble from './MessageBubble';
+import ApprovalFlow from './ApprovalFlow';
 import type { Message } from '@/types/agent';
 
 interface MessageListProps {
@@ -8,13 +11,51 @@ interface MessageListProps {
   isProcessing: boolean;
 }
 
+const TechnicalIndicator = () => (
+  <Box
+    component="span"
+    sx={{
+      color: 'primary.main',
+      fontFamily: 'monospace',
+      fontWeight: 'bold',
+      fontSize: '1.2rem',
+      lineHeight: 0,
+      display: 'inline-block',
+      verticalAlign: 'middle',
+      width: '1em',
+      letterSpacing: '-3px',
+      transform: 'scale(0.6) translateY(-2px)',
+      '&::after': {
+        content: '""',
+        animation: 'dots 2s steps(4, end) infinite',
+      },
+      '@keyframes dots': {
+        '0%': { content: '""' },
+        '25%': { content: '"."' },
+        '50%': { content: '".."' },
+        '75%, 100%': { content: '"..."' },
+      },
+    }}
+  />
+);
+
 export default function MessageList({ messages, isProcessing }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const traceBoxRef = useRef<HTMLDivElement>(null);
+  const { traceLogs } = useAgentStore();
+  const { activeSessionId } = useSessionStore();
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isProcessing, traceLogs]);
+
+  // Auto-scroll trace box
+  useEffect(() => {
+    if (traceBoxRef.current) {
+      traceBoxRef.current.scrollTop = traceBoxRef.current.scrollHeight;
+    }
+  }, [traceLogs]);
 
   return (
     <Box
@@ -24,36 +65,77 @@ export default function MessageList({ messages, isProcessing }: MessageListProps
         p: 2,
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
       }}
     >
-      {messages.length === 0 ? (
-        <Box
-          sx={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Typography color="text.secondary">
-            Start a conversation by typing a message below
-          </Typography>
-        </Box>
-      ) : (
-        messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))
-      )}
-      {isProcessing && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2 }}>
-          <CircularProgress size={16} />
-          <Typography variant="body2" color="text.secondary">
-            Processing...
-          </Typography>
-        </Box>
-      )}
-      <div ref={bottomRef} />
+      <Box sx={{ maxWidth: 'md', mx: 'auto', width: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {messages.length === 0 && traceLogs.length === 0 && !isProcessing ? (
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              py: 8,
+            }}
+          >
+            <Typography color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+              Awaiting input…
+            </Typography>
+          </Box>
+        ) : (
+          messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))
+        )}
+        
+        {isProcessing && (
+          <Box sx={{ width: '100%', mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, px: 0.5 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                Thinking
+              </Typography>
+              <TechnicalIndicator />
+            </Box>
+            
+            {traceLogs.length > 0 && (
+              <Box
+                sx={{
+                  bgcolor: 'background.default',
+                  borderRadius: 1,
+                  p: 2,
+                  border: 1,
+                  borderColor: 'divider',
+                  width: '100%',
+                  fontFamily: 'monospace',
+                  maxHeight: 120,
+                  overflowY: 'auto',
+                }}
+                ref={traceBoxRef}
+              >
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                  {traceLogs.map((log) => (
+                    <Box key={log.id}>
+                      <Typography
+                        variant="caption"
+                        component="div"
+                        sx={{ color: 'common.white', fontFamily: 'monospace' }}
+                      >
+                        &gt; {log.text}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
+          </Box>
+        )}
+
+        {activeSessionId && (
+          <ApprovalFlow sessionId={activeSessionId} />
+        )}
+        
+        <div ref={bottomRef} />
+      </Box>
     </Box>
   );
 }

@@ -77,7 +77,7 @@ system_prompt: |
 
   - Be concise and direct.
   - Don't flatter the user.
-  - Don't use emojis nor exclamation points.
+  - Never use emojis nor exclamation points.
   - If you are limited in a task, offer alternatives.
   - Don't thank the user when he provides results.
   - Explain what you're doing for non-trivial operations.

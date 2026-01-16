@@ -16,6 +16,7 @@ export interface Message {
   timestamp: string;
   toolName?: string;
   toolCallId?: string;
+  trace?: TraceLog[];
 }
 
 export interface ToolCall {
@@ -39,6 +40,14 @@ export interface ApprovalBatch {
     tool_call_id: string;
   }>;
   count: number;
+}
+
+export interface TraceLog {
+  id: string;
+  type: 'call' | 'output';
+  text: string;
+  tool: string;
+  timestamp: string;
 }
 
 export interface User {

@@ -4,9 +4,9 @@ const theme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
-      main: '#FFD21E',
-      light: '#FFE066',
-      dark: '#E6BD1B',
+      main: '#FEE133',
+      light: '#FFF066',
+      dark: '#B29F24',
     },
     secondary: {
       main: '#FF9D00',
@@ -21,7 +21,7 @@ const theme = createTheme({
     },
     divider: '#30363D',
     success: {
-      main: '#3FB950',
+      main: '#2EA043', // Muted green
     },
     error: {
       main: '#F85149',
@@ -34,7 +34,7 @@ const theme = createTheme({
     },
   },
   typography: {
-    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    fontFamily: '"IBM Plex Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     h1: {
       fontWeight: 600,
     },
@@ -59,6 +59,9 @@ const theme = createTheme({
     body2: {
       fontSize: '0.875rem',
     },
+    button: {
+      fontFamily: '"JetBrains Mono", "IBM Plex Sans", monospace',
+    },
   },
   components: {
     MuiCssBaseline: {
@@ -71,7 +74,7 @@ const theme = createTheme({
           },
           '&::-webkit-scrollbar-thumb': {
             backgroundColor: '#30363D',
-            borderRadius: '4px',
+            borderRadius: '2px',
           },
           '&::-webkit-scrollbar-track': {
             backgroundColor: 'transparent',
@@ -85,8 +88,10 @@ const theme = createTheme({
     MuiButton: {
       styleOverrides: {
         root: {
-          textTransform: 'none',
-          fontWeight: 500,
+          textTransform: 'uppercase',
+          fontWeight: 600,
+          letterSpacing: '0.05em',
+          fontSize: '0.75rem',
         },
       },
     },
@@ -106,7 +111,7 @@ const theme = createTheme({
     },
   },
   shape: {
-    borderRadius: 8,
+    borderRadius: 2,
   },
 });
 
