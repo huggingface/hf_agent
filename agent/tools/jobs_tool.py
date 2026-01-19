@@ -9,6 +9,7 @@ import base64
 import http.client
 import os
 import re
+from contextvars import ContextVar
 from typing import Any, Dict, Literal, Optional
 
 import httpx
@@ -21,6 +22,11 @@ from agent.tools.utilities import (
     format_jobs_table,
     format_scheduled_job_details,
     format_scheduled_jobs_table,
+)
+
+# Context variable for event queue (set by agent loop for TUI log streaming)
+_event_queue_ctx: ContextVar[Optional[asyncio.Queue]] = ContextVar(
+    "_event_queue_ctx", default=None
 )
 
 # Hardware flavors
@@ -344,11 +350,16 @@ class HfJobsTool:
             }
 
     async def _wait_for_job_completion(
-        self, job_id: str, namespace: Optional[str] = None
+        self, job_id: str, namespace: Optional[str] = None, log_callback=None
     ) -> tuple[str, list[str]]:
         """
         Stream job logs until completion, printing them in real-time.
         Implements retry logic to handle connection drops during long-running jobs.
+
+        Args:
+            job_id: Job ID to wait for
+            namespace: HF namespace
+            log_callback: Optional async callback(log_line: str) for streaming logs to TUI
 
         Returns:
             tuple: (final_status, all_logs)
@@ -361,11 +372,31 @@ class HfJobsTool:
         for _ in range(max_retries):
             try:
                 # Fetch logs - generator streams logs as they arrive
-                logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                # Run in executor to avoid blocking event loop
+                loop = asyncio.get_event_loop()
 
-                # Stream logs in real-time
-                for log_line in logs_gen:
-                    print("\t" + log_line)
+                def fetch_logs():
+                    """Fetch logs synchronously in executor"""
+                    logs = []
+                    try:
+                        logs_gen = self.api.fetch_job_logs(
+                            job_id=job_id, namespace=namespace
+                        )
+                        for log_line in logs_gen:
+                            logs.append(log_line)
+                    except Exception as e:
+                        raise e
+                    return logs
+
+                # Fetch all logs in executor (non-blocking)
+                new_logs = await loop.run_in_executor(None, fetch_logs)
+
+                # Stream them to UI
+                for log_line in new_logs:
+                    if log_callback:
+                        await log_callback(log_line)
+                    else:
+                        print("\t" + log_line)
                     all_logs.append(log_line)
 
                 # If we get here, streaming completed normally
@@ -465,12 +496,35 @@ class HfJobsTool:
             )
 
             # Wait for completion and stream logs
-            print(f"{job_type} job started: {job.url}")
-            print("Streaming logs...\n---\n")
+            # Get event queue from context for TUI streaming
+            event_queue = _event_queue_ctx.get()
+
+            # Send job start message
+            if event_queue:
+                from agent.core.session import Event
+
+                await event_queue.put(
+                    Event(
+                        event_type="system_message",
+                        data={"message": f"Job started: {job.url}\nStreaming logs..."},
+                    )
+                )
+            else:
+                print(f"{job_type} job started: {job.url}")
+                print("Streaming logs...\n---\n")
+
+            async def log_callback(log_line: str):
+                if event_queue:
+                    from agent.core.session import Event
+
+                    await event_queue.put(
+                        Event(event_type="log_stream", data={"log": log_line})
+                    )
 
             final_status, all_logs = await self._wait_for_job_completion(
                 job_id=job.id,
                 namespace=self.namespace,
+                log_callback=log_callback if event_queue else None,
             )
 
             # Filter out UV package installation output

@@ -1,0 +1,357 @@
+/* HuggingFace Agent TUI - Dark Terminal Theme */
+
+/*
+Color scheme matching original terminal display:
+- Yellow (#FFD21E / #FFCC00): HuggingFace brand, tool calls
+- Green (#00FF00 / #98C379): Success, turn complete
+- Red (#FF6B6B): Errors
+- Cyan (#56B6C2): User prompt, highlights
+- Dark background (#1E1E1E / #282C34)
+*/
+
+/* App-level variables */
+$hf-yellow: #FFD21E;
+$hf-yellow-dim: #B8960F;
+$hf-green: #98C379;
+$hf-red: #E06C75;
+$hf-cyan: #56B6C2;
+$hf-blue: #61AFEF;
+$hf-magenta: #C678DD;
+$hf-bg: #1E1E1E;
+$hf-bg-light: #282C34;
+$hf-fg: #ABB2BF;
+$hf-fg-dim: #5C6370;
+
+/* Global screen */
+Screen {
+    background: $hf-bg;
+    color: $hf-fg;
+}
+
+/* Header - HuggingFace yellow branding */
+Header {
+    background: $hf-yellow;
+    color: #000000;
+    dock: top;
+    height: 1;
+}
+
+HeaderTitle {
+    color: #000000;
+    text-style: bold;
+}
+
+/* Footer */
+Footer {
+    background: $hf-bg-light;
+    color: $hf-fg-dim;
+    dock: bottom;
+    height: 1;
+}
+
+FooterKey > .footer-key--key {
+    background: $hf-yellow;
+    color: #000000;
+}
+
+/* Main container */
+#main {
+    height: 1fr;
+    background: $hf-bg;
+}
+
+#chat-container {
+    height: 1fr;
+    background: $hf-bg;
+}
+
+/* Chat widget - slower scroll */
+ChatWidget {
+    height: 1fr;
+    background: $hf-bg;
+    scrollbar-gutter: stable;
+    scrollbar-size: 1 1;
+}
+
+/* Scrollbar styling */
+ChatWidget:focus {
+    border: none;
+}
+
+VerticalScroll {
+    scrollbar-background: $hf-bg-light;
+    scrollbar-color: $hf-fg-dim;
+    scrollbar-color-hover: $hf-yellow-dim;
+    scrollbar-color-active: $hf-yellow;
+    scrollbar-size: 1 1;
+}
+
+/* Processing indicator */
+.processing-indicator {
+    text-align: center;
+    color: $hf-yellow;
+    padding: 1 2;
+    text-style: italic;
+    background: $hf-bg;
+}
+
+/* Log output */
+.log-output {
+    background: $hf-bg-light;
+    color: $hf-green;
+    padding: 1;
+    margin: 1 2;
+    border: solid $hf-green;
+}
+
+/* Message cells */
+MessageCell {
+    margin: 0 1;
+    padding: 0;
+    background: $hf-bg;
+}
+
+MessageCell.user {
+    background: $hf-bg;
+}
+
+MessageCell.assistant {
+    background: $hf-bg;
+}
+
+MessageCell.system {
+    background: $hf-bg;
+    color: $hf-fg-dim;
+}
+
+MessageCell.error {
+    background: $hf-bg;
+    color: $hf-red;
+}
+
+/* Tool call widgets - Yellow like original */
+ToolCallWidget {
+    margin: 0 1;
+    background: $hf-bg;
+}
+
+ToolOutputWidget {
+    margin: 0 1;
+    background: $hf-bg;
+}
+
+ToolOutputWidget.success {
+    background: $hf-bg;
+}
+
+ToolOutputWidget.error {
+    background: $hf-bg;
+}
+
+/* Plan widget */
+PlanWidget {
+    margin: 0 1;
+    background: $hf-bg;
+}
+
+PlanWidget.hidden {
+    display: none;
+}
+
+/* Input area - Cyan prompt like original */
+InputArea {
+    height: 3;
+    background: $hf-bg-light;
+    border-top: solid $hf-yellow-dim;
+    padding: 0 1;
+    dock: bottom;
+}
+
+InputArea > #prompt {
+    width: 3;
+    height: 1;
+    padding: 0;
+    color: $hf-cyan;
+    text-style: bold;
+}
+
+InputArea > #user-input {
+    width: 1fr;
+    border: none;
+    background: $hf-bg-light;
+    color: $hf-fg;
+    padding: 0;
+}
+
+InputArea > #user-input:focus {
+    border: none;
+}
+
+InputArea.disabled {
+    background: $hf-bg;
+}
+
+InputArea.disabled > #user-input {
+    color: $hf-fg-dim;
+    background: $hf-bg;
+}
+
+InputArea > #status {
+    width: auto;
+    min-width: 14;
+    height: 1;
+    text-align: right;
+    color: $hf-fg-dim;
+}
+
+InputArea.processing > #status {
+    color: $hf-yellow;
+    text-style: bold;
+}
+
+/* Status bar - Green when ready */
+#status-bar {
+    height: 1;
+    background: $hf-bg;
+    color: $hf-green;
+    padding: 0 2;
+    content-align: left middle;
+}
+
+#status-bar.yolo {
+    background: $hf-yellow 20%;
+    color: $hf-yellow;
+    text-style: bold;
+}
+
+/* Approval screen */
+ApprovalScreen {
+    align: center middle;
+    background: $hf-bg 90%;
+}
+
+ApprovalScreen > #approval-container {
+    width: 90%;
+    max-width: 120;
+    height: 90%;
+    background: $hf-bg-light;
+    border: solid $hf-yellow;
+    padding: 1 2;
+}
+
+ApprovalScreen #header {
+    height: 3;
+    background: $hf-yellow;
+    color: #000000;
+    text-style: bold;
+    content-align: center middle;
+    margin-bottom: 1;
+}
+
+ApprovalScreen #tool-scroll {
+    height: 1fr;
+    border: solid $hf-fg-dim;
+    background: $hf-bg;
+    margin: 1 0;
+    scrollbar-size: 1 1;
+}
+
+ApprovalScreen #input-section {
+    height: auto;
+    padding: 1 0;
+}
+
+ApprovalScreen #input-section > Label {
+    margin-bottom: 1;
+    color: $hf-fg;
+}
+
+ApprovalScreen #approval-input {
+    width: 100%;
+    background: $hf-bg;
+    color: $hf-fg;
+}
+
+ApprovalScreen #button-row {
+    height: 3;
+    align: center middle;
+    margin: 1 0;
+}
+
+ApprovalScreen Button {
+    margin: 0 1;
+    min-width: 16;
+}
+
+ApprovalScreen #btn-approve {
+    background: $hf-green;
+    color: #000000;
+}
+
+ApprovalScreen #btn-reject {
+    background: $hf-red;
+    color: #ffffff;
+}
+
+ApprovalScreen #btn-yolo {
+    background: $hf-yellow;
+    color: #000000;
+}
+
+ApprovalScreen #help-text {
+    height: 2;
+    content-align: center middle;
+    color: $hf-fg-dim;
+    text-style: italic;
+}
+
+/* Tool detail view */
+ToolDetailView {
+    height: auto;
+    padding: 1;
+    background: $hf-bg;
+}
+
+/* Collapsible tool calls */
+CollapsibleToolCall {
+    margin: 1;
+    background: $hf-bg;
+}
+
+CollapsibleToolCall > CollapsibleTitle {
+    background: $hf-bg-light;
+    color: $hf-yellow;
+    padding: 0 1;
+}
+
+CollapsibleToolCall > Contents {
+    padding: 0 1;
+    background: $hf-bg;
+}
+
+/* Input widget styling */
+Input {
+    background: $hf-bg;
+    color: $hf-fg;
+    border: solid $hf-fg-dim;
+}
+
+Input:focus {
+    border: solid $hf-cyan;
+}
+
+/* Button default styling */
+Button {
+    background: $hf-bg-light;
+    color: $hf-fg;
+    border: solid $hf-fg-dim;
+}
+
+Button:hover {
+    background: $hf-yellow-dim;
+    color: #000000;
+}
+
+Button:focus {
+    border: solid $hf-yellow;
+}

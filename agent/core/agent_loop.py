@@ -38,7 +38,9 @@ def _validate_tool_args(tool_args: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = None) -> bool:
+def _needs_approval(
+    tool_name: str, tool_args: dict, config: Config | None = None
+) -> bool:
     """Check if a tool call requires user approval before execution."""
     # Yolo mode: skip all approvals
     if config and config.yolo_mode:
@@ -53,19 +55,24 @@ def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = Non
         operation = tool_args.get("operation", "")
         if operation not in ["run", "uv", "scheduled run", "scheduled uv"]:
             return False
-        
+
         # Check if this is a CPU-only job
         # hardware_flavor is at top level of tool_args, not nested in args
-        hardware_flavor = tool_args.get("hardware_flavor") or tool_args.get("flavor") or tool_args.get("hardware") or "cpu-basic"
+        hardware_flavor = (
+            tool_args.get("hardware_flavor")
+            or tool_args.get("flavor")
+            or tool_args.get("hardware")
+            or "cpu-basic"
+        )
         is_cpu_job = hardware_flavor in CPU_FLAVORS
-        
+
         if is_cpu_job:
             if config and not config.confirm_cpu_jobs:
                 return False
             return True
-        
+
         return True
-    
+
     # Check for file upload operations (hf_private_repos or other tools)
     if tool_name == "hf_private_repos":
         operation = tool_args.get("operation", "")
@@ -86,7 +93,13 @@ def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = Non
     # hf_repo_git: destructive operations require approval
     if tool_name == "hf_repo_git":
         operation = tool_args.get("operation", "")
-        if operation in ["delete_branch", "delete_tag", "merge_pr", "create_repo", "update_repo"]:
+        if operation in [
+            "delete_branch",
+            "delete_tag",
+            "merge_pr",
+            "create_repo",
+            "update_repo",
+        ]:
             return True
 
     return False
@@ -202,9 +215,16 @@ class Handlers:
                             )
                         )
 
-                        output, success = await session.tool_router.call_tool(
-                            tool_name, tool_args
-                        )
+                        # Set event queue context for log streaming
+                        from agent.tools.jobs_tool import _event_queue_ctx
+
+                        token = _event_queue_ctx.set(session.event_queue)
+                        try:
+                            output, success = await session.tool_router.call_tool(
+                                tool_name, tool_args
+                            )
+                        finally:
+                            _event_queue_ctx.reset(token)
 
                     # Add tool result to history
                     tool_msg = Message(
@@ -376,7 +396,16 @@ class Handlers:
                 )
             )
 
-            output, success = await session.tool_router.call_tool(tool_name, tool_args)
+            # Set event queue context for log streaming
+            from agent.tools.jobs_tool import _event_queue_ctx
+
+            token = _event_queue_ctx.set(session.event_queue)
+            try:
+                output, success = await session.tool_router.call_tool(
+                    tool_name, tool_args
+                )
+            finally:
+                _event_queue_ctx.reset(token)
 
             return (tc, tool_name, output, success)
 
@@ -456,7 +485,6 @@ class Handlers:
         """Handle shutdown (like shutdown in codex.rs:1329)"""
         # Save session trajectory if enabled (fire-and-forget, returns immediately)
         if session.config.save_sessions:
-            print("💾 Saving session...")
             repo_id = session.config.session_dataset_repo
             _ = session.save_and_upload_detached(repo_id)
             # if local_path:
@@ -531,9 +559,20 @@ async def submission_loop(
     try:
         # Main processing loop
         async with tool_router:
-            # Emit ready event after initialization
+            # Emit ready event after initialization with tool info
+            tool_names = list(tool_router.tools.keys())
+            mcp_server_names = (
+                list(config.mcpServers.keys()) if config.mcpServers else []
+            )
             await session.send_event(
-                Event(event_type="ready", data={"message": "Agent initialized"})
+                Event(
+                    event_type="ready",
+                    data={
+                        "message": "Agent initialized",
+                        "tools": tool_names,
+                        "mcp_servers": mcp_server_names,
+                    },
+                )
             )
 
             while session.is_running:
@@ -544,25 +583,13 @@ async def submission_loop(
                     if not should_continue:
                         break
                 except asyncio.CancelledError:
-                    print("\n⚠️  Agent loop cancelled")
                     break
                 except Exception as e:
-                    print(f"❌ Error in agent loop: {e}")
                     await session.send_event(
                         Event(event_type="error", data={"error": str(e)})
                     )
 
-        print("🛑 Agent loop exited")
-
     finally:
         # Emergency save if session saving is enabled and shutdown wasn't called properly
         if session.config.save_sessions and session.is_running:
-            print("\n💾 Emergency save: preserving session before exit...")
-            try:
-                local_path = session.save_and_upload_detached(
-                    session.config.session_dataset_repo
-                )
-                if local_path:
-                    print("✅ Emergency save successful, upload in progress")
-            except Exception as e:
-                print(f"❌ Emergency save failed: {e}")
+            _ = session.save_and_upload_detached(session.config.session_dataset_repo)

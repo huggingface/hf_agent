@@ -158,9 +158,6 @@ class ToolRouter:
                     handler=None,
                 )
             )
-        print(
-            f"Loaded {len(registered_names)} MCP tools: {', '.join(registered_names)} ({skipped_count} disabled)"
-        )
 
     async def register_openapi_tool(self) -> None:
         """Register the OpenAPI search tool (requires async initialization)"""
@@ -179,7 +176,6 @@ class ToolRouter:
                 handler=search_openapi_handler,
             )
         )
-        print(f"Loaded OpenAPI search tool: {openapi_spec['name']}")
 
     def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
         """Get tool specifications in OpenAI format"""
@@ -206,9 +202,6 @@ class ToolRouter:
 
         # Register OpenAPI tool (requires async initialization)
         await self.register_openapi_tool()
-
-        total_tools = len(self.tools)
-        print(f"\nAgent ready with {total_tools} tools total\n")
 
         return self
 
@@ -320,8 +313,5 @@ def create_builtin_tools() -> list[ToolSpec]:
             handler=github_read_file_handler,
         ),
     ]
-
-    tool_names = ", ".join([t.name for t in tools])
-    print(f"Loaded {len(tools)} built-in tools: {tool_names}")
 
     return tools
