@@ -95,13 +95,34 @@ VerticalScroll {
     background: $hf-bg;
 }
 
-/* Log output */
+/* Log output - Legacy (kept for compatibility) */
 .log-output {
     background: $hf-bg-light;
     color: $hf-green;
     padding: 1;
     margin: 1 2;
     border: solid $hf-green;
+}
+
+/* Streaming log widget - Scrollable container */
+StreamingLogWidget {
+    height: auto;
+    max-height: 30;
+    margin: 0 1;
+    padding: 0;
+}
+
+StreamingLogWidget > .log-scroll {
+    height: auto;
+    max-height: 28;
+    border: solid $hf-green;
+    background: $hf-bg-light;
+    padding: 1;
+    scrollbar-size: 1 1;
+}
+
+StreamingLogWidget .log-content {
+    color: $hf-green;
 }
 
 /* Message cells */

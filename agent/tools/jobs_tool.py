@@ -6,13 +6,11 @@ Refactored to use official huggingface-hub library instead of custom HTTP client
 
 import asyncio
 import base64
-import http.client
 import os
-import re
+import threading
 from contextvars import ContextVar
 from typing import Any, Dict, Literal, Optional
 
-import httpx
 from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
 
@@ -83,44 +81,6 @@ OperationType = Literal[
 
 # Constants
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
-
-
-def _filter_uv_install_output(logs: list[str]) -> list[str]:
-    """
-    Filter out UV package installation output from logs.
-
-    Replaces installation details with "[installs truncated]" and keeps
-    the "Installed X packages in Y ms/s" summary line.
-
-    Args:
-        logs: List of log lines
-
-    Returns:
-        Filtered list of log lines
-    """
-    if not logs:
-        return logs
-
-    # Regex pattern to match: "Installed X packages in Y ms" or "Installed X package in Y s"
-    install_pattern = re.compile(
-        r"^Installed\s+\d+\s+packages?\s+in\s+\d+(?:\.\d+)?\s*(?:ms|s)$"
-    )
-
-    # Find the index of the "Installed X packages" line
-    install_line_idx = None
-    for idx, line in enumerate(logs):
-        if install_pattern.match(line.strip()):
-            install_line_idx = idx
-            break
-
-    # If pattern found, replace installation details with truncation message
-    if install_line_idx is not None and install_line_idx > 0:
-        # Keep logs from the "Installed X packages" line onward
-        # Add truncation message before the "Installed" line
-        return ["[installs truncated]"] + logs[install_line_idx:]
-
-    # If pattern not found, return original logs
-    return logs
 
 
 def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -349,100 +309,45 @@ class HfJobsTool:
                 "isError": True,
             }
 
-    async def _wait_for_job_completion(
+    async def _stream_job_logs(
         self, job_id: str, namespace: Optional[str] = None, log_callback=None
-    ) -> tuple[str, list[str]]:
-        """
-        Stream job logs until completion, printing them in real-time.
-        Implements retry logic to handle connection drops during long-running jobs.
+    ) -> str:
+        """Stream job logs line-by-line until completion"""
+        log_queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
-        Args:
-            job_id: Job ID to wait for
-            namespace: HF namespace
-            log_callback: Optional async callback(log_line: str) for streaming logs to TUI
-
-        Returns:
-            tuple: (final_status, all_logs)
-        """
-        all_logs = []
-        terminal_states = {"COMPLETED", "FAILED", "CANCELED", "ERROR"}
-        max_retries = 100  # Allow many retries for 8h+ jobs
-        retry_delay = 5  # Seconds between retries
-
-        for _ in range(max_retries):
+        def _fetch_in_thread(event_loop):
+            """Run blocking log fetch in thread, push to queue"""
             try:
-                # Fetch logs - generator streams logs as they arrive
-                # Run in executor to avoid blocking event loop
-                loop = asyncio.get_event_loop()
+                logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                for log_line in logs_gen:
+                    asyncio.run_coroutine_threadsafe(
+                        log_queue.put(log_line), event_loop
+                    )
+            except Exception as e:
+                asyncio.run_coroutine_threadsafe(
+                    log_queue.put(("__ERROR__", str(e))), event_loop
+                )
+            finally:
+                asyncio.run_coroutine_threadsafe(log_queue.put(None), event_loop)
 
-                def fetch_logs():
-                    """Fetch logs synchronously in executor"""
-                    logs = []
-                    try:
-                        logs_gen = self.api.fetch_job_logs(
-                            job_id=job_id, namespace=namespace
-                        )
-                        for log_line in logs_gen:
-                            logs.append(log_line)
-                    except Exception as e:
-                        raise e
-                    return logs
+        threading.Thread(target=_fetch_in_thread, args=(loop,), daemon=True).start()
 
-                # Fetch all logs in executor (non-blocking)
-                new_logs = await loop.run_in_executor(None, fetch_logs)
-
-                # Stream them to UI
-                for log_line in new_logs:
-                    if log_callback:
-                        await log_callback(log_line)
-                    else:
-                        print("\t" + log_line)
-                    all_logs.append(log_line)
-
-                # If we get here, streaming completed normally
+        # Stream logs as they arrive
+        while True:
+            log_line = await log_queue.get()
+            if log_line is None:
                 break
+            if isinstance(log_line, tuple) and log_line[0] == "__ERROR__":
+                raise Exception(log_line[1])
+            if log_callback:
+                await log_callback(log_line)
 
-            except (
-                ConnectionError,
-                TimeoutError,
-                OSError,
-                http.client.IncompleteRead,
-                httpx.RemoteProtocolError,
-                httpx.ReadError,
-                HfHubHTTPError,
-            ) as e:
-                # Connection dropped - check if job is still running
-                try:
-                    job_info = await _async_call(
-                        self.api.inspect_job, job_id=job_id, namespace=namespace
-                    )
-                    current_status = job_info.status.stage
-
-                    if current_status in terminal_states:
-                        # Job finished, no need to retry
-                        print(f"\tJob reached terminal state: {current_status}")
-                        break
-
-                    # Job still running, retry connection
-                    print(
-                        f"\tConnection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
-                    )
-                    await asyncio.sleep(retry_delay)
-                    continue
-
-                except (ConnectionError, TimeoutError, OSError):
-                    # Can't even check job status, wait and retry
-                    print(f"\tConnection error, retrying in {retry_delay}s...")
-                    await asyncio.sleep(retry_delay)
-                    continue
-
-        # Fetch final job status
+        # Get final status
         job_info = await _async_call(
             self.api.inspect_job, job_id=job_id, namespace=namespace
         )
-        final_status = job_info.status.stage
-
-        return final_status, all_logs
+        return job_info.status.stage
 
     async def _run_job(self, args: Dict[str, Any]) -> ToolResult:
         """Run a job using HfApi.run_job() - smart detection of Python vs Docker mode"""
@@ -463,25 +368,17 @@ class HfJobsTool:
 
             # Python mode: script provided
             if script:
-                # Get dependencies and ensure hf-transfer is included
                 deps = _ensure_hf_transfer_dependency(args.get("dependencies"))
-
-                # Resolve the command based on script type (URL, inline, or file)
                 command = _resolve_uv_command(
                     script=script,
                     with_deps=deps,
                     python=args.get("python"),
                     script_args=args.get("script_args"),
                 )
-
-                # Use UV image unless overridden
                 image = args.get("image", UV_DEFAULT_IMAGE)
-                job_type = "Python"
-
             # Docker mode: command provided
             else:
                 image = args.get("image", "python:3.12")
-                job_type = "Docker"
 
             # Run the job
             job = await _async_call(
@@ -495,55 +392,48 @@ class HfJobsTool:
                 namespace=self.namespace,
             )
 
-            # Wait for completion and stream logs
-            # Get event queue from context for TUI streaming
+            # Stream logs in background (TUI) or foreground (CLI)
             event_queue = _event_queue_ctx.get()
-
-            # Send job start message
             if event_queue:
+                # TUI: background streaming
                 from agent.core.session import Event
 
-                await event_queue.put(
-                    Event(
-                        event_type="system_message",
-                        data={"message": f"Job started: {job.url}\nStreaming logs..."},
-                    )
-                )
+                async def stream_logs():
+                    try:
+                        status = await self._stream_job_logs(
+                            job.id,
+                            self.namespace,
+                            lambda line: event_queue.put(
+                                Event("log_stream", {"log": line})
+                            ),
+                        )
+                        await event_queue.put(
+                            Event("log_stream", {"log": f"\n✓ {status}"})
+                        )
+                    except Exception as e:
+                        await event_queue.put(Event("log_stream", {"log": f"\n✗ {e}"}))
+
+                if not hasattr(self, "_bg_tasks"):
+                    self._bg_tasks = set()
+                task = asyncio.create_task(stream_logs())
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
+
+                return {
+                    "formatted": f"Job started: {job.url}",
+                    "totalResults": 1,
+                    "resultsShared": 1,
+                }
             else:
-                print(f"{job_type} job started: {job.url}")
-                print("Streaming logs...\n---\n")
-
-            async def log_callback(log_line: str):
-                if event_queue:
-                    from agent.core.session import Event
-
-                    await event_queue.put(
-                        Event(event_type="log_stream", data={"log": log_line})
-                    )
-
-            final_status, all_logs = await self._wait_for_job_completion(
-                job_id=job.id,
-                namespace=self.namespace,
-                log_callback=log_callback if event_queue else None,
-            )
-
-            # Filter out UV package installation output
-            filtered_logs = _filter_uv_install_output(all_logs)
-
-            # Format all logs for the agent
-            log_text = "\n".join(filtered_logs) if filtered_logs else "(no logs)"
-
-            response = f"""{job_type} job completed!
-
-**Job ID:** {job.id}
-**Final Status:** {final_status}
-**View at:** {job.url}
-
-**Logs:**
-```
-{log_text}
-```"""
-            return {"formatted": response, "totalResults": 1, "resultsShared": 1}
+                # CLI: blocking stream
+                status = await self._stream_job_logs(
+                    job.id, self.namespace, lambda line: print(f"\t{line}")
+                )
+                return {
+                    "formatted": f"Job {status}: {job.url}",
+                    "totalResults": 1,
+                    "resultsShared": 1,
+                }
 
         except Exception as e:
             raise Exception(f"Failed to run job: {str(e)}")

@@ -71,11 +71,22 @@ class ToolCallWidget(Static):
 
 
 class ToolOutputWidget(Static):
-    """Widget for displaying tool output"""
+    """Widget for displaying tool output with scrollable container for long outputs"""
 
     DEFAULT_CSS = """
     ToolOutputWidget {
         margin: 0 1;
+        padding: 0;
+    }
+
+    ToolOutputWidget .output-scroll {
+        height: auto;
+        max-height: 30;
+        border: none;
+        padding: 0 1;
+    }
+
+    ToolOutputWidget .output-text {
         padding: 0;
     }
     """
@@ -86,7 +97,7 @@ class ToolOutputWidget(Static):
         success: bool = True,
         tool_name: str = "",
         truncate: bool = True,
-        max_lines: int = 10,
+        max_lines: int = 100,  # Increased from 10 to 100
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -97,33 +108,31 @@ class ToolOutputWidget(Static):
         self.max_lines = max_lines
         self.add_class("success" if success else "error")
 
-    def _truncate_output(self, text: str) -> tuple[str, int]:
-        """Truncate output to max_lines, return (text, hidden_lines)"""
-        lines = text.split("\n")
-        if not self.truncate or len(lines) <= self.max_lines:
-            return text, 0
-        truncated = "\n".join(lines[: self.max_lines])
-        return truncated, len(lines) - self.max_lines
-
     def render(self):
         """Render the tool output"""
-        output_text, hidden_lines = self._truncate_output(self.output)
-
-        content = Text()
-        content.append(output_text)
-
-        if hidden_lines > 0:
-            content.append(f"\n... ({hidden_lines} more lines)", style=HF_CYAN)
+        lines = self.output.split("\n")
+        line_count = len(lines)
 
         # Yellow for success (like original), red for error
         if self.success:
             border_style = HF_YELLOW
             title_style = f"bold {HF_YELLOW}"
+            text_style = HF_FG
         else:
             border_style = HF_RED
             title_style = f"bold {HF_RED}"
+            text_style = HF_RED
 
-        title = f"Tool output ({len(self.output)} chars)"
+        # Show line count and char count in title
+        title = f"Tool output ({line_count} lines, {len(self.output)} chars)"
+
+        # If output is short enough, render directly
+        if line_count <= 30:
+            content = Text(self.output, style=text_style)
+        else:
+            # For long output, show indication that it's scrollable
+            content = Text(self.output, style=text_style)
+            title = f"Tool output ({line_count} lines, {len(self.output)} chars) - Scrollable"
 
         return Panel(
             content,

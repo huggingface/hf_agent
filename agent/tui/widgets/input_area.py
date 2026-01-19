@@ -13,36 +13,6 @@ from agent.tui.messages import SubmitMessage
 class InputArea(Horizontal):
     """Widget for user text input with status indicator"""
 
-    DEFAULT_CSS = """
-    InputArea {
-        height: 3;
-        dock: bottom;
-        padding: 0 1;
-    }
-
-    InputArea > #prompt {
-        width: 3;
-        height: 1;
-        content-align: center middle;
-    }
-
-    InputArea > #user-input {
-        width: 1fr;
-        border: none;
-    }
-
-    InputArea > #user-input:focus {
-        border: none;
-    }
-
-    InputArea > #status {
-        width: auto;
-        min-width: 12;
-        height: 1;
-        content-align: right middle;
-    }
-    """
-
     BINDINGS = [
         Binding("enter", "submit", "Send", show=True),
         Binding("escape", "clear", "Clear", show=False),

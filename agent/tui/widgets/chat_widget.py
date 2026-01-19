@@ -4,13 +4,41 @@ Chat widget - scrollable container for messages and tool calls
 
 from typing import Any
 
-from textual.containers import VerticalScroll
+from rich.text import Text
+from textual.containers import Container, VerticalScroll
 from textual.widgets import Static
 
 from agent.tui.screens.approval import HF_GREEN
 from agent.tui.widgets.message_cell import MessageCell, MessageType
 from agent.tui.widgets.plan_widget import PlanWidget
 from agent.tui.widgets.tool_call import ToolCallWidget, ToolOutputWidget
+
+
+class StreamingLogWidget(Container):
+    """Scrollable container for streaming job logs"""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.log_lines: list[str] = []
+        self._log_content: Static | None = None
+        self._scroll_container: VerticalScroll | None = None
+
+    def compose(self):
+        """Create the scrollable log container"""
+        with VerticalScroll(classes="log-scroll") as scroll:
+            self._scroll_container = scroll
+            self._log_content = Static("", classes="log-content")
+            yield self._log_content
+
+    def add_line(self, line: str) -> None:
+        """Add a log line and update the display"""
+        self.log_lines.append(line)
+        if self._log_content is not None:
+            content = Text("\n".join(self.log_lines), style=HF_GREEN)
+            self._log_content.update(content)
+            # Auto-scroll to bottom
+            if self._scroll_container is not None:
+                self._scroll_container.scroll_end(animate=False)
 
 
 class ChatWidget(VerticalScroll):
@@ -34,8 +62,7 @@ class ChatWidget(VerticalScroll):
         super().__init__(**kwargs)
         self._last_tool_name: str | None = None
         self._assistant_message_widget: MessageCell | None = None
-        self._log_widget: Static | None = None
-        self._log_lines: list[str] = []
+        self._log_widget: StreamingLogWidget | None = None
 
     def compose(self):
         """Initial empty state"""
@@ -131,27 +158,26 @@ class ChatWidget(VerticalScroll):
 
     def add_log_line(self, log_line: str) -> None:
         """Add a log line (for streaming job logs)"""
-        from rich.text import Text
-
-        # Create log widget if needed
         if self._log_widget is None:
-            self._log_widget = Static("", classes="log-output")
-            self._log_widget.id = "log-output"
-            self.mount(self._log_widget)
-            self._log_lines = []
+            try:
+                # Reuse existing widget if present
+                self._log_widget = self.query_one("#log-output", StreamingLogWidget)
+            except Exception:
+                # Create new widget
+                self._log_widget = StreamingLogWidget(id="log-output")
+                self.mount(self._log_widget)
 
-        # Add log line
-        self._log_lines.append(log_line)
-
-        # Update widget with all lines
-        content = Text("\n".join(self._log_lines), style=HF_GREEN)
-        self._log_widget.update(content)
+        self._log_widget.add_line(log_line)
         self.scroll_end(animate=False)
 
     def finalize_logs(self) -> None:
         """Finalize log streaming"""
-        self._log_widget = None
-        self._log_lines = []
+        if self._log_widget:
+            try:
+                self._log_widget.remove()
+            except Exception:
+                pass
+            self._log_widget = None
 
     def clear(self) -> None:
         """Clear all messages"""
@@ -161,4 +187,3 @@ class ChatWidget(VerticalScroll):
         self._assistant_message_widget = None
         self._last_tool_name = None
         self._log_widget = None
-        self._log_lines = []
