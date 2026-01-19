@@ -9,6 +9,8 @@ dependencies = [
     # Core dependencies (always required)
     "pydantic>=2.12.3",
     "python-dotenv>=1.2.1",
+    "rich>=14.2.0",
+    "textual>=6.6.0",
 ]
 
 [project.optional-dependencies]

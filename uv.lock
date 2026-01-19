@@ -905,6 +905,8 @@ dependencies = [
     { name = "datasets" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "textual" },
 ]
 
 [package.optional-dependencies]
@@ -919,6 +921,7 @@ agent = [
     { name = "prompt-toolkit" },
     { name = "requests" },
     { name = "thefuzz" },
+    { name = "whoosh" },
 ]
 all = [
     { name = "datasets" },
@@ -935,6 +938,7 @@ all = [
     { name = "requests" },
     { name = "tenacity" },
     { name = "thefuzz" },
+    { name = "whoosh" },
 ]
 dev = [
     { name = "pytest" },
@@ -965,8 +969,11 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", marker = "extra == 'agent'", specifier = ">=2.32.5" },
+    { name = "rich", specifier = ">=14.2.0" },
     { name = "tenacity", marker = "extra == 'eval'", specifier = ">=8.0.0" },
+    { name = "textual", specifier = ">=6.6.0" },
     { name = "thefuzz", marker = "extra == 'agent'", specifier = ">=0.22.1" },
+    { name = "whoosh", marker = "extra == 'agent'", specifier = ">=2.7.4" },
 ]
 provides-extras = ["agent", "eval", "dev", "all"]
 
@@ -3572,6 +3579,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/86/eb/20b6cdf273913d0ad05a6a14aed4b9a85591c18a987a3d47f20fa13dcc47/websockets-15.0.1-cp313-cp313-win32.whl", hash = "sha256:ba9e56e8ceeeedb2e080147ba85ffcd5cd0711b89576b83784d8605a7df455fa", size = 176393, upload-time = "2025-03-05T20:02:53.814Z" },
     { url = "https://files.pythonhosted.org/packages/1b/6c/c65773d6cab416a64d191d6ee8a8b1c68a09970ea6909d16965d26bfed1e/websockets-15.0.1-cp313-cp313-win_amd64.whl", hash = "sha256:e09473f095a819042ecb2ab9465aee615bd9c2028e4ef7d933600a8401c79561", size = 176837, upload-time = "2025-03-05T20:02:55.237Z" },
     { url = "https://files.pythonhosted.org/packages/fa/a8/5b41e0da817d64113292ab1f8247140aac61cbf6cfd085d6a0fa77f4984f/websockets-15.0.1-py3-none-any.whl", hash = "sha256:f7a866fbc1e97b5c617ee4116daaa09b722101d4a3c170c787450ba409f9736f", size = 169743, upload-time = "2025-03-05T20:03:39.41Z" },
+]
+
+[[package]]
+name = "whoosh"
+version = "2.7.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/2b/6beed2107b148edc1321da0d489afc4617b9ed317ef7b72d4993cad9b684/Whoosh-2.7.4.tar.gz", hash = "sha256:7ca5633dbfa9e0e0fa400d3151a8a0c4bec53bd2ecedc0a67705b17565c31a83", size = 968741, upload-time = "2016-04-04T01:19:32.327Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/19/24d0f1f454a2c1eb689ca28d2f178db81e5024f42d82729a4ff6771155cf/Whoosh-2.7.4-py2.py3-none-any.whl", hash = "sha256:aa39c3c3426e3fd107dcb4bde64ca1e276a65a889d9085a6e4b54ba82420a852", size = 468790, upload-time = "2016-04-04T01:19:40.379Z" },
 ]
 
 [[package]]
