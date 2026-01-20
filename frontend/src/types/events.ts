@@ -15,7 +15,8 @@ export type EventType =
   | 'error'
   | 'shutdown'
   | 'interrupted'
-  | 'undo_complete';
+  | 'undo_complete'
+  | 'plan_update';
 
 export interface AgentEvent {
   event_type: EventType;
@@ -48,6 +49,10 @@ export interface ToolOutputEventData {
 export interface ToolLogEventData {
   tool: string;
   log: string;
+}
+
+export interface PlanUpdateEventData {
+  plan: Array<{ id: string; content: string; status: 'pending' | 'in_progress' | 'completed' }>;
 }
 
 export interface ApprovalRequiredEventData {

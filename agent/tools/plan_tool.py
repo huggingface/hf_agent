@@ -1,5 +1,6 @@
 from typing import Any, Dict, List
 
+from agent.core.session import Event
 from agent.utils.terminal_display import format_plan_tool_output
 
 from .types import ToolResult
@@ -11,8 +12,8 @@ _current_plan: List[Dict[str, str]] = []
 class PlanTool:
     """Tool for managing a list of todos with status tracking."""
 
-    def __init__(self):
-        pass
+    def __init__(self, session: Any = None):
+        self.session = session
 
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
         """
@@ -55,6 +56,15 @@ class PlanTool:
 
         # Store the raw todos structure in memory
         _current_plan = todos
+
+        # Emit plan update event if session is available
+        if self.session:
+            await self.session.send_event(
+                Event(
+                    event_type="plan_update",
+                    data={"plan": todos},
+                )
+            )
 
         # Format only for display using terminal_display utility
         formatted_output = format_plan_tool_output(todos)
@@ -120,7 +130,9 @@ PLAN_TOOL_SPEC = {
 }
 
 
-async def plan_tool_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
-    tool = PlanTool()
+async def plan_tool_handler(
+    arguments: Dict[str, Any], session: Any = None
+) -> tuple[str, bool]:
+    tool = PlanTool(session=session)
     result = await tool.execute(arguments)
     return result["formatted"], not result.get("isError", False)

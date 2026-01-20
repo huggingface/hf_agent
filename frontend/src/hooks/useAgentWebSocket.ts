@@ -32,6 +32,7 @@ export function useAgentWebSocket({
     addTraceLog,
     clearTraceLogs,
     setPanelContent,
+    setPlan,
     traceLogs,
   } = useAgentStore();
 
@@ -144,6 +145,15 @@ export function useAgentWebSocket({
             if (!useLayoutStore.getState().isRightPanelOpen) {
                  setRightPanelOpen(true);
             }
+          }
+          break;
+        }
+
+        case 'plan_update': {
+          const plan = (event.data?.plan as any[]) || [];
+          setPlan(plan);
+          if (!useLayoutStore.getState().isRightPanelOpen) {
+            setRightPanelOpen(true);
           }
           break;
         }

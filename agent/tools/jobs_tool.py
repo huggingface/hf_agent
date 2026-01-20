@@ -367,17 +367,48 @@ class HfJobsTool:
 
         for _ in range(max_retries):
             try:
-                # Fetch logs - generator streams logs as they arrive
-                logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                # Use a queue to bridge sync generator to async consumer
+                queue = asyncio.Queue()
+                loop = asyncio.get_running_loop()
 
-                # Stream logs in real-time
-                for log_line in logs_gen:
+                def log_producer():
+                    try:
+                        # fetch_job_logs is a blocking sync generator
+                        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                        for line in logs_gen:
+                            # Push line to queue thread-safely
+                            loop.call_soon_threadsafe(queue.put_nowait, line)
+                        # Signal EOF
+                        loop.call_soon_threadsafe(queue.put_nowait, None)
+                    except Exception as e:
+                        # Signal error
+                        loop.call_soon_threadsafe(queue.put_nowait, e)
+
+                # Start producer in a background thread so it doesn't block the event loop
+                producer_future = loop.run_in_executor(None, log_producer)
+
+                # Consume logs from the queue as they arrive
+                while True:
+                    item = await queue.get()
+
+                    # EOF sentinel
+                    if item is None:
+                        break
+
+                    # Error occurred in producer
+                    if isinstance(item, Exception):
+                        raise item
+
+                    # Process log line
+                    log_line = item
                     print("\t" + log_line)
                     if self.log_callback:
                         await self.log_callback(log_line)
                     all_logs.append(log_line)
 
-                # If we get here, streaming completed normally
+                # If we get here, streaming completed normally (EOF received)
+                # Wait for thread to cleanup (should be done)
+                await producer_future
                 break
 
             except (
