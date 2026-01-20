@@ -219,7 +219,7 @@ class ToolRouter:
 
     @observe(name="call_tool")
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any]
+        self, tool_name: str, arguments: dict[str, Any], session: Any = None
     ) -> tuple[str, bool]:
         """
         Call a tool and return (output_string, success_bool).
@@ -230,6 +230,12 @@ class ToolRouter:
         # Check if this is a built-in tool with a handler
         tool = self.tools.get(tool_name)
         if tool and tool.handler:
+            import inspect
+
+            # Check if handler accepts session argument
+            sig = inspect.signature(tool.handler)
+            if "session" in sig.parameters:
+                return await tool.handler(arguments, session=session)
             return await tool.handler(arguments)
 
         # Otherwise, use MCP client

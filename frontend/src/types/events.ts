@@ -8,6 +8,7 @@ export type EventType =
   | 'assistant_message'
   | 'tool_call'
   | 'tool_output'
+  | 'tool_log'
   | 'approval_required'
   | 'turn_complete'
   | 'compacted'
@@ -42,6 +43,11 @@ export interface ToolOutputEventData {
   tool: string;
   output: string;
   success: boolean;
+}
+
+export interface ToolLogEventData {
+  tool: string;
+  log: string;
 }
 
 export interface ApprovalRequiredEventData {
