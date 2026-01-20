@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import type { Message, ApprovalBatch, User, TraceLog } from '@/types/agent';
 
+export interface PlanItem {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
 interface AgentStore {
   // State per session (keyed by session ID)
   messagesBySession: Record<string, Message[]>;
@@ -11,6 +17,7 @@ interface AgentStore {
   error: string | null;
   traceLogs: TraceLog[];
   panelContent: { title: string; content: string; language?: string; parameters?: any } | null;
+  plan: PlanItem[];
 
   // Actions
   addMessage: (sessionId: string, message: Message) => void;
@@ -24,6 +31,7 @@ interface AgentStore {
   addTraceLog: (log: TraceLog) => void;
   clearTraceLogs: () => void;
   setPanelContent: (content: { title: string; content: string; language?: string; parameters?: any } | null) => void;
+  setPlan: (plan: PlanItem[]) => void;
 }
 
 export const useAgentStore = create<AgentStore>((set, get) => ({
@@ -35,6 +43,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   error: null,
   traceLogs: [],
   panelContent: null,
+  plan: [],
 
   addMessage: (sessionId: string, message: Message) => {
     set((state) => {
@@ -93,5 +102,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   setPanelContent: (content) => {
     set({ panelContent: content });
+  },
+
+  setPlan: (plan: PlanItem[]) => {
+    set({ plan });
   },
 }));
