@@ -95,62 +95,104 @@ export default function ApprovalFlow({ sessionId }: ApprovalFlowProps) {
   const currentTool = pendingApprovals.tools[currentIndex];
 
   return (
-    <Box sx={{ 
-      mt: 0, 
-      mb: 4, 
-      px: 2, 
-      width: '100%',
-      alignSelf: 'center'
-    }}>
-      <Typography variant="subtitle2" sx={{ fontFamily: 'monospace', mb: 2, fontWeight: 600 }}>
-        ACTION REQUIRED ({currentIndex + 1}/{pendingApprovals.count}) : The agent wants to execute <Box component="span" sx={{ color: 'primary.main' }}>{currentTool.tool}</Box>
+    <Box 
+      className="action-card"
+      sx={{ 
+        mt: 2, 
+        mb: 4, 
+        width: '100%',
+        alignSelf: 'center',
+        padding: '18px',
+        borderRadius: 'var(--radius-md)',
+        background: 'linear-gradient(180deg, rgba(255,255,255,0.015), transparent)',
+        border: '1px solid rgba(255,255,255,0.03)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+         <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'var(--text)' }}>
+            Approval Required
+         </Typography>
+         <Typography variant="caption" sx={{ color: 'var(--muted-text)' }}>
+            ({currentIndex + 1}/{pendingApprovals.count})
+         </Typography>
+      </Box>
+
+      <Typography variant="body2" sx={{ color: 'var(--muted-text)' }}>
+        The agent wants to execute <Box component="span" sx={{ color: 'var(--accent-yellow)', fontWeight: 500 }}>{currentTool.tool}</Box>
       </Typography>
 
       <Box component="pre" sx={{ 
-        bgcolor: 'background.default', 
-        p: 1.5, 
-        borderRadius: 0.5, 
-        fontSize: '0.75rem', 
-        fontFamily: 'monospace',
+        bgcolor: 'rgba(0,0,0,0.3)', 
+        p: 2, 
+        borderRadius: '8px',
+        fontSize: '0.8rem', 
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
         overflow: 'auto',
-        maxHeight: 150,
-        mb: 2,
-        border: 1,
-        borderColor: 'divider'
+        maxHeight: 200,
+        border: '1px solid rgba(255,255,255,0.05)',
+        margin: 0
       }}>
         {JSON.stringify(currentTool.arguments, null, 2)}
       </Box>
 
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <TextField
           fullWidth
           size="small"
-          placeholder="Feedback for rejection (optional)"
+          placeholder="Feedback (optional)"
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
           variant="outlined"
           sx={{ 
-            flex: 1,
-            '& .MuiOutlinedInput-root': { fontFamily: 'monospace', fontSize: '0.8rem', height: '36px' }
+            '& .MuiOutlinedInput-root': { 
+                bgcolor: 'rgba(0,0,0,0.2)',
+                fontFamily: 'inherit',
+                fontSize: '0.9rem' 
+            }
           }}
         />
         
-        <Button 
-          variant="outlined" 
-          color="error" 
-          onClick={() => handleResolve(false)}
-          sx={{ fontFamily: 'monospace', height: '36px', px: 3 }}
-        >
-          REJECT
-        </Button>
-        <Button 
-          variant="contained" 
-          color="success" 
-          onClick={() => handleResolve(true)}
-          sx={{ color: 'white', fontFamily: 'monospace', height: '36px', px: 3 }}
-        >
-          APPROVE
-        </Button>
+        <Box className="action-buttons" sx={{ display: 'flex', gap: '10px' }}>
+            <Button 
+            className="btn-reject"
+            onClick={() => handleResolve(false)}
+            sx={{ 
+                flex: 1,
+                background: 'transparent',
+                border: '1px solid rgba(255,255,255,0.05)',
+                color: 'var(--accent-red)',
+                padding: '10px 14px',
+                borderRadius: '10px',
+                '&:hover': {
+                    bgcolor: 'rgba(224, 90, 79, 0.05)',
+                    borderColor: 'var(--accent-red)',
+                }
+            }}
+            >
+            Reject
+            </Button>
+            <Button 
+            className="btn-approve"
+            onClick={() => handleResolve(true)}
+            sx={{ 
+                flex: 1,
+                background: 'transparent',
+                border: '1px solid rgba(255,255,255,0.05)',
+                color: 'var(--accent-green)',
+                padding: '10px 14px',
+                borderRadius: '10px',
+                '&:hover': {
+                    bgcolor: 'rgba(47, 204, 113, 0.05)',
+                    borderColor: 'var(--accent-green)',
+                }
+            }}
+            >
+            Approve
+            </Button>
+        </Box>
       </Box>
     </Box>
   );

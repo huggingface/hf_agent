@@ -4,69 +4,71 @@ const theme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
-      main: '#FEE133',
-      light: '#FFF066',
-      dark: '#B29F24',
+      main: '#C7A500', // --accent-yellow
     },
     secondary: {
       main: '#FF9D00',
     },
     background: {
-      default: '#0D1117',
-      paper: '#161B22',
+      default: '#0B0D10', // --bg
+      paper: '#0F1316',   // --panel
     },
     text: {
-      primary: '#E6EDF3',
-      secondary: '#8B949E',
+      primary: '#E6EEF8', // --text
+      secondary: '#98A0AA', // --muted-text
     },
-    divider: '#30363D',
+    divider: 'rgba(255,255,255,0.03)',
     success: {
-      main: '#2EA043', // Muted green
+      main: '#2FCC71', // --accent-green
     },
     error: {
-      main: '#F85149',
+      main: '#E05A4F', // --accent-red
     },
     warning: {
-      main: '#D29922',
+      main: '#C7A500',
     },
     info: {
       main: '#58A6FF',
     },
   },
   typography: {
-    fontFamily: '"IBM Plex Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    h1: {
-      fontWeight: 600,
-    },
-    h2: {
-      fontWeight: 600,
-    },
-    h3: {
-      fontWeight: 600,
-    },
-    h4: {
-      fontWeight: 600,
-    },
-    h5: {
-      fontWeight: 600,
-    },
-    h6: {
-      fontWeight: 600,
-    },
-    body1: {
-      fontSize: '0.9375rem',
-    },
-    body2: {
-      fontSize: '0.875rem',
-    },
+    fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif',
+    fontSize: 15,
+    h1: { fontWeight: 600, color: '#E6EEF8' },
+    h2: { fontWeight: 600, color: '#E6EEF8' },
+    h3: { fontWeight: 600, color: '#E6EEF8' },
+    h4: { fontWeight: 600, color: '#E6EEF8' },
+    h5: { fontWeight: 600, color: '#E6EEF8' },
+    h6: { fontWeight: 600, color: '#E6EEF8' },
+    body1: { fontSize: '15px', color: '#E6EEF8' },
+    body2: { fontSize: '0.875rem', color: '#98A0AA' },
     button: {
-      fontFamily: '"JetBrains Mono", "IBM Plex Sans", monospace',
+      fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif',
+      textTransform: 'none',
+      fontWeight: 600,
     },
   },
   components: {
     MuiCssBaseline: {
       styleOverrides: {
+        ':root': {
+          '--bg': '#0B0D10',
+          '--panel': '#0F1316',
+          '--surface': '#121416',
+          '--text': '#E6EEF8',
+          '--muted-text': '#98A0AA',
+          '--accent-yellow': '#C7A500',
+          '--accent-yellow-weak': 'rgba(199,165,0,0.08)',
+          '--accent-green': '#2FCC71',
+          '--accent-red': '#E05A4F',
+          '--shadow-1': '0 6px 18px rgba(2,6,12,0.55)',
+          '--radius-lg': '20px',
+          '--radius-md': '12px',
+          '--focus': '0 0 0 3px rgba(199,165,0,0.12)',
+        },
         body: {
+          background: 'linear-gradient(180deg, var(--bg), #090B0D)',
+          color: 'var(--text)',
           scrollbarWidth: 'thin',
           '&::-webkit-scrollbar': {
             width: '8px',
@@ -81,17 +83,33 @@ const theme = createTheme({
           },
         },
         'code, pre': {
-          fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace',
+        },
+        '.brand-logo': {
+          position: 'relative',
+          padding: '6px',
+          borderRadius: '8px',
+          '&::after': {
+            content: '""',
+            position: 'absolute',
+            inset: '-6px',
+            borderRadius: '10px',
+            background: 'var(--accent-yellow-weak)',
+            zIndex: -1,
+            pointerEvents: 'none',
+          },
         },
       },
     },
     MuiButton: {
       styleOverrides: {
         root: {
-          textTransform: 'uppercase',
+          borderRadius: '10px',
           fontWeight: 600,
-          letterSpacing: '0.05em',
-          fontSize: '0.75rem',
+          transition: 'transform 0.06s ease, background 0.12s ease, box-shadow 0.12s ease',
+          '&:hover': {
+            transform: 'translateY(-1px)',
+          },
         },
       },
     },
@@ -99,19 +117,41 @@ const theme = createTheme({
       styleOverrides: {
         root: {
           backgroundImage: 'none',
+          backgroundColor: 'transparent', // Default to transparent for gradients
         },
       },
     },
     MuiDrawer: {
       styleOverrides: {
         paper: {
-          borderRight: '1px solid #30363D',
+          backgroundColor: 'var(--panel)',
+          borderRight: '1px solid rgba(255,255,255,0.03)',
+        },
+      },
+    },
+    MuiTextField: {
+      styleOverrides: {
+        root: {
+          '& .MuiOutlinedInput-root': {
+            borderRadius: 'var(--radius-md)',
+            '& fieldset': {
+              borderColor: 'rgba(255,255,255,0.03)',
+            },
+            '&:hover fieldset': {
+              borderColor: 'rgba(255,255,255,0.1)',
+            },
+            '&.Mui-focused fieldset': {
+              borderColor: 'var(--accent-yellow)',
+              borderWidth: '1px',
+              boxShadow: 'var(--focus)',
+            },
+          },
         },
       },
     },
   },
   shape: {
-    borderRadius: 2,
+    borderRadius: 12,
   },
 });
 
