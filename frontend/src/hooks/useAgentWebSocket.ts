@@ -115,6 +115,39 @@ export function useAgentWebSocket({
           break;
         }
 
+        case 'tool_log': {
+          const toolName = (event.data?.tool as string) || 'unknown';
+          const log = (event.data?.log as string) || '';
+
+          if (toolName === 'hf_jobs') {
+            const currentPanel = useAgentStore.getState().panelContent;
+            
+            // If we are already showing logs, append
+            // If we are showing "Compute Job Script", overwrite/switch to logs
+            // Otherwise, initialize
+            
+            let newContent = log;
+            if (currentPanel?.title === 'Job Logs') {
+              newContent = currentPanel.content + '\n' + log;
+            } else if (currentPanel?.title === 'Compute Job Script') {
+               // We were showing the script, now logs start.
+               // Maybe we want to clear and start showing logs.
+               newContent = '--- Starting execution ---\n' + log;
+            }
+
+            setPanelContent({
+              title: 'Job Logs',
+              content: newContent,
+              language: 'text'
+            });
+            
+            if (!useLayoutStore.getState().isRightPanelOpen) {
+                 setRightPanelOpen(true);
+            }
+          }
+          break;
+        }
+
         case 'approval_required': {
           const tools = event.data?.tools as Array<{
             tool: string;
