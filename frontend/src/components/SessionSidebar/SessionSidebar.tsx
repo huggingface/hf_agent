@@ -3,19 +3,14 @@ import {
   Box,
   List,
   ListItem,
-  ListItemButton,
-  ListItemText,
-  ListItemSecondaryAction,
   IconButton,
   Typography,
   Button,
   Divider,
-  Chip,
   Tooltip,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import UndoIcon from '@mui/icons-material/Undo';
-import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 
@@ -26,28 +21,27 @@ interface SessionSidebarProps {
 const StatusDiode = ({ connected }: { connected: boolean }) => (
   <Box
     sx={{
-      width: 8,
-      height: 8,
+      width: 10,
+      height: 10,
       borderRadius: '50%',
-      bgcolor: connected ? 'success.main' : 'error.main',
-      boxShadow: connected ? '0 0 0 0 rgba(46, 160, 67, 0.7)' : 'none',
-      animation: connected ? 'pulse 2s infinite' : 'none',
-      '@keyframes pulse': {
-        '0%': {
-          transform: 'scale(0.95)',
-          boxShadow: '0 0 0 0 rgba(46, 160, 67, 0.7)',
-        },
-        '70%': {
-          transform: 'scale(1)',
-          boxShadow: '0 0 0 4px rgba(46, 160, 67, 0)',
-        },
-        '100%': {
-          transform: 'scale(0.95)',
-          boxShadow: '0 0 0 0 rgba(46, 160, 67, 0)',
-        },
-      },
+      bgcolor: connected ? 'var(--accent-green)' : 'var(--accent-red)', // Use green/red for connection status
+      boxShadow: connected ? '0 0 6px rgba(47, 204, 113, 0.4)' : 'none',
+      transition: 'all 0.3s ease',
     }}
   />
+);
+
+const RunningIndicator = () => (
+    <Box
+      className="running-indicator"
+      sx={{
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        bgcolor: 'var(--accent-yellow)',
+        boxShadow: '0 0 6px rgba(199,165,0,0.18)',
+      }}
+    />
 );
 
 export default function SessionSidebar({ onClose }: SessionSidebarProps) {
@@ -102,114 +96,147 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   };
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <Box sx={{ mb: 2 }}>
-          <img 
-            src="/hf-log-only-white.png" 
-            alt="HF Agent" 
-            style={{ height: '32px', objectFit: 'contain' }} 
-          />
+    <Box className="sidebar" sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)' }}>
+      {/* Header - Aligned with AppLayout 60px */}
+      <Box sx={{ 
+        height: '60px', 
+        display: 'flex', 
+        alignItems: 'center', 
+        px: 2,
+        borderBottom: '1px solid rgba(255,255,255,0.03)'
+      }}>
+        <Box className="brand-logo" sx={{ display: 'flex' }}>
+            <img 
+              src="/hf-log-only-white.png" 
+              alt="HF Agent" 
+              style={{ height: '24px', objectFit: 'contain' }} 
+            />
         </Box>
+      </Box>
 
+      {/* Content */}
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2, overflow: 'hidden' }}>
         {/* System Info / Status */}
         <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-            {isConnected ? 'Connected' : 'Disconnected'}
-          </Typography>
           <StatusDiode connected={isConnected} />
+          <Typography variant="caption" sx={{ color: 'var(--muted-text)', fontFamily: 'inherit' }}>
+            {isConnected ? 'System Online' : 'Disconnected'}
+          </Typography>
         </Box>
 
         <Button
           fullWidth
-          variant="outlined"
+          className="create-session"
           onClick={handleNewSession}
-          sx={{ justifyContent: 'center' }}
+          sx={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            gap: '10px',
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            bgcolor: 'transparent',
+            color: 'var(--text)',
+            fontWeight: 600,
+            textTransform: 'none',
+            mb: 3,
+            '&:hover': {
+                bgcolor: 'rgba(255,255,255,0.02)',
+                border: '1px solid rgba(255,255,255,0.1)',
+            },
+            '&::before': {
+                content: '""',
+                width: '4px',
+                height: '20px',
+                background: 'linear-gradient(180deg, var(--accent-yellow), rgba(199,165,0,0.9))',
+                borderRadius: '4px',
+            }
+          }}
         >
-          Create Session
+          New Session
         </Button>
-      </Box>
 
-      {/* Session List */}
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {sessions.length === 0 ? (
-          <Box sx={{ p: 3, textAlign: 'center' }}>
-            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-              NO ACTIVE SESSIONS
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Initialize a new session to begin
-            </Typography>
-          </Box>
-        ) : (
-          <List disablePadding>
+        {/* Session List */}
+        <Box sx={{ flex: 1, overflow: 'auto', mx: -1, px: 1 }}>
+            <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {[...sessions].reverse().map((session, index) => {
-              const sessionNumber = sessions.length - index;
-              return (
-                <ListItem key={session.id} disablePadding divider>
-                  <ListItemButton
-                    selected={session.id === activeSessionId}
+                const sessionNumber = sessions.length - index;
+                const isSelected = session.id === activeSessionId;
+                return (
+                <ListItem 
+                    key={session.id} 
+                    disablePadding 
+                    className="session-item"
                     onClick={() => handleSelectSession(session.id)}
                     sx={{
-                      '&.Mui-selected': {
-                        bgcolor: 'action.selected',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '10px',
+                        borderRadius: 'var(--radius-md)',
+                        bgcolor: isSelected ? 'rgba(255,255,255,0.05)' : 'transparent',
+                        cursor: 'pointer',
+                        transition: 'background 0.18s ease, transform 0.08s ease',
                         '&:hover': {
-                          bgcolor: 'action.selected',
+                            bgcolor: 'rgba(255,255,255,0.02)',
+                            transform: 'translateY(-1px)',
                         },
-                      },
+                        '& .delete-btn': {
+                            opacity: 0,
+                            transition: 'opacity 0.2s',
+                        },
+                        '&:hover .delete-btn': {
+                            opacity: 1,
+                        }
                     }}
-                  >
-                    <ListItemText
-                      primary={
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
-                          SESSION {String(sessionNumber).padStart(3, '0')}
+                >
+                    <Box sx={{ flex: 1, overflow: 'hidden' }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            Session {String(sessionNumber).padStart(2, '0')}
                         </Typography>
-                      }
-                      secondary={
-                        <Typography variant="caption" sx={{ fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <span style={{ color: session.isActive ? 'var(--mui-palette-success-main)' : 'var(--mui-palette-text-secondary)' }}>
-                            {session.isActive ? 'RUNNING' : 'STOPPED'}
-                          </span>
-                          <span>·</span>
-                          <span>{formatTime(session.createdAt)}</span>
-                        </Typography>
-                      }
-                    />
-                    <ListItemSecondaryAction>
-                      <IconButton
-                        edge="end"
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                            {session.isActive && <RunningIndicator />}
+                            <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
+                                {formatTime(session.createdAt)}
+                            </Typography>
+                        </Box>
+                    </Box>
+                    
+                    <IconButton
+                        className="delete-btn"
                         size="small"
                         onClick={(e) => handleDeleteSession(session.id, e)}
-                      >
+                        sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
+                    >
                         <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </ListItemSecondaryAction>
-                  </ListItemButton>
+                    </IconButton>
                 </ListItem>
-              );
+                );
             })}
-          </List>
-        )}
+            </List>
+        </Box>
       </Box>
 
       {/* Footer */}
-      <Divider />
-      <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-          {sessions.length} SESSION{sessions.length !== 1 ? 'S' : ''}
-        </Typography>
-        <Tooltip title="Undo last turn">
-          <span>
-            <IconButton
-              onClick={handleUndo}
-              disabled={!activeSessionId || isProcessing}
-              size="small"
-            >
-              <UndoIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
+      <Box sx={{ p: 2, borderTop: '1px solid rgba(255,255,255,0.03)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="caption" className="small-note" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
+            {sessions.length} active
+            </Typography>
+            <Tooltip title="Undo last turn">
+            <span>
+                <IconButton
+                onClick={handleUndo}
+                disabled={!activeSessionId || isProcessing}
+                size="small"
+                sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--text)' } }}
+                >
+                <UndoIcon fontSize="small" />
+                </IconButton>
+            </span>
+            </Tooltip>
+        </Box>
       </Box>
     </Box>
   );

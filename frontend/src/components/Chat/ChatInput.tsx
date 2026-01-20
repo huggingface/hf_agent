@@ -36,26 +36,22 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
         zIndex: 10,
       }}
     >
-      <Box sx={{ maxWidth: 'md', mx: 'auto', width: '100%', px: 2 }}>
-        {/* Input Label and Divider */}
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, gap: 2 }}>
-          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, color: 'text.secondary', letterSpacing: '0.05em' }}>
-            INPUT
-          </Typography>
-          <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
-        </Box>
-
+      <Box sx={{ maxWidth: '880px', mx: 'auto', width: '100%', px: 2 }}>
         <Box
+          className="composer"
           sx={{
             display: 'flex',
-            gap: 1,
-            alignItems: 'center',
-            bgcolor: 'background.paper',
-            borderRadius: 1,
-            boxShadow: 4,
-            p: 1,
-            border: 1,
-            borderColor: 'divider',
+            gap: '10px',
+            alignItems: 'flex-start',
+            bgcolor: 'rgba(255,255,255,0.01)',
+            borderRadius: 'var(--radius-md)',
+            p: '12px',
+            border: '1px solid rgba(255,255,255,0.03)',
+            transition: 'box-shadow 0.2s ease, border-color 0.2s ease',
+            '&:focus-within': {
+                borderColor: 'var(--accent-yellow)',
+                boxShadow: 'var(--focus)',
+            }
           }}
         >
           <TextField
@@ -65,46 +61,64 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask anything"
+            placeholder="Ask anything..."
             disabled={disabled}
-            variant="outlined"
-            size="small"
+            variant="standard"
+            InputProps={{
+                disableUnderline: true,
+                sx: {
+                    color: 'var(--text)',
+                    fontSize: '15px',
+                    fontFamily: 'inherit',
+                    padding: 0,
+                    lineHeight: 1.5,
+                    minHeight: '56px',
+                    alignItems: 'flex-start',
+                }
+            }}
             sx={{
-              '& .MuiOutlinedInput-root': {
-                padding: '9px 12px',
-                lineHeight: '1.4',
-                fontFamily: 'monospace',
-              },
-              '& .MuiInputBase-input': {
-                fontFamily: 'monospace',
-              },
-              '& .MuiOutlinedInput-notchedOutline': {
-                border: 'none',
-              },
+                flex: 1,
+                '& .MuiInputBase-root': {
+                    p: 0,
+                    backgroundColor: 'transparent',
+                },
+                '& textarea': {
+                    resize: 'none',
+                    padding: '0 !important',
+                }
             }}
           />
           <IconButton
             onClick={handleSend}
             disabled={disabled || !input.trim()}
             sx={{
-              border: 1,
-              borderColor: 'divider',
-              borderRadius: 1,
-              color: 'text.secondary',
+              mt: 1,
+              p: 1,
+              borderRadius: '10px',
+              color: 'var(--muted-text)',
               transition: 'all 0.2s',
               '&:hover': {
-                borderColor: 'primary.main',
-                color: 'primary.main',
-                bgcolor: 'transparent',
+                color: 'var(--accent-yellow)',
+                bgcolor: 'rgba(255,255,255,0.05)',
               },
               '&.Mui-disabled': {
-                borderColor: 'divider',
-                opacity: 0.5,
+                opacity: 0.3,
               },
             }}
           >
-            {disabled ? <CircularProgress size={24} color="inherit" /> : <ArrowUpwardIcon fontSize="small" />}
+            {disabled ? <CircularProgress size={20} color="inherit" /> : <ArrowUpwardIcon fontSize="small" />}
           </IconButton>
+        </Box>
+        
+        {/* Powered By Badge */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 1.5, gap: 0.8, opacity: 0.5 }}>
+          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
+            powered by
+          </Typography>
+          <img src="/claude-logo.png" alt="Claude" style={{ height: '12px', objectFit: 'contain' }} />
+          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
+            claude-opus-4-5-20251101
+          </Typography>
         </Box>
       </Box>
     </Box>

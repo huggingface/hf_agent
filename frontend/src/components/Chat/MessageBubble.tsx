@@ -10,12 +10,7 @@ interface MessageBubbleProps {
 export default function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
-
-  const getBgColor = () => {
-    if (isUser) return 'background.paper';
-    if (isTool) return 'background.default';
-    return 'transparent';
-  };
+  const isAssistant = message.role === 'assistant';
 
   return (
     <Box
@@ -23,18 +18,24 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         display: 'flex',
         justifyContent: isUser ? 'flex-end' : 'flex-start',
         width: '100%',
+        maxWidth: '880px',
+        mx: 'auto',
       }}
     >
       <Paper
         elevation={0}
+        className={`message ${isUser ? 'user' : isAssistant ? 'assistant' : ''}`}
         sx={{
-          p: isTool ? 2 : isUser ? 1.5 : 1,
-          maxWidth: isTool ? '100%' : '80%',
+          p: '14px 18px',
+          margin: '10px 0',
           width: isTool ? '100%' : 'auto',
-          bgcolor: getBgColor(),
-          border: (!isUser && !isTool) ? 0 : 1,
-          borderColor: 'divider',
-          borderRadius: isUser ? 2 : undefined,
+          maxWidth: '100%',
+          borderRadius: 'var(--radius-lg)',
+          borderTopLeftRadius: isAssistant ? '6px' : undefined,
+          lineHeight: 1.45,
+          boxShadow: 'var(--shadow-1)',
+          border: '1px solid rgba(255,255,255,0.03)',
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.015), transparent)',
         }}
       >
         {isTool && (
@@ -57,11 +58,11 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         {message.trace && message.trace.length > 0 && (
           <Box
             sx={{
-              bgcolor: 'background.default',
+              bgcolor: 'rgba(0,0,0,0.3)',
               borderRadius: 1,
               p: 1.5,
               border: 1,
-              borderColor: 'divider',
+              borderColor: 'rgba(255,255,255,0.05)',
               width: '100%',
               mb: 2,
             }}
@@ -72,7 +73,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   key={log.id}
                   variant="caption"
                   component="div"
-                  sx={{ color: 'common.white', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                  sx={{ color: 'var(--muted-text)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace', fontSize: '0.75rem' }}
                 >
                   &gt; {log.text}
                 </Typography>
@@ -83,16 +84,17 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
         <Box
           sx={{
-            '& p': { m: 0 },
+            '& p': { m: 0, color: isUser ? 'var(--text)' : 'var(--text)' }, // User might want different text color? Defaults to --text
             '& pre': {
-              bgcolor: 'background.default',
+              bgcolor: 'rgba(0,0,0,0.5)',
               p: 1.5,
               borderRadius: 1,
               overflow: 'auto',
               fontSize: '0.85rem',
+              border: '1px solid rgba(255,255,255,0.05)',
             },
             '& code': {
-              bgcolor: 'background.default',
+              bgcolor: 'rgba(255,255,255,0.05)',
               px: 0.5,
               py: 0.25,
               borderRadius: 0.5,
@@ -104,8 +106,11 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               p: 0,
             },
             '& a': {
-              color: 'inherit',
-              textDecoration: 'underline',
+              color: 'var(--accent-yellow)',
+              textDecoration: 'none',
+              '&:hover': {
+                textDecoration: 'underline',
+              },
             },
             '& ul, & ol': {
               pl: 2,
@@ -119,20 +124,24 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             },
             '& th': {
               borderBottom: '1px solid',
-              borderColor: 'divider',
+              borderColor: 'rgba(255,255,255,0.1)',
               textAlign: 'left',
               p: 1,
-              bgcolor: 'action.hover',
+              bgcolor: 'rgba(255,255,255,0.02)',
             },
             '& td': {
               borderBottom: '1px solid',
-              borderColor: 'divider',
+              borderColor: 'rgba(255,255,255,0.05)',
               p: 1,
             },
           }}
         >
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </Box>
+        
+        <Typography className="meta" variant="caption" sx={{ display: 'block', textAlign: 'right', mt: 1, fontSize: '11px', opacity: 0.5 }}>
+            {new Date(message.timestamp).toLocaleTimeString()}
+        </Typography>
       </Paper>
     </Box>
   );

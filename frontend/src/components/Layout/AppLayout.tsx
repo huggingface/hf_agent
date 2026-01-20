@@ -20,7 +20,7 @@ import ChatInput from '@/components/Chat/ChatInput';
 import MessageList from '@/components/Chat/MessageList';
 import type { Message } from '@/types/agent';
 
-const DRAWER_WIDTH = 280;
+const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
   const { activeSessionId } = useSessionStore();
@@ -125,8 +125,9 @@ export default function AppLayout() {
               width: DRAWER_WIDTH,
               borderRight: '1px solid',
               borderColor: 'divider',
-              top: '40px', // Below logo bar
-              height: 'calc(100% - 40px)',
+              top: 0,
+              height: '100%',
+              bgcolor: 'var(--panel)', // Ensure correct background matches sidebar
             },
           }}
           open={isLeftSidebarOpen}
@@ -181,11 +182,14 @@ export default function AppLayout() {
 
         <Box
           component="main"
+          className="chat-pane"
           sx={{
             flexGrow: 1,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            background: 'linear-gradient(180deg, var(--bg), var(--panel))',
+            padding: '24px',
           }}
         >
           {activeSessionId ? (
@@ -266,8 +270,9 @@ export default function AppLayout() {
               boxSizing: 'border-box',
               width: rightPanelWidth,
               borderLeft: 'none',
-              top: '40px', // Below logo bar
-              height: 'calc(100% - 40px)',
+              top: 0,
+              height: '100%',
+              bgcolor: 'var(--panel)',
             },
           }}
           open={isRightPanelOpen}
