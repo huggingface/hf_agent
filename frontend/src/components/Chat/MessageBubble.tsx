@@ -1,6 +1,7 @@
 import { Box, Paper, Typography, Chip } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import ApprovalFlow from './ApprovalFlow';
 import type { Message } from '@/types/agent';
 
 interface MessageBubbleProps {
@@ -11,6 +12,14 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
   const isAssistant = message.role === 'assistant';
+
+  if (message.approval) {
+    return (
+        <Box sx={{ width: '100%', maxWidth: '880px', mx: 'auto', my: 2 }}>
+            <ApprovalFlow message={message} />
+        </Box>
+    );
+  }
 
   return (
     <Box

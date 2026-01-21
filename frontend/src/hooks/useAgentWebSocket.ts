@@ -111,7 +111,38 @@ export function useAgentWebSocket({
           const toolName = (event.data?.tool as string) || 'unknown';
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
-          // Only log output to console, not to trace logs per user request
+          
+          if (toolName === 'hf_jobs') {
+            // Find the last message with approval (likely the one that triggered this job)
+            const messages = useAgentStore.getState().getMessages(sessionId);
+            // Reverse to find the most recent one
+            const lastApprovalMsg = [...messages].reverse().find(m => m.approval);
+            
+            if (lastApprovalMsg) {
+                // Append output if there's already some (for multiple jobs in batch)
+                const currentOutput = lastApprovalMsg.toolOutput || '';
+                const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
+                
+                useAgentStore.getState().updateMessage(sessionId, lastApprovalMsg.id, {
+                    toolOutput: newOutput
+                });
+                console.log('Updated approval message with tool output:', toolName);
+            } else {
+                console.warn('Received hf_jobs output but no approval message found to update.');
+            }
+            // CRITICAL: Always break for hf_jobs to prevent a separate "Tool" bubble from appearing
+            break;
+          }
+          
+          const message: Message = {
+            id: `msg_tool_${Date.now()}`,
+            role: 'tool',
+            content: output,
+            timestamp: new Date().toISOString(),
+            toolName: toolName,
+          };
+          addMessage(sessionId, message);
+          
           console.log('Tool output:', toolName, success);
           break;
         }
@@ -165,7 +196,22 @@ export function useAgentWebSocket({
             tool_call_id: string;
           }>;
           const count = (event.data?.count as number) || 0;
-          setPendingApprovals({ tools, count });
+          
+          // Create a persistent message for the approval request
+          const message: Message = {
+            id: `msg_approval_${Date.now()}`,
+            role: 'assistant',
+            content: '', // Content is handled by the approval UI
+            timestamp: new Date().toISOString(),
+            approval: {
+                status: 'pending',
+                batch: { tools, count }
+            }
+          };
+          addMessage(sessionId, message);
+          
+          // We don't set pendingApprovals in the global store anymore as the message handles the UI
+          setPendingApprovals(null);
           setProcessing(false);
           break;
         }
