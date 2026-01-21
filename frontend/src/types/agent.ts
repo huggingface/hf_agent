@@ -17,6 +17,12 @@ export interface Message {
   toolName?: string;
   toolCallId?: string;
   trace?: TraceLog[];
+  approval?: {
+    status: 'pending' | 'approved' | 'rejected';
+    batch: ApprovalBatch;
+    decisions?: ToolApproval[];
+  };
+  toolOutput?: string;
 }
 
 export interface ToolCall {

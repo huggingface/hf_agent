@@ -21,6 +21,7 @@ interface AgentStore {
 
   // Actions
   addMessage: (sessionId: string, message: Message) => void;
+  updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void;
   clearMessages: (sessionId: string) => void;
   setProcessing: (isProcessing: boolean) => void;
   setConnected: (isConnected: boolean) => void;
@@ -52,6 +53,21 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         messagesBySession: {
           ...state.messagesBySession,
           [sessionId]: [...currentMessages, message],
+        },
+      };
+    });
+  },
+
+  updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => {
+    set((state) => {
+      const currentMessages = state.messagesBySession[sessionId] || [];
+      const updatedMessages = currentMessages.map((msg) =>
+        msg.id === messageId ? { ...msg, ...updates } : msg
+      );
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: updatedMessages,
         },
       };
     });

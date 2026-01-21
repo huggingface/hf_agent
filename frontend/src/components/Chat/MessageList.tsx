@@ -3,7 +3,6 @@ import { Box, Typography } from '@mui/material';
 import { useAgentStore } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
 import MessageBubble from './MessageBubble';
-import ApprovalFlow from './ApprovalFlow';
 import type { Message } from '@/types/agent';
 
 interface MessageListProps {
@@ -131,7 +130,8 @@ export default function MessageList({ messages, isProcessing }: MessageListProps
         )}
 
         {activeSessionId && (
-          <ApprovalFlow sessionId={activeSessionId} />
+          // ApprovalFlow is now handled within messages
+          null
         )}
         
         <div ref={bottomRef} />

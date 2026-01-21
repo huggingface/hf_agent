@@ -1,4 +1,5 @@
-import { Box, Typography, IconButton, Checkbox } from '@mui/material';
+import { useRef, useEffect, useMemo } from 'react';
+import { Box, Typography, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -7,10 +8,27 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
+import { processLogs } from '@/utils/logProcessor';
 
 export default function CodePanel() {
   const { panelContent, plan } = useAgentStore();
   const { setRightPanelOpen } = useLayoutStore();
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const displayContent = useMemo(() => {
+    if (!panelContent?.content) return '';
+    // Apply log processing only for text/logs, not for code/json
+    if (!panelContent.language || panelContent.language === 'text') {
+        return processLogs(panelContent.content);
+    }
+    return panelContent.content;
+  }, [panelContent?.content, panelContent?.language]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [displayContent]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)' }}>
@@ -40,8 +58,9 @@ export default function CodePanel() {
             </Typography>
             </Box>
         ) : (
-            <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+            <Box sx={{ flex: 1, overflow: 'hidden', p: 2 }}>
             <Box 
+                ref={scrollRef}
                 className="code-panel"
                 sx={{
                     background: '#0A0B0C',
@@ -70,7 +89,7 @@ export default function CodePanel() {
                         wrapLines={true}
                         wrapLongLines={true}
                     >
-                        {panelContent.content}
+                        {displayContent}
                     </SyntaxHighlighter>
                     ) : (
                     <Box component="pre" sx={{ 
@@ -80,7 +99,7 @@ export default function CodePanel() {
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-all'
                     }}>
-                        <code>{panelContent.content}</code>
+                        <code>{displayContent}</code>
                     </Box>
                     )
                 ) : (
