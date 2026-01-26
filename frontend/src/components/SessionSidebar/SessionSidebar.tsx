@@ -6,7 +6,6 @@ import {
   IconButton,
   Typography,
   Button,
-  Divider,
   Tooltip,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';

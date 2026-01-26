@@ -35,7 +35,6 @@ export function useAgentWebSocket({
     clearTraceLogs,
     setPanelContent,
     setPlan,
-    traceLogs,
     setCurrentTurnMessageId,
     updateCurrentTurnTrace,
   } = useAgentStore();

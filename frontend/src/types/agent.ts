@@ -15,7 +15,7 @@ export interface Message {
   content: string;
   timestamp: string;
   toolName?: string;
-  toolCallId?: string;
+  tool_call_id?: string;
   trace?: TraceLog[];
   approval?: {
     status: 'pending' | 'approved' | 'rejected';
@@ -34,9 +34,9 @@ export interface ToolCall {
 }
 
 export interface ToolApproval {
-  toolCallId: string;
+  tool_call_id: string;
   approved: boolean;
-  feedback?: string;
+  feedback?: string | null;
 }
 
 export interface ApprovalBatch {
