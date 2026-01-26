@@ -7,7 +7,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { useSessionStore } from '@/store/sessionStore';
-import type { Message } from '@/types/agent';
+import type { Message, ToolApproval } from '@/types/agent';
 
 interface ApprovalFlowProps {
   message: Message;
@@ -19,7 +19,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
   const { activeSessionId } = useSessionStore();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [feedback, setFeedback] = useState('');
-  const [decisions, setDecisions] = useState<Array<{ tool_call_id: string; approved: boolean; feedback: string | null }>>([]);
+  const [decisions, setDecisions] = useState<ToolApproval[]>([]);
 
   const approvalData = message.approval;
   
