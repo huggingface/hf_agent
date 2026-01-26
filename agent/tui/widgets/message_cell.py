@@ -29,13 +29,6 @@ class MessageType(Enum):
 class MessageCell(Static):
     """Widget for displaying a single message in the chat"""
 
-    DEFAULT_CSS = """
-    MessageCell {
-        margin: 0 1;
-        padding: 0;
-    }
-    """
-
     def __init__(
         self,
         content: str,

@@ -23,13 +23,6 @@ HF_FG_DIM = "#5C6370"
 class ToolCallWidget(Static):
     """Widget for displaying a tool call with its arguments"""
 
-    DEFAULT_CSS = """
-    ToolCallWidget {
-        margin: 0 1;
-        padding: 0;
-    }
-    """
-
     def __init__(
         self,
         tool_name: str,
@@ -72,24 +65,6 @@ class ToolCallWidget(Static):
 
 class ToolOutputWidget(Static):
     """Widget for displaying tool output with scrollable container for long outputs"""
-
-    DEFAULT_CSS = """
-    ToolOutputWidget {
-        margin: 0 1;
-        padding: 0;
-    }
-
-    ToolOutputWidget .output-scroll {
-        height: auto;
-        max-height: 30;
-        border: none;
-        padding: 0 1;
-    }
-
-    ToolOutputWidget .output-text {
-        padding: 0;
-    }
-    """
 
     def __init__(
         self,
@@ -145,13 +120,6 @@ class ToolOutputWidget(Static):
 
 class CollapsibleToolCall(Collapsible):
     """Collapsible container for tool call and output"""
-
-    DEFAULT_CSS = """
-    CollapsibleToolCall {
-        margin: 0 1;
-        padding: 0;
-    }
-    """
 
     def __init__(
         self,

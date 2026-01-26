@@ -44,20 +44,6 @@ class StreamingLogWidget(Container):
 class ChatWidget(VerticalScroll):
     """Scrollable container for chat transcript"""
 
-    DEFAULT_CSS = """
-    ChatWidget {
-        height: 1fr;
-        scrollbar-gutter: stable;
-        padding: 0;
-    }
-
-    ChatWidget > .processing-indicator {
-        text-align: center;
-        color: $warning;
-        padding: 1;
-    }
-    """
-
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._last_tool_name: str | None = None

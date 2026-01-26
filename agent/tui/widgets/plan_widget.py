@@ -19,18 +19,6 @@ HF_FG_DIM = "#5C6370"
 class PlanWidget(Static):
     """Widget for displaying the current plan from plan_tool"""
 
-    DEFAULT_CSS = """
-    PlanWidget {
-        margin: 0 1;
-        padding: 0;
-        height: auto;
-    }
-
-    PlanWidget.hidden {
-        display: none;
-    }
-    """
-
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._plan: list[dict] = []

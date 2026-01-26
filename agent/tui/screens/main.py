@@ -53,15 +53,7 @@ class MainContainer(Container):
 
     MainContainer > #status-bar {
         height: 1;
-        background: $surface-darken-1;
-        color: $text-muted;
-        padding: 0 1;
         dock: bottom;
-    }
-
-    MainContainer > #status-bar.yolo {
-        background: $warning 30%;
-        color: $warning;
     }
     """
 
@@ -264,7 +256,7 @@ class MainContainer(Container):
         self.submission_queue.put_nowait(submission)
 
     @on(YoloModeActivated)
-    def on_yolo_mode_activated(self, event: YoloModeActivated) -> None:
+    def on_yolo_mode_activated(self, _event: YoloModeActivated) -> None:
         """Handle YOLO mode activation"""
         self.yolo_mode = True
         self.config.yolo_mode = True

@@ -1,51 +1,46 @@
-/* HuggingFace Agent TUI - Dark Terminal Theme */
+/* HuggingFace Agent TUI - Simplified Dark Theme */
 
-/*
-Color scheme matching original terminal display:
-- Yellow (#FFD21E / #FFCC00): HuggingFace brand, tool calls
-- Green (#00FF00 / #98C379): Success, turn complete
-- Red (#FF6B6B): Errors
-- Cyan (#56B6C2): User prompt, highlights
-- Dark background (#1E1E1E / #282C34)
-*/
-
-/* App-level variables */
+/* Color palette */
 $hf-yellow: #FFD21E;
 $hf-yellow-dim: #B8960F;
 $hf-green: #98C379;
 $hf-red: #E06C75;
 $hf-cyan: #56B6C2;
 $hf-blue: #61AFEF;
-$hf-magenta: #C678DD;
-$hf-bg: #1E1E1E;
-$hf-bg-light: #282C34;
 $hf-fg: #ABB2BF;
 $hf-fg-dim: #5C6370;
 
-/* Global screen */
+/* === GLOBAL === */
 Screen {
-    background: $hf-bg;
-    color: $hf-fg;
+    background: transparent;
 }
 
-/* Header - HuggingFace yellow branding */
+/* === HEADER & FOOTER === */
 Header {
     background: $hf-yellow;
     color: #000000;
-    dock: top;
     height: 1;
+    text-align: left;
 }
 
 HeaderTitle {
-    color: #000000;
     text-style: bold;
+    color: #000000;
+    text-align: left;
+    padding: 0 1;
 }
 
-/* Footer */
+HeaderClock {
+    display: none;
+}
+
+HeaderIcon {
+    display: none;
+}
+
 Footer {
-    background: $hf-bg-light;
+    background: transparent;
     color: $hf-fg-dim;
-    dock: bottom;
     height: 1;
 }
 
@@ -54,225 +49,149 @@ FooterKey > .footer-key--key {
     color: #000000;
 }
 
-/* Main container */
+/* === MAIN LAYOUT === */
 #main {
     height: 1fr;
-    background: $hf-bg;
+    background: transparent;
 }
 
 #chat-container {
     height: 1fr;
-    background: $hf-bg;
+    background: transparent;
 }
 
-/* Chat widget - slower scroll */
+/* === CHAT AREA === */
 ChatWidget {
     height: 1fr;
-    background: $hf-bg;
+    background: transparent;
     scrollbar-gutter: stable;
     scrollbar-size: 1 1;
 }
 
-/* Scrollbar styling */
-ChatWidget:focus {
-    border: none;
-}
-
 VerticalScroll {
-    scrollbar-background: $hf-bg-light;
+    scrollbar-background: transparent;
     scrollbar-color: $hf-fg-dim;
     scrollbar-color-hover: $hf-yellow-dim;
     scrollbar-color-active: $hf-yellow;
     scrollbar-size: 1 1;
 }
 
-/* Processing indicator */
 .processing-indicator {
-    text-align: center;
+
     color: $hf-yellow;
     padding: 1 2;
     text-style: italic;
-    background: $hf-bg;
+    background: transparent;
 }
 
-/* Log output - Legacy (kept for compatibility) */
-.log-output {
-    background: $hf-bg-light;
-    color: $hf-green;
-    padding: 1;
-    margin: 1 2;
-    border: solid $hf-green;
-}
-
-/* Streaming log widget - Scrollable container */
-StreamingLogWidget {
-    height: auto;
-    max-height: 30;
-    margin: 0 1;
-    padding: 0;
-}
-
-StreamingLogWidget > .log-scroll {
-    height: auto;
-    max-height: 28;
-    border: solid $hf-green;
-    background: $hf-bg-light;
-    padding: 1;
-    scrollbar-size: 1 1;
-}
-
-StreamingLogWidget .log-content {
-    color: $hf-green;
-}
-
-/* Message cells */
+/* === MESSAGES === */
 MessageCell {
     margin: 0 1;
-    padding: 0;
-    background: $hf-bg;
-}
-
-MessageCell.user {
-    background: $hf-bg;
-}
-
-MessageCell.assistant {
-    background: $hf-bg;
+    background: transparent;
 }
 
 MessageCell.system {
-    background: $hf-bg;
     color: $hf-fg-dim;
 }
 
 MessageCell.error {
-    background: $hf-bg;
     color: $hf-red;
 }
 
-/* Tool call widgets - Yellow like original */
-ToolCallWidget {
+/* === TOOLS === */
+ToolCallWidget, ToolOutputWidget, PlanWidget {
     margin: 0 1;
-    background: $hf-bg;
-}
-
-ToolOutputWidget {
-    margin: 0 1;
-    background: $hf-bg;
-}
-
-ToolOutputWidget.success {
-    background: $hf-bg;
-}
-
-ToolOutputWidget.error {
-    background: $hf-bg;
-}
-
-/* Plan widget */
-PlanWidget {
-    margin: 0 1;
-    background: $hf-bg;
+    background: transparent;
 }
 
 PlanWidget.hidden {
     display: none;
 }
 
-/* Input area - Cyan prompt like original */
+/* === STREAMING LOGS === */
+StreamingLogWidget {
+    height: auto;
+    max-height: 30;
+    margin: 0 1;
+    background: transparent;
+}
+
+StreamingLogWidget > .log-scroll {
+    height: auto;
+    max-height: 28;
+    border: solid $hf-green;
+    background: transparent;
+    padding: 1;
+    scrollbar-size: 1 1;
+}
+
+StreamingLogWidget .log-content {
+    color: $hf-green;
+    background: transparent;
+}
+
+/* === INPUT AREA === */
 InputArea {
-    height: 3;
-    background: $hf-bg-light;
+    height: auto;
+    background: transparent;
     border-top: solid $hf-yellow-dim;
-    padding: 0 1;
     dock: bottom;
+    padding: 0 1;
 }
 
 InputArea > #prompt {
-    width: 3;
-    height: 1;
-    padding: 0;
+    width: 2;
     color: $hf-cyan;
     text-style: bold;
+    background: transparent;
 }
 
 InputArea > #user-input {
     width: 1fr;
     border: none;
-    background: $hf-bg-light;
-    color: $hf-fg;
-    padding: 0;
-}
-
-InputArea > #user-input:focus {
-    border: none;
-}
-
-InputArea.disabled {
-    background: $hf-bg;
+    height: 1;
+    background: transparent;
 }
 
 InputArea.disabled > #user-input {
     color: $hf-fg-dim;
-    background: $hf-bg;
+    background: transparent;
 }
 
-InputArea > #status {
-    width: auto;
-    min-width: 14;
-    height: 1;
-    text-align: right;
-    color: $hf-fg-dim;
-}
-
-InputArea.processing > #status {
-    color: $hf-yellow;
-    text-style: bold;
-}
-
-/* Status bar - Green when ready */
+/* === STATUS BAR === */
 #status-bar {
-    height: 1;
-    background: $hf-bg;
+    height: 0;
+    background: transparent;
     color: $hf-green;
-    padding: 0 2;
     content-align: left middle;
 }
 
 #status-bar.yolo {
+    height: 1;
     background: $hf-yellow 20%;
     color: $hf-yellow;
     text-style: bold;
 }
 
-/* Approval screen */
+/* === APPROVAL SCREEN === */
 ApprovalScreen {
     align: center middle;
-    background: $hf-bg 90%;
+    background: transparent;
 }
 
 ApprovalScreen > #approval-container {
     width: 90%;
     max-width: 120;
     height: 90%;
-    background: $hf-bg-light;
+    background: transparent;
     border: solid $hf-yellow;
     padding: 1 2;
 }
 
-ApprovalScreen #header {
-    height: 3;
-    background: $hf-yellow;
-    color: #000000;
-    text-style: bold;
-    content-align: center middle;
-    margin-bottom: 1;
-}
-
 ApprovalScreen #tool-scroll {
     height: 1fr;
+    background: transparent;
     border: solid $hf-fg-dim;
-    background: $hf-bg;
     margin: 1 0;
     scrollbar-size: 1 1;
 }
@@ -282,89 +201,35 @@ ApprovalScreen #input-section {
     padding: 1 0;
 }
 
-ApprovalScreen #input-section > Label {
-    margin-bottom: 1;
-    color: $hf-fg;
-}
-
 ApprovalScreen #approval-input {
     width: 100%;
-    background: $hf-bg;
-    color: $hf-fg;
 }
 
-ApprovalScreen #button-row {
-    height: 3;
-    align: center middle;
-    margin: 1 0;
-}
-
-ApprovalScreen Button {
-    margin: 0 1;
-    min-width: 16;
-}
-
-ApprovalScreen #btn-approve {
-    background: $hf-green;
-    color: #000000;
-}
-
-ApprovalScreen #btn-reject {
-    background: $hf-red;
-    color: #ffffff;
-}
-
-ApprovalScreen #btn-yolo {
-    background: $hf-yellow;
-    color: #000000;
-}
-
-ApprovalScreen #help-text {
-    height: 2;
-    content-align: center middle;
-    color: $hf-fg-dim;
-    text-style: italic;
-}
-
-/* Tool detail view */
-ToolDetailView {
-    height: auto;
-    padding: 1;
-    background: $hf-bg;
-}
-
-/* Collapsible tool calls */
+/* === COLLAPSIBLE TOOLS === */
 CollapsibleToolCall {
     margin: 1;
-    background: $hf-bg;
 }
 
 CollapsibleToolCall > CollapsibleTitle {
-    background: $hf-bg-light;
     color: $hf-yellow;
     padding: 0 1;
 }
 
 CollapsibleToolCall > Contents {
     padding: 0 1;
-    background: $hf-bg;
 }
 
-/* Input widget styling */
+/* === GENERIC INPUTS & BUTTONS === */
 Input {
-    background: $hf-bg;
-    color: $hf-fg;
-    border: solid $hf-fg-dim;
+    background: transparent;
+    border: none;
 }
 
 Input:focus {
-    border: solid $hf-cyan;
+    border: none;
 }
 
-/* Button default styling */
 Button {
-    background: $hf-bg-light;
-    color: $hf-fg;
     border: solid $hf-fg-dim;
 }
 

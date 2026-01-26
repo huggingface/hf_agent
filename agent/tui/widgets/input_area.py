@@ -28,7 +28,6 @@ class InputArea(Horizontal):
         """Compose the input area"""
         yield Static(">", id="prompt")
         yield Input(placeholder="Type a message...", id="user-input")
-        yield Static("", id="status")
 
     def _on_mount(self) -> None:
         """Focus input on mount"""
@@ -72,18 +71,9 @@ class InputArea(Horizontal):
 
         if enabled:
             self.remove_class("disabled")
-            self.remove_class("processing")
-            self.set_status("")
             input_widget.focus()
         else:
             self.add_class("disabled")
-            self.add_class("processing")
-            self.set_status("")
-
-    def set_status(self, status: str) -> None:
-        """Update the status text"""
-        status_widget = self.query_one("#status", Static)
-        status_widget.update(status)
 
     def focus_input(self) -> None:
         """Focus the input widget"""
