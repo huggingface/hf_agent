@@ -34,6 +34,9 @@ export function useAgentWebSocket({
     updateTraceLog,
     clearTraceLogs,
     setPanelContent,
+    setPanelTab,
+    setActivePanelTab,
+    clearPanelTabs,
     setPlan,
     setCurrentTurnMessageId,
     updateCurrentTurnTrace,
@@ -58,6 +61,8 @@ export function useAgentWebSocket({
         case 'processing':
           setProcessing(true);
           clearTraceLogs();
+          // Don't clear panel tabs here - they should persist during approval flow
+          // Tabs will be cleared when a new tool_call sets up new content
           setCurrentTurnMessageId(null); // Start a new turn
           break;
 
@@ -115,23 +120,29 @@ export function useAgentWebSocket({
 
           // Auto-expand Right Panel for specific tools
           if (toolName === 'hf_jobs' && (args.operation === 'run' || args.operation === 'scheduled run') && args.script) {
-            setPanelContent({
-              title: 'Compute Job Script',
+            // Clear any existing tabs from previous jobs before setting new script
+            clearPanelTabs();
+            // Use tab system for jobs - add script tab immediately
+            setPanelTab({
+              id: 'script',
+              title: 'Script',
               content: args.script,
-              language: 'python'
+              language: 'python',
+              parameters: args
+            });
+            setActivePanelTab('script');
+            setRightPanelOpen(true);
+            setLeftSidebarOpen(false);
+          } else if (toolName === 'hf_repo_files' && args.operation === 'upload' && args.content) {
+            setPanelContent({
+              title: `File Upload: ${args.path || 'unnamed'}`,
+              content: args.content,
+              parameters: args,
+              language: args.path?.endsWith('.py') ? 'python' : undefined
             });
             setRightPanelOpen(true);
             setLeftSidebarOpen(false);
-                    } else if (toolName === 'hf_repo_files' && args.operation === 'upload' && args.content) {
-                      setPanelContent({
-                        title: `File Upload: ${args.path || 'unnamed'} `,
-                        content: args.content,
-                        parameters: args,
-                        language: args.path?.endsWith('.py') ? 'python' : undefined
-                      });
-                      setRightPanelOpen(true);
-                      setLeftSidebarOpen(false);
-                    }
+          }
 
           console.log('Tool call:', toolName, args);
           break;
@@ -175,29 +186,26 @@ export function useAgentWebSocket({
           const log = (event.data?.log as string) || '';
 
           if (toolName === 'hf_jobs') {
-            const currentPanel = useAgentStore.getState().panelContent;
-            
-            // If we are already showing logs, append
-            // If we are showing "Compute Job Script", overwrite/switch to logs
-            // Otherwise, initialize
-            
-            let newContent = log;
-            if (currentPanel?.title === 'Job Logs') {
-              newContent = currentPanel.content + '\n' + log;
-            } else if (currentPanel?.title === 'Compute Job Script') {
-               // We were showing the script, now logs start.
-               // Maybe we want to clear and start showing logs.
-               newContent = '--- Starting execution ---\n' + log;
-            }
+            const currentTabs = useAgentStore.getState().panelTabs;
+            const logsTab = currentTabs.find(t => t.id === 'logs');
 
-            setPanelContent({
-              title: 'Job Logs',
+            // Append to existing logs tab or create new one
+            const newContent = logsTab
+              ? logsTab.content + '\n' + log
+              : '--- Job execution started ---\n' + log;
+
+            setPanelTab({
+              id: 'logs',
+              title: 'Logs',
               content: newContent,
               language: 'text'
             });
-            
+
+            // Auto-switch to logs tab when logs start streaming
+            setActivePanelTab('logs');
+
             if (!useLayoutStore.getState().isRightPanelOpen) {
-                 setRightPanelOpen(true);
+              setRightPanelOpen(true);
             }
           }
           break;
@@ -219,7 +227,7 @@ export function useAgentWebSocket({
             tool_call_id: string;
           }>;
           const count = (event.data?.count as number) || 0;
-          
+
           // Create a persistent message for the approval request
           const message: Message = {
             id: `msg_approval_${Date.now()}`,
@@ -232,7 +240,10 @@ export function useAgentWebSocket({
             }
           };
           addMessage(sessionId, message);
-          
+
+          // Clear currentTurnMessageId so subsequent assistant_message events create a new message below the approval
+          setCurrentTurnMessageId(null);
+
           // We don't set pendingApprovals in the global store anymore as the message handles the UI
           setPendingApprovals(null);
           setProcessing(false);

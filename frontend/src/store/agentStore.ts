@@ -7,6 +7,14 @@ export interface PlanItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+interface PanelTab {
+  id: string;
+  title: string;
+  content: string;
+  language?: string;
+  parameters?: any;
+}
+
 interface AgentStore {
   // State per session (keyed by session ID)
   messagesBySession: Record<string, Message[]>;
@@ -17,6 +25,8 @@ interface AgentStore {
   error: string | null;
   traceLogs: TraceLog[];
   panelContent: { title: string; content: string; language?: string; parameters?: any } | null;
+  panelTabs: PanelTab[];
+  activePanelTab: string | null;
   plan: PlanItem[];
   currentTurnMessageId: string | null; // Track the current turn's assistant message
 
@@ -34,6 +44,9 @@ interface AgentStore {
   updateTraceLog: (toolName: string, updates: Partial<TraceLog>) => void;
   clearTraceLogs: () => void;
   setPanelContent: (content: { title: string; content: string; language?: string; parameters?: any } | null) => void;
+  setPanelTab: (tab: PanelTab) => void;
+  setActivePanelTab: (tabId: string) => void;
+  clearPanelTabs: () => void;
   setPlan: (plan: PlanItem[]) => void;
   setCurrentTurnMessageId: (id: string | null) => void;
   updateCurrentTurnTrace: (sessionId: string) => void;
@@ -48,6 +61,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   error: null,
   traceLogs: [],
   panelContent: null,
+  panelTabs: [],
+  activePanelTab: null,
   plan: [],
   currentTurnMessageId: null,
 
@@ -137,6 +152,33 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   setPanelContent: (content) => {
     set({ panelContent: content });
+  },
+
+  setPanelTab: (tab: PanelTab) => {
+    set((state) => {
+      const existingIndex = state.panelTabs.findIndex(t => t.id === tab.id);
+      let newTabs: PanelTab[];
+      if (existingIndex >= 0) {
+        // Update existing tab
+        newTabs = [...state.panelTabs];
+        newTabs[existingIndex] = tab;
+      } else {
+        // Add new tab
+        newTabs = [...state.panelTabs, tab];
+      }
+      return {
+        panelTabs: newTabs,
+        activePanelTab: state.activePanelTab || tab.id, // Auto-select first tab
+      };
+    });
+  },
+
+  setActivePanelTab: (tabId: string) => {
+    set({ activePanelTab: tabId });
+  },
+
+  clearPanelTabs: () => {
+    set({ panelTabs: [], activePanelTab: null });
   },
 
   setPlan: (plan: PlanItem[]) => {
