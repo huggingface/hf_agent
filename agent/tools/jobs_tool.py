@@ -9,12 +9,13 @@ import base64
 import http.client
 import os
 import re
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Callable, Awaitable
 
 import httpx
 from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
 
+from agent.core.session import Event
 from agent.tools.types import ToolResult
 from agent.tools.utilities import (
     format_job_details,
@@ -269,9 +270,15 @@ def _scheduled_job_info_to_dict(scheduled_job_info) -> Dict[str, Any]:
 class HfJobsTool:
     """Tool for managing Hugging Face compute jobs using huggingface-hub library"""
 
-    def __init__(self, hf_token: Optional[str] = None, namespace: Optional[str] = None):
+    def __init__(
+        self,
+        hf_token: Optional[str] = None,
+        namespace: Optional[str] = None,
+        log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+    ):
         self.api = HfApi(token=hf_token)
         self.namespace = namespace
+        self.log_callback = log_callback
 
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
         """Execute the specified operation"""
@@ -360,15 +367,48 @@ class HfJobsTool:
 
         for _ in range(max_retries):
             try:
-                # Fetch logs - generator streams logs as they arrive
-                logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                # Use a queue to bridge sync generator to async consumer
+                queue = asyncio.Queue()
+                loop = asyncio.get_running_loop()
 
-                # Stream logs in real-time
-                for log_line in logs_gen:
+                def log_producer():
+                    try:
+                        # fetch_job_logs is a blocking sync generator
+                        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                        for line in logs_gen:
+                            # Push line to queue thread-safely
+                            loop.call_soon_threadsafe(queue.put_nowait, line)
+                        # Signal EOF
+                        loop.call_soon_threadsafe(queue.put_nowait, None)
+                    except Exception as e:
+                        # Signal error
+                        loop.call_soon_threadsafe(queue.put_nowait, e)
+
+                # Start producer in a background thread so it doesn't block the event loop
+                producer_future = loop.run_in_executor(None, log_producer)
+
+                # Consume logs from the queue as they arrive
+                while True:
+                    item = await queue.get()
+
+                    # EOF sentinel
+                    if item is None:
+                        break
+
+                    # Error occurred in producer
+                    if isinstance(item, Exception):
+                        raise item
+
+                    # Process log line
+                    log_line = item
                     print("\t" + log_line)
+                    if self.log_callback:
+                        await self.log_callback(log_line)
                     all_logs.append(log_line)
 
-                # If we get here, streaming completed normally
+                # If we get here, streaming completed normally (EOF received)
+                # Wait for thread to cleanup (should be done)
+                await producer_future
                 break
 
             except (
@@ -963,10 +1003,22 @@ HF_JOBS_TOOL_SPEC = {
 }
 
 
-async def hf_jobs_handler(arguments: Dict[str, Any]) -> tuple[str, bool]:
+async def hf_jobs_handler(
+    arguments: Dict[str, Any], session: Any = None
+) -> tuple[str, bool]:
     """Handler for agent tool router"""
     try:
-        tool = HfJobsTool(namespace=os.environ.get("HF_NAMESPACE", ""))
+
+        async def log_callback(log: str):
+            if session:
+                await session.send_event(
+                    Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
+                )
+
+        tool = HfJobsTool(
+            namespace=os.environ.get("HF_NAMESPACE", ""),
+            log_callback=log_callback if session else None,
+        )
         result = await tool.execute(arguments)
         return result["formatted"], not result.get("isError", False)
     except Exception as e:

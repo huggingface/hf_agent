@@ -203,7 +203,7 @@ class Handlers:
                         )
 
                         output, success = await session.tool_router.call_tool(
-                            tool_name, tool_args
+                            tool_name, tool_args, session=session
                         )
 
                     # Add tool result to history
@@ -376,7 +376,9 @@ class Handlers:
                 )
             )
 
-            output, success = await session.tool_router.call_tool(tool_name, tool_args)
+            output, success = await session.tool_router.call_tool(
+                tool_name, tool_args, session=session
+            )
 
             return (tc, tool_name, output, success)
 

@@ -68,3 +68,4 @@ models/
 checkpoint-*/
 runs/
 wandb/
+frontend/tsconfig.tsbuildinfo
