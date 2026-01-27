@@ -16,7 +16,6 @@ from agent.config import Config, load_config
 from agent.core.agent_loop import submission_loop
 from agent.core.tools import ToolRouter
 from agent.tui.screens.main import MainContainer, Operation, Submission
-from agent.tui.theme import hf_transparent_theme
 
 # Drop params that models don't support
 litellm.drop_params = True
@@ -58,11 +57,6 @@ class AgentTUI(App):
             id="main",
         )
         yield Footer()
-
-    def on_mount(self) -> None:
-        """Register and set the custom theme"""
-        self.register_theme(hf_transparent_theme)
-        self.theme = "hf-transparent"
 
     def action_quit(self) -> None:
         """Quit the application"""

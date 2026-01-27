@@ -6,14 +6,14 @@ from rich.panel import Panel
 from rich.text import Text
 from textual.widgets import Static
 
-# HuggingFace color palette
-HF_YELLOW = "#FFD21E"
-HF_GREEN = "#98C379"
-HF_RED = "#E06C75"
-HF_CYAN = "#56B6C2"
-HF_BLUE = "#61AFEF"
-HF_FG = "#ABB2BF"
-HF_FG_DIM = "#5C6370"
+from agent.tui.colors import (
+    HF_BLUE,
+    HF_FG,
+    HF_FG_DIM,
+    HF_GREEN,
+    HF_YELLOW,
+    create_styled_panel,
+)
 
 
 class PlanWidget(Static):
@@ -62,13 +62,7 @@ class PlanWidget(Static):
             summary += f", {len(in_progress)} in progress"
         content.append(f"\n{summary}", style=HF_FG_DIM)
 
-        return Panel(
-            content,
-            title=f"[bold {HF_BLUE}]Plan[/]",
-            title_align="left",
-            border_style=HF_BLUE,
-            padding=(0, 1),
-        )
+        return create_styled_panel(content, "Plan", HF_BLUE)
 
     def update_plan(self, plan: list[dict] | None = None) -> None:
         """Update the plan display"""

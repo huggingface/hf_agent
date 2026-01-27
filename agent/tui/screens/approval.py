@@ -13,14 +13,8 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
+from agent.tui.colors import HF_CYAN, HF_FG, HF_FG_DIM, HF_GREEN, HF_RED, HF_YELLOW
 from agent.tui.messages import YoloModeActivated
-
-HF_YELLOW = "#FFD21E"
-HF_GREEN = "#98C379"
-HF_RED = "#E06C75"
-HF_CYAN = "#56B6C2"
-HF_FG = "#ABB2BF"
-HF_FG_DIM = "#5C6370"
 
 
 class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
@@ -29,13 +23,14 @@ class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
     DEFAULT_CSS = """
     ApprovalScreen {
         align: center middle;
+        background: transparent;
     }
 
     ApprovalScreen > #approval-container {
         width: 90%;
         max-width: 140;
         height: 85%;
-        background: $surface;
+        background: transparent;
         border: solid $primary;
         padding: 1 2;
     }
@@ -43,20 +38,25 @@ class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
     ApprovalScreen #tool-info {
         height: 1fr;
         scrollbar-size: 1 1;
+        background: transparent;
     }
 
     ApprovalScreen #prompt-line {
         height: auto;
         padding: 1 0 0 0;
+        background: transparent;
     }
 
     ApprovalScreen #prompt-label {
         color: $text-muted;
         margin-bottom: 1;
+        background: transparent;
     }
 
     ApprovalScreen #approval-input {
         width: 1fr;
+        background: transparent;
+        border: none;
     }
     """
 
@@ -239,6 +239,19 @@ class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
         except (TypeError, ValueError):
             content.append(f"{args}\n", style=HF_FG)
 
+    def _create_approval(
+        self,
+        tool_call_id: str,
+        approved: bool,
+        feedback: str | None = None
+    ) -> dict[str, Any]:
+        """Helper: Build approval response dict"""
+        return {
+            "tool_call_id": tool_call_id,
+            "approved": approved,
+            "feedback": feedback,
+        }
+
     def _on_mount(self) -> None:
         """Focus input"""
         self.query_one("#approval-input", Input).focus()
@@ -259,17 +272,11 @@ class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
 
         if response == "yolo":
             # Approve current
-            self.approvals.append(
-                {"tool_call_id": tool_call_id, "approved": True, "feedback": None}
-            )
+            self.approvals.append(self._create_approval(tool_call_id, True))
             # Approve all remaining
             for tool in self.tools_data[self.current_index + 1 :]:
                 self.approvals.append(
-                    {
-                        "tool_call_id": tool.get("tool_call_id", ""),
-                        "approved": True,
-                        "feedback": None,
-                    }
+                    self._create_approval(tool.get("tool_call_id", ""), True)
                 )
             self.post_message(YoloModeActivated())
             self.dismiss(self.approvals)
@@ -277,18 +284,12 @@ class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
 
         # yes/y = approve, no/n = reject, anything else = feedback (reject with message)
         if response in ["yes", "y"]:
-            self.approvals.append(
-                {"tool_call_id": tool_call_id, "approved": True, "feedback": None}
-            )
+            self.approvals.append(self._create_approval(tool_call_id, True))
         elif response in ["no", "n"]:
-            self.approvals.append(
-                {"tool_call_id": tool_call_id, "approved": False, "feedback": None}
-            )
+            self.approvals.append(self._create_approval(tool_call_id, False))
         else:
             # Feedback = reject with message
-            self.approvals.append(
-                {"tool_call_id": tool_call_id, "approved": False, "feedback": response}
-            )
+            self.approvals.append(self._create_approval(tool_call_id, False, response))
 
         # Next or finish
         self.current_index += 1
@@ -306,17 +307,11 @@ class ApprovalScreen(ModalScreen[list[dict[str, Any]]]):
     def action_reject_all(self) -> None:
         """Reject all"""
         tool_call_id = self.tools_data[self.current_index].get("tool_call_id", "")
-        self.approvals.append(
-            {"tool_call_id": tool_call_id, "approved": False, "feedback": None}
-        )
+        self.approvals.append(self._create_approval(tool_call_id, False))
 
         for tool in self.tools_data[self.current_index + 1 :]:
             self.approvals.append(
-                {
-                    "tool_call_id": tool.get("tool_call_id", ""),
-                    "approved": False,
-                    "feedback": None,
-                }
+                self._create_approval(tool.get("tool_call_id", ""), False)
             )
 
         self.dismiss(self.approvals)

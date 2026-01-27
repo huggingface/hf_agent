@@ -8,16 +8,16 @@ from typing import Any
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.widgets import Collapsible, Static
 
-# HuggingFace color palette
-HF_YELLOW = "#FFD21E"
-HF_YELLOW_DIM = "#B8960F"
-HF_GREEN = "#98C379"
-HF_RED = "#E06C75"
-HF_CYAN = "#56B6C2"
-HF_FG = "#ABB2BF"
-HF_FG_DIM = "#5C6370"
+from agent.tui.colors import (
+    HF_FG,
+    HF_FG_DIM,
+    HF_RED,
+    HF_YELLOW,
+    create_styled_panel,
+)
 
 
 class ToolCallWidget(Static):
@@ -54,13 +54,7 @@ class ToolCallWidget(Static):
         content.append("\n")
         content.append(args_preview, style=HF_FG_DIM)
 
-        return Panel(
-            content,
-            title=f"[bold {HF_YELLOW}]Tool Call[/]",
-            title_align="left",
-            border_style=HF_YELLOW,
-            padding=(0, 1),
-        )
+        return create_styled_panel(content, "Tool Call", HF_YELLOW)
 
 
 class ToolOutputWidget(Static):
@@ -90,12 +84,10 @@ class ToolOutputWidget(Static):
 
         # Yellow for success (like original), red for error
         if self.success:
-            border_style = HF_YELLOW
-            title_style = f"bold {HF_YELLOW}"
+            color = HF_YELLOW
             text_style = HF_FG
         else:
-            border_style = HF_RED
-            title_style = f"bold {HF_RED}"
+            color = HF_RED
             text_style = HF_RED
 
         # Show line count and char count in title
@@ -109,13 +101,7 @@ class ToolOutputWidget(Static):
             content = Text(self.output, style=text_style)
             title = f"Tool output ({line_count} lines, {len(self.output)} chars) - Scrollable"
 
-        return Panel(
-            content,
-            title=f"[{title_style}]{title}[/]",
-            title_align="left",
-            border_style=border_style,
-            padding=(0, 1),
-        )
+        return create_styled_panel(content, title, color)
 
 
 class CollapsibleToolCall(Collapsible):
@@ -136,7 +122,7 @@ class CollapsibleToolCall(Collapsible):
         self.output = output
         self.success = success
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Compose the collapsible content"""
         # Arguments section
         try:

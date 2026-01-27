@@ -5,10 +5,11 @@ Chat widget - scrollable container for messages and tool calls
 from typing import Any
 
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Static
 
-from agent.tui.screens.approval import HF_GREEN
+from agent.tui.colors import HF_GREEN
 from agent.tui.widgets.message_cell import MessageCell, MessageType
 from agent.tui.widgets.plan_widget import PlanWidget
 from agent.tui.widgets.tool_call import ToolCallWidget, ToolOutputWidget
@@ -23,7 +24,7 @@ class StreamingLogWidget(Container):
         self._log_content: Static | None = None
         self._scroll_container: VerticalScroll | None = None
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Create the scrollable log container"""
         with VerticalScroll(classes="log-scroll") as scroll:
             self._scroll_container = scroll
@@ -50,55 +51,55 @@ class ChatWidget(VerticalScroll):
         self._assistant_message_widget: MessageCell | None = None
         self._log_widget: StreamingLogWidget | None = None
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Initial empty state"""
         yield PlanWidget(id="plan-widget")
+
+    def _add_and_scroll(self, widget: Static) -> None:
+        """Helper: Mount widget and scroll to end"""
+        self.mount(widget)
+        self.scroll_end(animate=False)
 
     def add_user_message(self, content: str) -> None:
         """Add a user message to the chat"""
         widget = MessageCell(content, MessageType.USER)
-        self.mount(widget)
-        self.scroll_end(animate=False)
+        self._add_and_scroll(widget)
 
     def add_assistant_message(self, content: str) -> None:
         """Add an assistant message to the chat"""
         # If we already have an assistant message being built, update it
         if self._assistant_message_widget is not None:
             self._assistant_message_widget.update_content(content)
+            self.scroll_end(animate=False)
         else:
             widget = MessageCell(content, MessageType.ASSISTANT)
             self._assistant_message_widget = widget
-            self.mount(widget)
-        self.scroll_end(animate=False)
+            self._add_and_scroll(widget)
 
     def finalize_assistant_message(self) -> None:
         """Mark the current assistant message as complete"""
         self._assistant_message_widget = None
 
-    def add_system_message(self, content: str) -> None:
+    def add_note_message(self, content: str) -> None:
         """Add a system message to the chat"""
-        widget = MessageCell(content, MessageType.SYSTEM)
-        self.mount(widget)
-        self.scroll_end(animate=False)
+        widget = MessageCell(content, MessageType.NOTE)
+        self._add_and_scroll(widget)
 
     def add_error_message(self, content: str) -> None:
         """Add an error message to the chat"""
         widget = MessageCell(content, MessageType.ERROR)
-        self.mount(widget)
-        self.scroll_end(animate=False)
+        self._add_and_scroll(widget)
 
     def add_success_message(self, content: str) -> None:
         """Add a success message to the chat (green, no panel)"""
         widget = MessageCell(content, MessageType.SUCCESS)
-        self.mount(widget)
-        self.scroll_end(animate=False)
+        self._add_and_scroll(widget)
 
     def add_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> None:
         """Add a tool call to the chat"""
         self._last_tool_name = tool_name
         widget = ToolCallWidget(tool_name, arguments)
-        self.mount(widget)
-        self.scroll_end(animate=False)
+        self._add_and_scroll(widget)
 
     def add_tool_output(
         self, output: str, success: bool, tool_name: str | None = None
@@ -113,8 +114,7 @@ class ChatWidget(VerticalScroll):
         widget = ToolOutputWidget(
             output, success=success, tool_name=name, truncate=truncate
         )
-        self.mount(widget)
-        self.scroll_end(animate=False)
+        self._add_and_scroll(widget)
 
     def show_processing(self) -> None:
         """Show processing indicator"""
@@ -151,7 +151,8 @@ class ChatWidget(VerticalScroll):
             except Exception:
                 # Create new widget
                 self._log_widget = StreamingLogWidget(id="log-output")
-                self.mount(self._log_widget)
+                self._add_and_scroll(self._log_widget)
+                return
 
         self._log_widget.add_line(log_line)
         self.scroll_end(animate=False)

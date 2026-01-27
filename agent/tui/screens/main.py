@@ -108,6 +108,7 @@ class MainContainer(Container):
         """Handle agent events"""
         chat = self.query_one("#chat", ChatWidget)
         input_area = self.query_one("#input-area", InputArea)
+        message = "Agent is ready!"
 
         if event.event_type == "ready":
             # Display startup info
@@ -115,8 +116,9 @@ class MainContainer(Container):
 
             if mcp_servers:
                 mcp_servers_str = ", ".join(mcp_servers)
-                chat.add_system_message(f"Loaded MCP servers: {mcp_servers_str}")
+                message += f"\nLoaded {len(mcp_servers)} MCP server{'' if len(mcp_servers) == 1 else 's'}: {mcp_servers_str}"
 
+            chat.add_note_message(message)
             input_area.set_enabled(True)
             self._turn_complete.set()
 
@@ -163,7 +165,7 @@ class MainContainer(Container):
         elif event.event_type == "compacted":
             old_tokens = event.data.get("old_tokens", 0)
             new_tokens = event.data.get("new_tokens", 0)
-            chat.add_system_message(
+            chat.add_note_message(
                 f"Context compacted: {old_tokens} -> {new_tokens} tokens"
             )
 
@@ -180,9 +182,7 @@ class MainContainer(Container):
                     }
                     for t in tools_data
                 ]
-                chat.add_system_message(
-                    f"YOLO: Auto-approving {len(tools_data)} tool(s)"
-                )
+                chat.add_note_message(f"YOLO: Auto-approving {len(tools_data)} tool(s)")
                 self._submit_approval(approvals)
             else:
                 # Show approval screen
@@ -197,7 +197,7 @@ class MainContainer(Container):
             # System message from tools
             message = event.data.get("message", "")
             if message:
-                chat.add_system_message(message)
+                chat.add_note_message(message)
 
         elif event.event_type == "log_stream":
             # Stream job logs in real-time
@@ -262,7 +262,7 @@ class MainContainer(Container):
         self.config.yolo_mode = True
         self._update_status_bar()
         chat = self.query_one("#chat", ChatWidget)
-        chat.add_system_message("YOLO MODE ACTIVATED - Auto-approving all tool calls")
+        chat.add_note_message("YOLO MODE ACTIVATED - Auto-approving all tool calls")
 
     def _update_status_bar(self) -> None:
         """Update the status bar"""
@@ -302,7 +302,7 @@ class MainContainer(Container):
 
         chat = self.query_one("#chat", ChatWidget)
         chat.hide_processing()
-        chat.add_system_message("Interrupted (ctrl+c again to exit)")
+        chat.add_note_message("Interrupted (ctrl+c again to exit)")
 
         input_area = self.query_one("#input-area", InputArea)
         input_area.set_enabled(True)

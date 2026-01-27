@@ -3,6 +3,7 @@ Input area widget for user text input
 """
 
 from textual import on
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Input, Static
@@ -24,14 +25,14 @@ class InputArea(Horizontal):
         self._history: list[str] = []
         self._history_index = -1
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Compose the input area"""
         yield Static(">", id="prompt")
         yield Input(placeholder="Type a message...", id="user-input")
 
-    def _on_mount(self) -> None:
+    def on_mount(self) -> None:
         """Focus input on mount"""
-        self.query_one("#user-input", Input).focus()
+        self.query_one("#user-input", Input)
 
     @on(Input.Submitted, "#user-input")
     def on_input_submitted(self, event: Input.Submitted) -> None:

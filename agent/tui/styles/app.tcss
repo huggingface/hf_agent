@@ -12,7 +12,11 @@ $hf-fg-dim: #5C6370;
 
 /* === GLOBAL === */
 Screen {
-    background: transparent;
+    background: transparent !important;
+}
+
+App {
+    background: transparent !important;
 }
 
 /* === HEADER & FOOTER === */
@@ -133,8 +137,7 @@ StreamingLogWidget .log-content {
 /* === INPUT AREA === */
 InputArea {
     height: auto;
-    background: transparent;
-    border-top: solid $hf-yellow-dim;
+    border-top: solid $hf-yellow;
     dock: bottom;
     padding: 0 1;
 }
@@ -143,19 +146,16 @@ InputArea > #prompt {
     width: 2;
     color: $hf-cyan;
     text-style: bold;
-    background: transparent;
 }
 
 InputArea > #user-input {
     width: 1fr;
     border: none;
     height: 1;
-    background: transparent;
 }
 
 InputArea.disabled > #user-input {
     color: $hf-fg-dim;
-    background: transparent;
 }
 
 /* === STATUS BAR === */
@@ -221,12 +221,15 @@ CollapsibleToolCall > Contents {
 
 /* === GENERIC INPUTS & BUTTONS === */
 Input {
-    background: transparent;
+    background: transparent !important;
     border: none;
+    background-tint: transparent 0%;
 }
 
 Input:focus {
     border: none;
+    background: transparent !important;
+    background-tint: transparent 0% !important;
 }
 
 Button {
