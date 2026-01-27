@@ -47,9 +47,11 @@ interface AgentStore {
   setPanelTab: (tab: PanelTab) => void;
   setActivePanelTab: (tabId: string) => void;
   clearPanelTabs: () => void;
+  removePanelTab: (tabId: string) => void;
   setPlan: (plan: PlanItem[]) => void;
   setCurrentTurnMessageId: (id: string | null) => void;
   updateCurrentTurnTrace: (sessionId: string) => void;
+  showToolOutput: (log: TraceLog) => void;
 }
 
 export const useAgentStore = create<AgentStore>((set, get) => ({
@@ -181,6 +183,21 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set({ panelTabs: [], activePanelTab: null });
   },
 
+  removePanelTab: (tabId: string) => {
+    set((state) => {
+      const newTabs = state.panelTabs.filter(t => t.id !== tabId);
+      // If we removed the active tab, switch to another tab or null
+      let newActiveTab = state.activePanelTab;
+      if (state.activePanelTab === tabId) {
+        newActiveTab = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null;
+      }
+      return {
+        panelTabs: newTabs,
+        activePanelTab: newActiveTab,
+      };
+    });
+  },
+
   setPlan: (plan: PlanItem[]) => {
     set({ plan });
   },
@@ -205,5 +222,39 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         },
       });
     }
+  },
+
+  showToolOutput: (log: TraceLog) => {
+    // Show tool output in the right panel - only ONE tool output tab at a time
+    const state = get();
+
+    // Determine language based on content
+    let language = 'text';
+    const content = log.output || '';
+
+    // Check if content looks like JSON
+    if (content.trim().startsWith('{') || content.trim().startsWith('[') || content.includes('```json')) {
+      language = 'json';
+    }
+    // Check if content has markdown tables or formatting
+    else if (content.includes('|') && content.includes('---') || content.includes('```')) {
+      language = 'markdown';
+    }
+
+    // Remove any existing tool output tab (only keep one)
+    const otherTabs = state.panelTabs.filter(t => t.id !== 'tool_output');
+
+    // Create/replace the single tool output tab
+    const newTab = {
+      id: 'tool_output',
+      title: log.tool,
+      content: content || 'No output available',
+      language,
+    };
+
+    set({
+      panelTabs: [...otherTabs, newTab],
+      activePanelTab: 'tool_output',
+    });
   },
 }));

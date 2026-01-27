@@ -72,26 +72,51 @@ export function useAgentWebSocket({
           const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
 
           if (currentTurnMsgId) {
-            // Update existing message - append content and update trace
+            // Update existing message - add segments chronologically
             const messages = useAgentStore.getState().getMessages(sessionId);
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
             if (existingMsg) {
-              const newContent = existingMsg.content ? existingMsg.content + '\n\n' + content : content;
+              const segments = existingMsg.segments ? [...existingMsg.segments] : [];
+
+              // If there are pending traces, add them as a tools segment first
+              if (currentTrace.length > 0) {
+                segments.push({ type: 'tools', tools: [...currentTrace] });
+                clearTraceLogs();
+              }
+
+              // Add the new text segment
+              if (content) {
+                segments.push({ type: 'text', content });
+              }
+
               updateMessage(sessionId, currentTurnMsgId, {
-                content: newContent,
-                trace: currentTrace.length > 0 ? [...currentTrace] : undefined,
+                content: existingMsg.content + '\n\n' + content,
+                segments,
               });
             }
           } else {
             // Create new message
             const messageId = `msg_${Date.now()}`;
+            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
+
+            // Add any pending traces first
+            if (currentTrace.length > 0) {
+              segments.push({ type: 'tools', tools: [...currentTrace] });
+              clearTraceLogs();
+            }
+
+            // Add the text
+            if (content) {
+              segments.push({ type: 'text', content });
+            }
+
             const message: Message = {
               id: messageId,
               role: 'assistant',
               content,
               timestamp: new Date().toISOString(),
-              trace: currentTrace.length > 0 ? [...currentTrace] : undefined,
+              segments,
             };
             addMessage(sessionId, message);
             setCurrentTurnMessageId(messageId);
@@ -112,6 +137,8 @@ export function useAgentWebSocket({
               tool: toolName,
               timestamp: new Date().toISOString(),
               completed: false,
+              // Store args for auto-exec message creation later
+              args: toolName === 'hf_jobs' ? args : undefined,
             };
             addTraceLog(log);
             // Update the current turn message's trace in real-time
@@ -153,26 +180,54 @@ export function useAgentWebSocket({
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
 
-          // Mark the corresponding trace log as completed
-          updateTraceLog(toolName, { completed: true });
+          // Mark the corresponding trace log as completed and store the output
+          updateTraceLog(toolName, { completed: true, output, success });
           // Update the current turn message's trace in real-time
           updateCurrentTurnTrace(sessionId);
 
-          // Special handling for hf_jobs - update the approval message with output
+          // Special handling for hf_jobs - update or create job message with output
           if (toolName === 'hf_jobs') {
             const messages = useAgentStore.getState().getMessages(sessionId);
-            const lastApprovalMsg = [...messages].reverse().find(m => m.approval);
+            const traceLogs = useAgentStore.getState().traceLogs;
 
-            if (lastApprovalMsg) {
-                const currentOutput = lastApprovalMsg.toolOutput || '';
-                const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
+            // Find existing approval message for this job
+            let jobMsg = [...messages].reverse().find(m => m.approval);
 
-                useAgentStore.getState().updateMessage(sessionId, lastApprovalMsg.id, {
-                    toolOutput: newOutput
-                });
-                console.log('Updated approval message with tool output:', toolName);
+            if (!jobMsg) {
+              // No approval message exists - this was an auto-executed job
+              // Create a job execution message so user can see results
+              const jobTrace = [...traceLogs].reverse().find(t => t.tool === 'hf_jobs');
+              const args = jobTrace?.args || {};
+
+              const autoExecMessage: Message = {
+                id: `msg_auto_${Date.now()}`,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString(),
+                approval: {
+                  status: 'approved', // Auto-approved (no user action needed)
+                  batch: {
+                    tools: [{
+                      tool: toolName,
+                      arguments: args,
+                      tool_call_id: `auto_${Date.now()}`
+                    }],
+                    count: 1
+                  }
+                },
+                toolOutput: output
+              };
+              addMessage(sessionId, autoExecMessage);
+              console.log('Created auto-exec message with tool output:', toolName);
             } else {
-                console.warn('Received hf_jobs output but no approval message found to update.');
+              // Update existing approval message
+              const currentOutput = jobMsg.toolOutput || '';
+              const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
+
+              useAgentStore.getState().updateMessage(sessionId, jobMsg.id, {
+                toolOutput: newOutput
+              });
+              console.log('Updated job message with tool output:', toolName);
             }
           }
 
@@ -240,6 +295,49 @@ export function useAgentWebSocket({
             }
           };
           addMessage(sessionId, message);
+
+          // Show the first tool's content in the panel so users see what they're approving
+          if (tools && tools.length > 0) {
+            const firstTool = tools[0];
+            const args = firstTool.arguments as Record<string, any>;
+
+            clearPanelTabs();
+
+            if (firstTool.tool === 'hf_jobs' && args.script) {
+              setPanelTab({
+                id: 'script',
+                title: 'Script',
+                content: args.script,
+                language: 'python',
+                parameters: args
+              });
+              setActivePanelTab('script');
+            } else if (firstTool.tool === 'hf_repo_files' && args.content) {
+              const filename = args.path || 'file';
+              const isPython = filename.endsWith('.py');
+              setPanelTab({
+                id: 'content',
+                title: filename.split('/').pop() || 'Content',
+                content: args.content,
+                language: isPython ? 'python' : 'text',
+                parameters: args
+              });
+              setActivePanelTab('content');
+            } else {
+              // For other tools, show args as JSON
+              setPanelTab({
+                id: 'args',
+                title: firstTool.tool,
+                content: JSON.stringify(args, null, 2),
+                language: 'json',
+                parameters: args
+              });
+              setActivePanelTab('args');
+            }
+
+            setRightPanelOpen(true);
+            setLeftSidebarOpen(false);
+          }
 
           // Clear currentTurnMessageId so subsequent assistant_message events create a new message below the approval
           setCurrentTurnMessageId(null);
