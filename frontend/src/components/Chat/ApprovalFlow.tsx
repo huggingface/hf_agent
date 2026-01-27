@@ -28,37 +28,33 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
 
   const { batch, status } = approvalData;
 
-  // Parse toolOutput to extract job info (URL, status, logs)
+  // Parse toolOutput to extract job info (URL, status, logs, errors)
   let logsContent = '';
   let showLogsButton = false;
   let jobUrl = '';
-  let jobId = '';
   let jobStatus = '';
   let jobFailed = false;
+  let errorMessage = '';
 
   if (message.toolOutput) {
+    const output = message.toolOutput;
+
     // Extract job URL: **View at:** https://...
-    const urlMatch = message.toolOutput.match(/\*\*View at:\*\*\s*(https:\/\/[^\s\n]+)/);
+    const urlMatch = output.match(/\*\*View at:\*\*\s*(https:\/\/[^\s\n]+)/);
     if (urlMatch) {
       jobUrl = urlMatch[1];
     }
 
-    // Extract job ID: **Job ID:** ...
-    const idMatch = message.toolOutput.match(/\*\*Job ID:\*\*\s*([^\s\n]+)/);
-    if (idMatch) {
-      jobId = idMatch[1];
-    }
-
     // Extract job status: **Final Status:** ...
-    const statusMatch = message.toolOutput.match(/\*\*Final Status:\*\*\s*([^\n]+)/);
+    const statusMatch = output.match(/\*\*Final Status:\*\*\s*([^\n]+)/);
     if (statusMatch) {
       jobStatus = statusMatch[1].trim();
       jobFailed = jobStatus.toLowerCase().includes('error') || jobStatus.toLowerCase().includes('failed');
     }
 
     // Extract logs
-    if (message.toolOutput.includes('**Logs:**')) {
-      const parts = message.toolOutput.split('**Logs:**');
+    if (output.includes('**Logs:**')) {
+      const parts = output.split('**Logs:**');
       if (parts.length > 1) {
         const logsPart = parts[1].trim();
         const codeBlockMatch = logsPart.match(/```([\s\S]*?)```/);
@@ -67,6 +63,20 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
           showLogsButton = true;
         }
       }
+    }
+
+    // Detect errors - if output exists but doesn't have the expected job completion format
+    // This catches early failures (validation errors, API errors, etc.)
+    const isExpectedFormat = output.includes('**Job ID:**') || output.includes('**View at:**');
+    const looksLikeError = output.toLowerCase().includes('error') ||
+                          output.toLowerCase().includes('failed') ||
+                          output.toLowerCase().includes('exception') ||
+                          output.includes('Traceback');
+
+    if (!isExpectedFormat || (looksLikeError && !logsContent)) {
+      // This is likely an error message - show it
+      errorMessage = output;
+      jobFailed = true;
     }
   }
 
@@ -277,10 +287,56 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
         <OpenInNewIcon sx={{ fontSize: 16, color: 'var(--muted-text)', opacity: 0.7 }} />
       </Box>
 
-      {currentTool.tool === 'hf_jobs' && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-          {/* Show specific job URL if available (after execution), otherwise generic link */}
-          {jobUrl ? (
+      {/* Script/Logs buttons for hf_jobs - always show when we have a script */}
+      {currentTool.tool === 'hf_jobs' && args.script && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={showCode}
+              sx={{
+                textTransform: 'none',
+                borderColor: 'rgba(255,255,255,0.1)',
+                color: 'var(--muted-text)',
+                fontSize: '0.75rem',
+                py: 0.5,
+                '&:hover': {
+                  borderColor: 'var(--accent-primary)',
+                  color: 'var(--accent-primary)',
+                  bgcolor: 'rgba(255,255,255,0.03)'
+                }
+              }}
+            >
+              View Script
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleViewLogs}
+              disabled={!logsContent && status === 'pending'}
+              sx={{
+                textTransform: 'none',
+                borderColor: 'rgba(255,255,255,0.1)',
+                color: logsContent ? 'var(--accent-primary)' : 'var(--muted-text)',
+                fontSize: '0.75rem',
+                py: 0.5,
+                '&:hover': {
+                  borderColor: 'var(--accent-primary)',
+                  bgcolor: 'rgba(255,255,255,0.03)'
+                },
+                '&.Mui-disabled': {
+                  color: 'rgba(255,255,255,0.3)',
+                  borderColor: 'rgba(255,255,255,0.05)',
+                }
+              }}
+            >
+              {logsContent ? 'View Logs' : 'Logs (waiting for job...)'}
+            </Button>
+          </Box>
+
+          {/* Job URL - only show when we have a specific URL */}
+          {jobUrl && (
             <Link
               href={jobUrl}
               target="_blank"
@@ -290,7 +346,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
                 alignItems: 'center',
                 gap: 0.5,
                 color: 'var(--accent-primary)',
-                fontSize: '0.8rem',
+                fontSize: '0.75rem',
                 textDecoration: 'none',
                 opacity: 0.9,
                 '&:hover': {
@@ -300,29 +356,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
               }}
             >
               <LaunchIcon sx={{ fontSize: 14 }} />
-              View job{jobId ? ` (${jobId.substring(0, 8)}...)` : ''} on Hugging Face
-            </Link>
-          ) : (
-            <Link
-              href="https://huggingface.co/settings/jobs"
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-                color: 'var(--muted-text)',
-                fontSize: '0.8rem',
-                textDecoration: 'none',
-                opacity: 0.7,
-                '&:hover': {
-                  opacity: 1,
-                  textDecoration: 'underline',
-                }
-              }}
-            >
-              <LaunchIcon sx={{ fontSize: 14 }} />
-              View all jobs on Hugging Face
+              View Job on Hugging Face
             </Link>
           )}
 
@@ -348,54 +382,45 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
         </Typography>
       )}
 
-      {/* Show script/logs buttons for completed jobs */}
-      {status !== 'pending' && currentTool.tool === 'hf_jobs' && (args.script || showLogsButton) && (
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {args.script && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<OpenInNewIcon />}
-              onClick={showCode}
-              sx={{
-                textTransform: 'none',
-                borderColor: 'rgba(255,255,255,0.1)',
-                color: 'var(--muted-text)',
-                fontSize: '0.75rem',
-                py: 0.5,
-                '&:hover': {
-                  borderColor: 'var(--accent-primary)',
-                  color: 'var(--accent-primary)',
-                  bgcolor: 'rgba(255,255,255,0.03)'
-                }
-              }}
-            >
-              View Script
-            </Button>
-          )}
-          {showLogsButton && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<OpenInNewIcon />}
-              onClick={handleViewLogs}
-              sx={{
-                textTransform: 'none',
-                borderColor: 'rgba(255,255,255,0.1)',
-                color: 'var(--accent-primary)',
-                fontSize: '0.75rem',
-                py: 0.5,
-                '&:hover': {
-                  borderColor: 'var(--accent-primary)',
-                  bgcolor: 'rgba(255,255,255,0.03)'
-                }
-              }}
-            >
-              View Logs
-            </Button>
-          )}
+      {/* Show error message if job failed */}
+      {errorMessage && status !== 'pending' && (
+        <Box
+          sx={{
+            p: 1.5,
+            borderRadius: '8px',
+            bgcolor: 'rgba(224, 90, 79, 0.1)',
+            border: '1px solid rgba(224, 90, 79, 0.3)',
+          }}
+        >
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'var(--accent-red)',
+              fontWeight: 600,
+              display: 'block',
+              mb: 0.5,
+            }}
+          >
+            Error
+          </Typography>
+          <Typography
+            component="pre"
+            sx={{
+              color: 'var(--text)',
+              fontSize: '0.75rem',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              m: 0,
+              maxHeight: '150px',
+              overflow: 'auto',
+            }}
+          >
+            {errorMessage.length > 500 ? errorMessage.substring(0, 500) + '...' : errorMessage}
+          </Typography>
         </Box>
       )}
+
 
       {status === 'pending' && (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

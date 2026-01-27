@@ -9,14 +9,18 @@ export interface SessionMeta {
   isActive: boolean;
 }
 
+export interface MessageSegment {
+  type: 'text' | 'tools';
+  content?: string;
+  tools?: TraceLog[];
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
   timestamp: string;
-  toolName?: string;
-  tool_call_id?: string;
-  trace?: TraceLog[];
+  segments?: MessageSegment[];
   approval?: {
     status: 'pending' | 'approved' | 'rejected';
     batch: ApprovalBatch;
@@ -55,6 +59,9 @@ export interface TraceLog {
   tool: string;
   timestamp: string;
   completed?: boolean;
+  args?: Record<string, unknown>; // Store args for auto-exec jobs
+  output?: string; // Store tool output for display
+  success?: boolean; // Whether the tool call succeeded
 }
 
 export interface User {

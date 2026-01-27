@@ -1,19 +1,22 @@
 import { useRef, useEffect, useMemo } from 'react';
-import { Box, Typography, IconButton, Tabs, Tab } from '@mui/material';
+import { Box, Typography, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import CodeIcon from '@mui/icons-material/Code';
 import TerminalIcon from '@mui/icons-material/Terminal';
+import ArticleIcon from '@mui/icons-material/Article';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { processLogs } from '@/utils/logProcessor';
 
 export default function CodePanel() {
-  const { panelContent, panelTabs, activePanelTab, setActivePanelTab, plan } = useAgentStore();
+  const { panelContent, panelTabs, activePanelTab, setActivePanelTab, removePanelTab, plan } = useAgentStore();
   const { setRightPanelOpen } = useLayoutStore();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -51,40 +54,72 @@ export default function CodePanel() {
         borderBottom: '1px solid rgba(255,255,255,0.03)'
       }}>
         {hasTabs ? (
-          <Tabs
-            value={activePanelTab || panelTabs[0]?.id}
-            onChange={(_, newValue) => setActivePanelTab(newValue)}
-            sx={{
-              minHeight: 36,
-              '& .MuiTabs-indicator': {
-                backgroundColor: 'var(--accent-primary)',
-              },
-              '& .MuiTab-root': {
-                minHeight: 36,
-                minWidth: 'auto',
-                px: 2,
-                py: 0.5,
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                color: 'var(--muted-text)',
-                '&.Mui-selected': {
-                  color: 'var(--text)',
-                },
-              },
-            }}
-          >
-            {panelTabs.map((tab) => (
-              <Tab
-                key={tab.id}
-                value={tab.id}
-                label={tab.title}
-                icon={tab.id === 'script' ? <CodeIcon sx={{ fontSize: 16 }} /> : <TerminalIcon sx={{ fontSize: 16 }} />}
-                iconPosition="start"
-              />
-            ))}
-          </Tabs>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+            {panelTabs.map((tab) => {
+              const isActive = activePanelTab === tab.id;
+              // Choose icon based on tab type
+              let icon = <TerminalIcon sx={{ fontSize: 14 }} />;
+              if (tab.id === 'script' || tab.language === 'python') {
+                icon = <CodeIcon sx={{ fontSize: 14 }} />;
+              } else if (tab.id === 'tool_output' || tab.language === 'markdown' || tab.language === 'json') {
+                icon = <ArticleIcon sx={{ fontSize: 14 }} />;
+              }
+              return (
+                <Box
+                  key={tab.id}
+                  onClick={() => setActivePanelTab(tab.id)}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    px: 1.5,
+                    py: 0.75,
+                    borderRadius: 1,
+                    cursor: 'pointer',
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    color: isActive ? 'var(--text)' : 'var(--muted-text)',
+                    bgcolor: isActive ? 'rgba(255,255,255,0.08)' : 'transparent',
+                    border: '1px solid',
+                    borderColor: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
+                    transition: 'all 0.15s ease',
+                    '&:hover': {
+                      bgcolor: 'rgba(255,255,255,0.05)',
+                    },
+                  }}
+                >
+                  {icon}
+                  <span>{tab.title}</span>
+                  <Box
+                    component="span"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removePanelTab(tab.id);
+                    }}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      ml: 0.5,
+                      width: 16,
+                      height: 16,
+                      borderRadius: '50%',
+                      fontSize: '0.65rem',
+                      opacity: 0.5,
+                      '&:hover': {
+                        opacity: 1,
+                        bgcolor: 'rgba(255,255,255,0.1)',
+                      },
+                    }}
+                  >
+                    ✕
+                  </Box>
+                </Box>
+              );
+            })}
+          </Box>
         ) : (
           <Typography variant="caption" sx={{ fontWeight: 600, color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             {currentContent?.title || 'Code Panel'}
@@ -137,6 +172,86 @@ export default function CodePanel() {
                   >
                     {displayContent}
                   </SyntaxHighlighter>
+                ) : currentContent.language === 'json' ? (
+                  <SyntaxHighlighter
+                    language="json"
+                    style={vscDarkPlus}
+                    customStyle={{
+                      margin: 0,
+                      padding: 0,
+                      background: 'transparent',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                    }}
+                    wrapLines={true}
+                    wrapLongLines={true}
+                  >
+                    {displayContent}
+                  </SyntaxHighlighter>
+                ) : currentContent.language === 'markdown' ? (
+                  <Box sx={{
+                    color: 'var(--text)',
+                    fontSize: '13px',
+                    lineHeight: 1.6,
+                    '& p': { m: 0, mb: 1.5, '&:last-child': { mb: 0 } },
+                    '& pre': {
+                      bgcolor: 'rgba(0,0,0,0.4)',
+                      p: 1.5,
+                      borderRadius: 1,
+                      overflow: 'auto',
+                      fontSize: '12px',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                    },
+                    '& code': {
+                      bgcolor: 'rgba(255,255,255,0.05)',
+                      px: 0.5,
+                      py: 0.25,
+                      borderRadius: 0.5,
+                      fontSize: '12px',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
+                    },
+                    '& pre code': { bgcolor: 'transparent', p: 0 },
+                    '& a': {
+                      color: 'var(--accent-yellow)',
+                      textDecoration: 'none',
+                      '&:hover': { textDecoration: 'underline' },
+                    },
+                    '& ul, & ol': { pl: 2.5, my: 1 },
+                    '& li': { mb: 0.5 },
+                    '& table': {
+                      borderCollapse: 'collapse',
+                      width: '100%',
+                      my: 2,
+                      fontSize: '12px',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
+                    },
+                    '& th': {
+                      borderBottom: '2px solid rgba(255,255,255,0.15)',
+                      textAlign: 'left',
+                      p: 1,
+                      fontWeight: 600,
+                    },
+                    '& td': {
+                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                      p: 1,
+                    },
+                    '& h1, & h2, & h3, & h4': {
+                      mt: 2,
+                      mb: 1,
+                      fontWeight: 600,
+                    },
+                    '& h1': { fontSize: '1.25rem' },
+                    '& h2': { fontSize: '1.1rem' },
+                    '& h3': { fontSize: '1rem' },
+                    '& blockquote': {
+                      borderLeft: '3px solid rgba(255,255,255,0.2)',
+                      pl: 2,
+                      ml: 0,
+                      color: 'var(--muted-text)',
+                    },
+                  }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+                  </Box>
                 ) : (
                   <Box component="pre" sx={{
                     m: 0,

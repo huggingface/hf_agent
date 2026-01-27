@@ -3,8 +3,8 @@
   "save_sessions": true,
   "session_dataset_repo": "akseljoonas/hf-agent-sessions",
   "yolo_mode": false,
-  "confirm_cpu_jobs": true,
-  "auto_file_upload": false,
+  "confirm_cpu_jobs": false,
+  "auto_file_upload": true,
   "mcpServers": {
     "hf-mcp-server": {
       "transport": "http",

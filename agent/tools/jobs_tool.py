@@ -1015,8 +1015,13 @@ async def hf_jobs_handler(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
 
+        # Get token and namespace from HF token
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        namespace = HfApi(token=hf_token).whoami().get("name") if hf_token else None
+
         tool = HfJobsTool(
-            namespace=os.environ.get("HF_NAMESPACE", ""),
+            namespace=namespace,
+            hf_token=hf_token,
             log_callback=log_callback if session else None,
         )
         result = await tool.execute(arguments)

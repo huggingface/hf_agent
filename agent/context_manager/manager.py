@@ -2,6 +2,7 @@
 Context management for conversation history
 """
 
+import os
 import zoneinfo
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,10 @@ class ContextManager:
         current_time = now.strftime("%H:%M:%S.%f")[:-3]
         current_timezone = f"{now.strftime('%Z')} (UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
 
+        # Get HF user info with explicit token from env
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        hf_user_info = HfApi(token=hf_token).whoami().get("name", "unknown")
+
         template = Template(template_str)
         return template.render(
             tools=tool_specs,
@@ -60,7 +65,7 @@ class ContextManager:
             current_date=current_date,
             current_time=current_time,
             current_timezone=current_timezone,
-            hf_user_info=HfApi().whoami().get("name"),
+            hf_user_info=hf_user_info,
         )
 
     def add_message(self, message: Message, token_count: int = None) -> None:
