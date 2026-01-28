@@ -184,33 +184,19 @@ export const useSessionStore = create<SessionStore>()(
           }
 
           const data = await response.json();
-          const newSessionId = data.session_id;
+          const resumedSessionId = data.session_id; // Same as sessionId
           const messages = data.messages || [];
 
-          // Find persisted session to get title
-          const persisted = get().persistedSessions.find(
-            (s) => s.session_id === sessionId
-          );
-
-          const newSession: SessionMeta = {
-            id: newSessionId,
-            title: persisted?.title || 'Resumed Session',
-            createdAt: persisted?.created_at || new Date().toISOString(),
-            isActive: true,
-          };
-
-          set((state) => ({
-            sessions: [...state.sessions, newSession],
-            activeSessionId: newSessionId,
-          }));
+          // Just set as active - the session is already in persistedSessions
+          // and will show in the unified list
+          set({ activeSessionId: resumedSessionId });
 
           // Load messages into agentStore
-          // Import dynamically to avoid circular dependency
           const { useAgentStore } = await import('./agentStore');
           const addMessage = useAgentStore.getState().addMessage;
 
           for (const msg of messages) {
-            addMessage(newSessionId, {
+            addMessage(resumedSessionId, {
               id: `resumed-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               role: msg.role as 'user' | 'assistant' | 'tool',
               content: msg.content,
@@ -218,7 +204,7 @@ export const useSessionStore = create<SessionStore>()(
             });
           }
 
-          return newSessionId;
+          return resumedSessionId;
         } catch (error) {
           console.error('Failed to resume session:', error);
           return null;

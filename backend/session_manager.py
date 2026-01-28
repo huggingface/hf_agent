@@ -142,6 +142,78 @@ class SessionManager:
         logger.info(f"Created session {session_id} for user {user_id or 'anonymous'}")
         return session_id
 
+    async def create_session_with_id(
+        self,
+        session_id: str,
+        user_id: Optional[str] = None,
+        hf_token: Optional[str] = None,
+        anthropic_key: Optional[str] = None,
+    ) -> str:
+        """Create an agent session with a specific ID (for resuming).
+
+        Args:
+            session_id: The session ID to use
+            user_id: Optional owner user ID (HF username)
+            hf_token: Optional HF OAuth token for the user
+            anthropic_key: Optional Anthropic API key for the user
+
+        Returns:
+            Session ID
+        """
+        # Check if session already exists in memory
+        if session_id in self.sessions:
+            logger.info(f"Session {session_id} already exists in memory")
+            return session_id
+
+        # Create queues for this session
+        submission_queue: asyncio.Queue = asyncio.Queue()
+        event_queue: asyncio.Queue = asyncio.Queue()
+
+        # Create user context if user is authenticated
+        user_context = None
+        if user_id and hf_token:
+            user_context = UserContext(
+                user_id=user_id,
+                hf_token=hf_token,
+                anthropic_key=anthropic_key,
+            )
+
+        # Create tool router with user context for token injection
+        tool_router = ToolRouter(
+            self.config.mcpServers,
+            hf_token=hf_token,
+        )
+
+        # Create the agent session
+        session = Session(
+            event_queue,
+            config=self.config,
+            tool_router=tool_router,
+            anthropic_key=anthropic_key,
+        )
+
+        # Create wrapper with the specified session_id
+        agent_session = AgentSession(
+            session_id=session_id,
+            session=session,
+            tool_router=tool_router,
+            submission_queue=submission_queue,
+            user_id=user_id,
+            user_context=user_context,
+        )
+
+        async with self._lock:
+            self.sessions[session_id] = agent_session
+
+        # Start the agent loop task
+        task = asyncio.create_task(
+            self._run_session(session_id, submission_queue, event_queue, tool_router)
+        )
+        agent_session.task = task
+
+        logger.info(f"Resumed session {session_id} for user {user_id or 'anonymous'}")
+        return session_id
+
     def _check_session_ownership(
         self, session_id: str, user_id: Optional[str]
     ) -> AgentSession | None:

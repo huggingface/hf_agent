@@ -268,6 +268,7 @@ async def resume_session(
     """Resume a persisted session.
 
     Loads the session from HF Dataset and returns the messages for frontend display.
+    Uses the SAME session_id to avoid duplicates in the UI.
     """
     import json
 
@@ -297,15 +298,16 @@ async def resume_session(
     except json.JSONDecodeError:
         logger.error(f"Failed to parse messages for session {session_id}")
 
-    # Create new in-memory session (uses the original session_id for continuity)
-    new_session_id = await session_manager.create_session(
+    # Create in-memory session with the SAME session_id for continuity
+    await session_manager.create_session_with_id(
+        session_id=session_id,
         user_id=user.user_id,
         hf_token=user.hf_token,
         anthropic_key=user.anthropic_key,
     )
 
     return ResumeSessionResponse(
-        session_id=new_session_id,
+        session_id=session_id,  # Return the SAME session_id
         ready=True,
         messages=messages,
     )
