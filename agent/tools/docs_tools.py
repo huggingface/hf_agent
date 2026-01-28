@@ -287,7 +287,9 @@ def _format_results(
 # ---------------------------------------------------------------------------
 
 
-async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
+async def explore_hf_docs_handler(
+    arguments: dict[str, Any], hf_token: str | None = None
+) -> tuple[str, bool]:
     """Explore documentation structure with optional search query."""
     endpoint = arguments.get("endpoint", "").lstrip("/")
     query = arguments.get("query")
@@ -315,10 +317,10 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
         except Exception as e:
             return f"Error fetching Gradio docs: {str(e)}", False
 
-    # HF docs
-    hf_token = os.environ.get("HF_TOKEN")
-    if not hf_token:
-        return "Error: HF_TOKEN environment variable not set", False
+    # HF docs - use passed token or fall back to env var
+    token = hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        return "Error: No HF token available (not logged in)", False
 
     try:
         max_results_int = int(max_results) if max_results is not None else None
@@ -329,7 +331,7 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
         return "Error: max_results must be greater than zero", False
 
     try:
-        docs = await _get_docs(hf_token, endpoint)
+        docs = await _get_docs(token, endpoint)
         total = len(docs)
 
         # Determine limit
@@ -378,24 +380,25 @@ async def explore_hf_docs_handler(arguments: dict[str, Any]) -> tuple[str, bool]
         return f"Unexpected error: {str(e)}", False
 
 
-async def hf_docs_fetch_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
+async def hf_docs_fetch_handler(
+    arguments: dict[str, Any], hf_token: str | None = None
+) -> tuple[str, bool]:
     """Fetch full markdown content of a documentation page."""
     url = arguments.get("url", "")
     if not url:
         return "Error: No URL provided", False
 
-    hf_token = os.environ.get("HF_TOKEN")
-    if not hf_token:
-        return "Error: HF_TOKEN environment variable not set", False
+    # Use passed token or fall back to env var
+    token = hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        return "Error: No HF token available (not logged in)", False
 
     if not url.endswith(".md"):
         url = f"{url}.md"
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.get(
-                url, headers={"Authorization": f"Bearer {hf_token}"}
-            )
+            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
             resp.raise_for_status()
         return f"Documentation from: {url}\n\n{resp.text}", True
     except httpx.HTTPStatusError as e:
@@ -454,20 +457,30 @@ def _extract_all_endpoints(spec: dict[str, Any]) -> list[dict[str, Any]]:
     endpoints = []
     for path, path_item in spec.get("paths", {}).items():
         for method, op in path_item.items():
-            if method not in ["get", "post", "put", "delete", "patch", "head", "options"]:
+            if method not in [
+                "get",
+                "post",
+                "put",
+                "delete",
+                "patch",
+                "head",
+                "options",
+            ]:
                 continue
-            endpoints.append({
-                "path": path,
-                "method": method.upper(),
-                "operationId": op.get("operationId", ""),
-                "summary": op.get("summary", ""),
-                "description": op.get("description", ""),
-                "tags": " ".join(op.get("tags", [])),
-                "parameters": op.get("parameters", []),
-                "request_body": op.get("requestBody", {}),
-                "responses": op.get("responses", {}),
-                "base_url": base_url,
-            })
+            endpoints.append(
+                {
+                    "path": path,
+                    "method": method.upper(),
+                    "operationId": op.get("operationId", ""),
+                    "summary": op.get("summary", ""),
+                    "description": op.get("description", ""),
+                    "tags": " ".join(op.get("tags", [])),
+                    "parameters": op.get("parameters", []),
+                    "request_body": op.get("requestBody", {}),
+                    "responses": op.get("responses", {}),
+                    "base_url": base_url,
+                }
+            )
     return endpoints
 
 
@@ -511,7 +524,12 @@ async def _build_openapi_index() -> tuple[Any, MultifieldParser, list[dict[str, 
     parser = MultifieldParser(
         ["summary", "description", "operationId", "tags", "param_names"],
         schema=schema,
-        fieldboosts={"summary": 3.0, "operationId": 2.0, "description": 1.0, "tags": 1.5},
+        fieldboosts={
+            "summary": 3.0,
+            "operationId": 2.0,
+            "description": 1.0,
+            "tags": 1.5,
+        },
         group=OrGroup,
     )
 
@@ -532,11 +550,20 @@ async def _search_openapi(
         return [], "Query contained unsupported syntax."
 
     with index.searcher() as searcher:
-        results = searcher.search(query_obj, limit=limit * 2)  # Get extra for tag filtering
+        results = searcher.search(
+            query_obj, limit=limit * 2
+        )  # Get extra for tag filtering
         matches = []
         for hit in results:
             # Find full endpoint data
-            ep = next((e for e in endpoints if e["path"] == hit["path"] and e["method"] == hit["method"]), None)
+            ep = next(
+                (
+                    e
+                    for e in endpoints
+                    if e["path"] == hit["path"] and e["method"] == hit["method"]
+                ),
+                None,
+            )
             if ep is None:
                 continue
             # Filter by tag if provided
@@ -713,7 +740,10 @@ async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
     query = arguments.get("query", "").strip() or None
 
     if not tag and not query:
-        return "Error: Provide either 'query' (keyword search) or 'tag' (category filter), or both.", False
+        return (
+            "Error: Provide either 'query' (keyword search) or 'tag' (category filter), or both.",
+            False,
+        )
 
     try:
         note = None
@@ -724,7 +754,9 @@ async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
 
             # If Whoosh found results, return them
             if results:
-                return _format_openapi_results(results, tag=tag, query=query, note=search_note), True
+                return _format_openapi_results(
+                    results, tag=tag, query=query, note=search_note
+                ), True
 
             # Whoosh found nothing - fall back to tag-based if tag provided
             if tag:
@@ -737,7 +769,9 @@ async def search_openapi_handler(arguments: dict[str, Any]) -> tuple[str, bool]:
         if tag:
             _, _, endpoints = await _build_openapi_index()
             results = [ep for ep in endpoints if tag in ep.get("tags", "")]
-            return _format_openapi_results(results, tag=tag, query=None, note=note), True
+            return _format_openapi_results(
+                results, tag=tag, query=None, note=note
+            ), True
 
         return "Error: No results found", False
 

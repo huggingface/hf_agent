@@ -46,11 +46,13 @@ class Session:
     ):
         self.tool_router = tool_router
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
+        hf_token = tool_router.hf_token if tool_router else None
         self.context_manager = context_manager or ContextManager(
             max_context=get_max_tokens(config.model_name),
             compact_size=0.1,
             untouched_messages=5,
             tool_specs=tool_specs,
+            hf_token=hf_token,
         )
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())

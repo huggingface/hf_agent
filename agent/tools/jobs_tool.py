@@ -9,7 +9,7 @@ import base64
 import http.client
 import os
 import re
-from typing import Any, Dict, Literal, Optional, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 
 import httpx
 from huggingface_hub import HfApi
@@ -118,8 +118,11 @@ def _filter_uv_install_output(logs: list[str]) -> list[str]:
     return logs
 
 
-def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+def _add_environment_variables(
+    params: Dict[str, Any] | None, hf_token: str | None = None
+) -> Dict[str, Any]:
+    # Use provided token or fall back to environment variable
+    token = hf_token or os.environ.get("HF_TOKEN", "")
 
     # Start with user-provided env vars, then force-set token last
     result = dict(params or {})
@@ -277,6 +280,7 @@ class HfJobsTool:
         log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         self.api = HfApi(token=hf_token)
+        self.hf_token = hf_token  # Store for injecting into job environment
         self.namespace = namespace
         self.log_callback = log_callback
 
@@ -374,7 +378,9 @@ class HfJobsTool:
                 def log_producer():
                     try:
                         # fetch_job_logs is a blocking sync generator
-                        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
+                        logs_gen = self.api.fetch_job_logs(
+                            job_id=job_id, namespace=namespace
+                        )
                         for line in logs_gen:
                             # Push line to queue thread-safely
                             loop.call_soon_threadsafe(queue.put_nowait, line)
@@ -498,7 +504,7 @@ class HfJobsTool:
                 image=image,
                 command=command,
                 env=args.get("env"),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
@@ -716,7 +722,7 @@ To verify, call this tool with `{{"operation": "inspect", "job_id": "{job_id}"}}
                 command=command,
                 schedule=schedule,
                 env=args.get("env"),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
@@ -1025,8 +1031,10 @@ async def hf_jobs_handler(
                 )
 
         # Use provided token or fall back to environment variable
-        token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
-        namespace = HfApi(token=token).whoami().get("name") if token else None
+        token = hf_token or os.environ.get("HF_TOKEN", "")
+        namespace = (
+            HfApi(token=token.strip()).whoami().get("name") if token.strip() else None
+        )
 
         tool = HfJobsTool(
             namespace=namespace,

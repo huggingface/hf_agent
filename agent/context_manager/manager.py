@@ -24,10 +24,12 @@ class ContextManager:
         untouched_messages: int = 5,
         tool_specs: list[dict[str, Any]] | None = None,
         prompt_file_suffix: str = "system_prompt_v2.yaml",
+        hf_token: str | None = None,
     ):
         self.system_prompt = self._load_system_prompt(
             tool_specs or [],
             prompt_file_suffix="system_prompt_v2.yaml",
+            hf_token=hf_token,
         )
         self.max_context = max_context
         self.compact_size = int(max_context * compact_size)
@@ -39,6 +41,7 @@ class ContextManager:
         self,
         tool_specs: list[dict[str, Any]],
         prompt_file_suffix: str = "system_prompt.yaml",
+        hf_token: str | None = None,
     ):
         """Load and render the system prompt from YAML file with Jinja2"""
         prompt_file = Path(__file__).parent.parent / "prompts" / f"{prompt_file_suffix}"
@@ -54,12 +57,12 @@ class ContextManager:
         current_time = now.strftime("%H:%M:%S.%f")[:-3]
         current_timezone = f"{now.strftime('%Z')} (UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
 
-        # Get HF user info (optional - may not be available at startup)
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        # Get HF user info - use provided token or fall back to env var
+        token = hf_token or os.environ.get("HF_TOKEN")
         hf_user_info = "user"  # Default; actual user info comes from OAuth
-        if hf_token and hf_token.strip():
+        if token.strip():
             try:
-                hf_user_info = HfApi(token=hf_token.strip()).whoami().get("name", "user")
+                hf_user_info = HfApi(token=token.strip()).whoami().get("name", "user")
             except Exception:
                 pass  # Use default if whoami fails
 

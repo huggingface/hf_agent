@@ -38,7 +38,7 @@ OAUTH_CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 OPENID_PROVIDER_URL = os.environ.get("OPENID_PROVIDER_URL", "https://huggingface.co")
 
 # OAuth scopes for full agent capabilities
-OAUTH_SCOPES = "openid profile read-repos write-repos manage-repos"
+OAUTH_SCOPES = "read-repos write-repos contribute-repos manage-repos inference-api jobs write-discussions"
 
 # In-memory OAuth state store (for CSRF protection during OAuth flow)
 oauth_states: dict[str, dict] = {}

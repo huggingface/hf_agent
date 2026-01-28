@@ -200,7 +200,7 @@ export const useAuthStore = create<AuthStore>()(
     }),
     {
       name: 'hf-agent-auth',
-      storage: createJSONStorage(() => sessionStorage),
+      storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         token: state.token,
         // Don't persist user - fetch fresh on load

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Message, ApprovalBatch, User, TraceLog } from '@/types/agent';
 
 export interface PlanItem {
@@ -54,19 +55,21 @@ interface AgentStore {
   showToolOutput: (log: TraceLog) => void;
 }
 
-export const useAgentStore = create<AgentStore>((set, get) => ({
-  messagesBySession: {},
-  isProcessing: false,
-  isConnected: false,
-  pendingApprovals: null,
-  user: null,
-  error: null,
-  traceLogs: [],
-  panelContent: null,
-  panelTabs: [],
-  activePanelTab: null,
-  plan: [],
-  currentTurnMessageId: null,
+export const useAgentStore = create<AgentStore>()(
+  persist(
+    (set, get) => ({
+      messagesBySession: {},
+      isProcessing: false,
+      isConnected: false,
+      pendingApprovals: null,
+      user: null,
+      error: null,
+      traceLogs: [],
+      panelContent: null,
+      panelTabs: [],
+      activePanelTab: null,
+      plan: [],
+      currentTurnMessageId: null,
 
   addMessage: (sessionId: string, message: Message) => {
     set((state) => {
@@ -257,4 +260,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       activePanelTab: 'tool_output',
     });
   },
-}));
+    }),
+    {
+      name: 'hf-agent-messages',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        // Only persist messages - other state is transient
+        messagesBySession: state.messagesBySession,
+      }),
+    }
+  )
+);
