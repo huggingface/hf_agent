@@ -933,6 +933,7 @@ dependencies = [
 
 [package.optional-dependencies]
 agent = [
+    { name = "cryptography" },
     { name = "datasets" },
     { name = "fastapi" },
     { name = "fastmcp" },
@@ -943,6 +944,7 @@ agent = [
     { name = "nbconvert" },
     { name = "nbformat" },
     { name = "prompt-toolkit" },
+    { name = "pyjwt" },
     { name = "requests" },
     { name = "thefuzz" },
     { name = "uvicorn", extra = ["standard"] },
@@ -950,6 +952,7 @@ agent = [
     { name = "whoosh" },
 ]
 all = [
+    { name = "cryptography" },
     { name = "datasets" },
     { name = "fastapi" },
     { name = "fastmcp" },
@@ -962,6 +965,7 @@ all = [
     { name = "nbformat" },
     { name = "pandas" },
     { name = "prompt-toolkit" },
+    { name = "pyjwt" },
     { name = "pytest" },
     { name = "requests" },
     { name = "tenacity" },
@@ -982,6 +986,7 @@ eval = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'agent'", specifier = ">=41.0.0" },
     { name = "datasets", specifier = ">=4.4.1" },
     { name = "datasets", marker = "extra == 'agent'", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=4.3.0" },
@@ -998,6 +1003,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'eval'", specifier = ">=2.3.3" },
     { name = "prompt-toolkit", marker = "extra == 'agent'", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.12.3" },
+    { name = "pyjwt", marker = "extra == 'agent'", specifier = ">=2.8.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", marker = "extra == 'agent'", specifier = ">=2.32.5" },
