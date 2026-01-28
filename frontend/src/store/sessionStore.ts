@@ -185,6 +185,7 @@ export const useSessionStore = create<SessionStore>()(
 
           const data = await response.json();
           const newSessionId = data.session_id;
+          const messages = data.messages || [];
 
           // Find persisted session to get title
           const persisted = get().persistedSessions.find(
@@ -202,6 +203,20 @@ export const useSessionStore = create<SessionStore>()(
             sessions: [...state.sessions, newSession],
             activeSessionId: newSessionId,
           }));
+
+          // Load messages into agentStore
+          // Import dynamically to avoid circular dependency
+          const { useAgentStore } = await import('./agentStore');
+          const addMessage = useAgentStore.getState().addMessage;
+
+          for (const msg of messages) {
+            addMessage(newSessionId, {
+              id: `resumed-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              role: msg.role as 'user' | 'assistant' | 'tool',
+              content: msg.content,
+              timestamp: new Date().toISOString(),
+            });
+          }
 
           return newSessionId;
         } catch (error) {

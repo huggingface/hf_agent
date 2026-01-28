@@ -7,12 +7,10 @@ import {
   Typography,
   Button,
   Tooltip,
-  Divider,
   CircularProgress,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import UndoIcon from '@mui/icons-material/Undo';
-import HistoryIcon from '@mui/icons-material/History';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { useAuthStore } from '@/store/authStore';
@@ -133,15 +131,58 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     }
   }, [resumeSession, setPlan, setPanelContent, onClose]);
 
-  // Filter out persisted sessions that are already loaded in memory
+  // Combine active and persisted sessions into unified list
   const inMemorySessionIds = new Set(sessions.map(s => s.id));
-  const availablePersistedSessions = persistedSessions.filter(
-    ps => !inMemorySessionIds.has(ps.session_id)
-  );
+
+  // Create unified session items
+  type UnifiedSession = {
+    id: string;
+    title: string;
+    createdAt: string;
+    isActive: boolean;
+    isPersisted: boolean;
+    messageCount?: number;
+  };
+
+  const unifiedSessions: UnifiedSession[] = [
+    // In-memory sessions
+    ...sessions.map((s, index) => ({
+      id: s.id,
+      title: s.title || `Session ${String(sessions.length - index).padStart(2, '0')}`,
+      createdAt: s.createdAt,
+      isActive: s.isActive,
+      isPersisted: false,
+    })),
+    // Persisted sessions not in memory
+    ...persistedSessions
+      .filter(ps => !inMemorySessionIds.has(ps.session_id))
+      .map(ps => ({
+        id: ps.session_id,
+        title: ps.title || `Session ${ps.session_id.slice(0, 8)}`,
+        createdAt: ps.created_at,
+        isActive: false,
+        isPersisted: true,
+        messageCount: ps.message_count,
+      })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const date = new Date(dateString);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    if (isToday) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
+
+  const handleSessionClick = useCallback((session: UnifiedSession) => {
+    if (session.isPersisted) {
+      handleResumeSession(session.id);
+    } else {
+      handleSelectSession(session.id);
+    }
+  }, [handleResumeSession, handleSelectSession]);
 
   return (
     <Box className="sidebar" sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)' }}>
@@ -207,17 +248,20 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
         {/* Session List */}
         <Box sx={{ flex: 1, overflow: 'auto', mx: -1, px: 1 }}>
-          {/* Active Sessions */}
+          {isLoadingPersisted && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+              <CircularProgress size={20} sx={{ color: 'var(--muted-text)' }} />
+            </Box>
+          )}
           <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {[...sessions].reverse().map((session, index) => {
-              const sessionNumber = sessions.length - index;
+            {unifiedSessions.map((session) => {
               const isSelected = session.id === activeSessionId;
               return (
                 <ListItem
                   key={session.id}
                   disablePadding
                   className="session-item"
-                  onClick={() => handleSelectSession(session.id)}
+                  onClick={() => handleSessionClick(session)}
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
@@ -242,78 +286,31 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                 >
                   <Box sx={{ flex: 1, overflow: 'hidden' }}>
                     <Typography variant="body2" sx={{ fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      Session {String(sessionNumber).padStart(2, '0')}
+                      {session.title}
                     </Typography>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                       {session.isActive && <RunningIndicator />}
                       <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
                         {formatTime(session.createdAt)}
+                        {session.messageCount !== undefined && ` · ${session.messageCount} msgs`}
                       </Typography>
                     </Box>
                   </Box>
 
-                  <IconButton
-                    className="delete-btn"
-                    size="small"
-                    onClick={(e) => handleDeleteSession(session.id, e)}
-                    sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
+                  {!session.isPersisted && (
+                    <IconButton
+                      className="delete-btn"
+                      size="small"
+                      onClick={(e) => handleDeleteSession(session.id, e)}
+                      sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  )}
                 </ListItem>
               );
             })}
           </List>
-
-          {/* Persisted Sessions (Saved History) */}
-          {isAuthenticated() && availablePersistedSessions.length > 0 && (
-            <>
-              <Divider sx={{ my: 2, borderColor: 'rgba(255,255,255,0.06)' }} />
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <HistoryIcon sx={{ fontSize: 16, color: 'var(--muted-text)' }} />
-                <Typography variant="caption" sx={{ color: 'var(--muted-text)', fontWeight: 500 }}>
-                  Saved Sessions
-                </Typography>
-                {isLoadingPersisted && <CircularProgress size={12} sx={{ color: 'var(--muted-text)' }} />}
-              </Box>
-              <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {availablePersistedSessions.map((ps) => (
-                  <ListItem
-                    key={ps.session_id}
-                    disablePadding
-                    className="session-item"
-                    onClick={() => handleResumeSession(ps.session_id)}
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '10px',
-                      borderRadius: 'var(--radius-md)',
-                      bgcolor: 'transparent',
-                      cursor: 'pointer',
-                      opacity: 0.7,
-                      transition: 'background 0.18s ease, opacity 0.18s ease',
-                      '&:hover': {
-                        bgcolor: 'rgba(255,255,255,0.02)',
-                        opacity: 1,
-                      },
-                    }}
-                  >
-                    <Box sx={{ flex: 1, overflow: 'hidden' }}>
-                      <Typography variant="body2" sx={{ fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {ps.title || `Session ${ps.session_id.slice(0, 8)}`}
-                      </Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                        <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
-                          {ps.message_count} messages
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </ListItem>
-                ))}
-              </List>
-            </>
-          )}
         </Box>
       </Box>
 

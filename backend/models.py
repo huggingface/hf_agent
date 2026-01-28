@@ -60,6 +60,21 @@ class SessionResponse(BaseModel):
     ready: bool = True
 
 
+class MessageData(BaseModel):
+    """A single message in a session."""
+
+    role: str
+    content: str
+
+
+class ResumeSessionResponse(BaseModel):
+    """Response when resuming a persisted session."""
+
+    session_id: str
+    ready: bool = True
+    messages: list[MessageData] = []
+
+
 class SessionInfo(BaseModel):
     """Session metadata."""
 

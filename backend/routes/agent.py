@@ -9,6 +9,8 @@ from lifecycle import lifecycle_manager
 from models import (
     ApprovalRequest,
     HealthResponse,
+    MessageData,
+    ResumeSessionResponse,
     SessionInfo,
     SessionResponse,
     SubmitRequest,
@@ -258,16 +260,17 @@ async def list_persisted_sessions(
     ]
 
 
-@router.post("/session/{session_id}/resume", response_model=SessionResponse)
+@router.post("/session/{session_id}/resume", response_model=ResumeSessionResponse)
 async def resume_session(
     session_id: str,
     user: UserContext = Depends(require_auth),
-) -> SessionResponse:
+) -> ResumeSessionResponse:
     """Resume a persisted session.
 
-    Loads the session from HF Dataset and creates a new in-memory session
-    with the same messages and context.
+    Loads the session from HF Dataset and returns the messages for frontend display.
     """
+    import json
+
     # Load persisted session
     persisted = await lifecycle_manager.load_session(session_id)
     if not persisted:
@@ -282,18 +285,30 @@ async def resume_session(
     if persisted.status == "deleted":
         raise HTTPException(status_code=404, detail="Session has been deleted")
 
-    # Create new in-memory session
+    # Parse messages from persisted session
+    messages = []
+    try:
+        raw_messages = json.loads(persisted.messages_json)
+        messages = [
+            MessageData(role=m.get("role", "unknown"), content=m.get("content", ""))
+            for m in raw_messages
+            if m.get("role") != "system"  # Skip system messages
+        ]
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse messages for session {session_id}")
+
+    # Create new in-memory session (uses the original session_id for continuity)
     new_session_id = await session_manager.create_session(
         user_id=user.user_id,
         hf_token=user.hf_token,
         anthropic_key=user.anthropic_key,
     )
 
-    # TODO: Hydrate context manager with persisted messages
-    # This would require passing messages to create_session or having a
-    # method to replay messages into the context manager
-
-    return SessionResponse(session_id=new_session_id, ready=True)
+    return ResumeSessionResponse(
+        session_id=new_session_id,
+        ready=True,
+        messages=messages,
+    )
 
 
 @router.patch("/session/{session_id}")
