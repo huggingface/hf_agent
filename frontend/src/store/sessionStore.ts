@@ -1,232 +1,184 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import type { SessionMeta, PersistedSessionMeta } from '@/types/agent';
+import type { Session } from '@/types/agent';
 import { useAuthStore } from './authStore';
 
 const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 
 interface SessionStore {
-  // In-memory sessions (current browser session)
-  sessions: SessionMeta[];
+  sessions: Session[];
   activeSessionId: string | null;
+  isLoading: boolean;
+  error: string | null;
 
-  // Persisted sessions from HF Dataset
-  persistedSessions: PersistedSessionMeta[];
-  isLoadingPersisted: boolean;
-
-  // Actions for in-memory sessions
+  // Actions
+  loadSessions: () => Promise<void>;
   createSession: () => Promise<string | null>;
+  selectSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
-  switchSession: (id: string) => void;
-  updateSessionTitle: (id: string, title: string) => void;
-  setSessionActive: (id: string, isActive: boolean) => void;
-
-  // Legacy action for backward compatibility
-  createSessionLegacy: (id: string) => void;
-
-  // Actions for persisted sessions
-  loadPersistedSessions: () => Promise<void>;
-  resumeSession: (sessionId: string) => Promise<string | null>;
-
-  // Clear all
-  clearSessions: () => void;
+  clearError: () => void;
 }
 
-export const useSessionStore = create<SessionStore>()(
-  persist(
-    (set, get) => ({
-      sessions: [],
-      activeSessionId: null,
-      persistedSessions: [],
-      isLoadingPersisted: false,
+export const useSessionStore = create<SessionStore>()((set, get) => ({
+  sessions: [],
+  activeSessionId: null,
+  isLoading: false,
+  error: null,
 
-      createSession: async () => {
-        try {
-          const authHeaders = useAuthStore.getState().getAuthHeaders();
-
-          const response = await fetch(`${API_BASE}/api/session`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...authHeaders,
-            },
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to create session');
-          }
-
-          const data = await response.json();
-          const sessionId = data.session_id;
-
-          const newSession: SessionMeta = {
-            id: sessionId,
-            title: `Chat ${get().sessions.length + 1}`,
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-
-          set((state) => ({
-            sessions: [...state.sessions, newSession],
-            activeSessionId: sessionId,
-          }));
-
-          return sessionId;
-        } catch (error) {
-          console.error('Failed to create session:', error);
-          return null;
-        }
-      },
-
-      // Legacy version for backward compatibility with existing code
-      createSessionLegacy: (id: string) => {
-        const newSession: SessionMeta = {
-          id,
-          title: `Chat ${get().sessions.length + 1}`,
-          createdAt: new Date().toISOString(),
-          isActive: true,
-        };
-        set((state) => ({
-          sessions: [...state.sessions, newSession],
-          activeSessionId: id,
-        }));
-      },
-
-      deleteSession: async (id) => {
-        try {
-          const authHeaders = useAuthStore.getState().getAuthHeaders();
-
-          await fetch(`${API_BASE}/api/session/${id}`, {
-            method: 'DELETE',
-            headers: authHeaders,
-          });
-
-          set((state) => {
-            const newSessions = state.sessions.filter((s) => s.id !== id);
-            const newActiveId =
-              state.activeSessionId === id
-                ? newSessions.length > 0
-                  ? newSessions[newSessions.length - 1].id
-                  : null
-                : state.activeSessionId;
-            return {
-              sessions: newSessions,
-              activeSessionId: newActiveId,
-            };
-          });
-        } catch (error) {
-          console.error('Failed to delete session:', error);
-        }
-      },
-
-      switchSession: (id) => {
-        set({ activeSessionId: id });
-      },
-
-      updateSessionTitle: (id, title) => {
-        set((state) => ({
-          sessions: state.sessions.map((s) =>
-            s.id === id ? { ...s, title } : s
-          ),
-        }));
-      },
-
-      setSessionActive: (id, isActive) => {
-        set((state) => ({
-          sessions: state.sessions.map((s) =>
-            s.id === id ? { ...s, isActive } : s
-          ),
-        }));
-      },
-
-      loadPersistedSessions: async () => {
-        const { isAuthenticated } = useAuthStore.getState();
-        if (!isAuthenticated()) {
-          set({ persistedSessions: [], isLoadingPersisted: false });
-          return;
-        }
-
-        set({ isLoadingPersisted: true });
-
-        try {
-          const authHeaders = useAuthStore.getState().getAuthHeaders();
-
-          const response = await fetch(`${API_BASE}/api/sessions/persisted`, {
-            headers: authHeaders,
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            set({ persistedSessions: data, isLoadingPersisted: false });
-          } else {
-            set({ persistedSessions: [], isLoadingPersisted: false });
-          }
-        } catch (error) {
-          console.error('Failed to load persisted sessions:', error);
-          set({ persistedSessions: [], isLoadingPersisted: false });
-        }
-      },
-
-      resumeSession: async (sessionId: string) => {
-        try {
-          const authHeaders = useAuthStore.getState().getAuthHeaders();
-
-          const response = await fetch(`${API_BASE}/api/session/${sessionId}/resume`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...authHeaders,
-            },
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to resume session');
-          }
-
-          const data = await response.json();
-          const resumedSessionId = data.session_id; // Same as sessionId
-          const messages = data.messages || [];
-
-          // Just set as active - the session is already in persistedSessions
-          // and will show in the unified list
-          set({ activeSessionId: resumedSessionId });
-
-          // Load messages into agentStore
-          const { useAgentStore } = await import('./agentStore');
-          const addMessage = useAgentStore.getState().addMessage;
-
-          for (const msg of messages) {
-            addMessage(resumedSessionId, {
-              id: `resumed-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              role: msg.role as 'user' | 'assistant' | 'tool',
-              content: msg.content,
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          return resumedSessionId;
-        } catch (error) {
-          console.error('Failed to resume session:', error);
-          return null;
-        }
-      },
-
-      clearSessions: () => {
-        set({
-          sessions: [],
-          activeSessionId: null,
-          persistedSessions: [],
-        });
-      },
-    }),
-    {
-      name: 'hf-agent-sessions',
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        sessions: state.sessions,
-        activeSessionId: state.activeSessionId,
-        // Don't persist persistedSessions - always fetch fresh
-      }),
+  loadSessions: async () => {
+    const { isAuthenticated, getAuthHeaders } = useAuthStore.getState();
+    if (!isAuthenticated()) {
+      set({ sessions: [], isLoading: false });
+      return;
     }
-  )
-);
+
+    set({ isLoading: true, error: null });
+
+    try {
+      const response = await fetch(`${API_BASE}/api/sessions`, {
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to load sessions');
+      }
+
+      const data = await response.json();
+
+      // Transform API response to frontend format
+      const sessions: Session[] = data.map((s: any) => ({
+        id: s.session_id,
+        title: s.title || `Chat ${s.session_id.slice(0, 8)}`,
+        createdAt: s.created_at,
+        messageCount: s.message_count || 0,
+      }));
+
+      set({ sessions, isLoading: false });
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+      set({ sessions: [], isLoading: false, error: 'Failed to load sessions' });
+    }
+  },
+
+  createSession: async () => {
+    const { getAuthHeaders } = useAuthStore.getState();
+
+    try {
+      const response = await fetch(`${API_BASE}/api/session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create session');
+      }
+
+      const data = await response.json();
+      const sessionId = data.session_id;
+
+      // Add new session to the list
+      const newSession: Session = {
+        id: sessionId,
+        title: `Chat ${sessionId.slice(0, 8)}`,
+        createdAt: new Date().toISOString(),
+        messageCount: 0,
+      };
+
+      set((state) => ({
+        sessions: [newSession, ...state.sessions],
+        activeSessionId: sessionId,
+      }));
+
+      return sessionId;
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      set({ error: 'Failed to create session' });
+      return null;
+    }
+  },
+
+  selectSession: async (id: string) => {
+    const { activeSessionId } = get();
+
+    // If already selected, do nothing
+    if (activeSessionId === id) {
+      return;
+    }
+
+    const { getAuthHeaders } = useAuthStore.getState();
+
+    set({ isLoading: true, error: null });
+
+    try {
+      // Fetch messages for this session
+      const response = await fetch(`${API_BASE}/api/session/${id}/messages`, {
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to load session');
+      }
+
+      const data = await response.json();
+
+      // Load messages into agentStore
+      const { useAgentStore } = await import('./agentStore');
+      const setMessages = useAgentStore.getState().setMessages;
+
+      // Transform and set messages (REPLACE, not append)
+      const messages = (data.messages || []).map((msg: any, index: number) => ({
+        id: `msg-${id}-${index}`,
+        role: msg.role,
+        content: msg.content,
+        timestamp: new Date().toISOString(),
+      }));
+
+      setMessages(messages);
+      set({ activeSessionId: id, isLoading: false });
+    } catch (error) {
+      console.error('Failed to select session:', error);
+      set({ isLoading: false, error: 'Failed to load session' });
+    }
+  },
+
+  deleteSession: async (id: string) => {
+    const { getAuthHeaders } = useAuthStore.getState();
+    const wasActiveSession = get().activeSessionId === id;
+
+    try {
+      const response = await fetch(`${API_BASE}/api/session/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete session');
+      }
+
+      set((state) => {
+        const newSessions = state.sessions.filter((s) => s.id !== id);
+        const newActiveId = state.activeSessionId === id
+          ? (newSessions.length > 0 ? newSessions[0].id : null)
+          : state.activeSessionId;
+
+        return {
+          sessions: newSessions,
+          activeSessionId: newActiveId,
+        };
+      });
+
+      // If we deleted the active session, clear messages
+      if (wasActiveSession) {
+        const { useAgentStore } = await import('./agentStore');
+        useAgentStore.getState().clearMessages();
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      set({ error: 'Failed to delete session' });
+    }
+  },
+
+  clearError: () => set({ error: null }),
+}));

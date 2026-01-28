@@ -142,7 +142,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
         });
         
         // Update message status
-        updateMessage(activeSessionId, message.id, {
+        updateMessage(message.id, {
             approval: {
                 ...approvalData!,
                 status: approved ? 'approved' : 'rejected',

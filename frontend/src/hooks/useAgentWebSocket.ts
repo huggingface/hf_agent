@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAgentStore } from '@/store/agentStore';
-import { useSessionStore } from '@/store/sessionStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { useAuthStore } from '@/store/authStore';
 import type { AgentEvent } from '@/types/events';
@@ -45,8 +44,6 @@ export function useAgentWebSocket({
 
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
 
-  const { setSessionActive } = useSessionStore();
-
   const handleEvent = useCallback(
     (event: AgentEvent) => {
       if (!sessionId) return;
@@ -55,7 +52,6 @@ export function useAgentWebSocket({
         case 'ready':
           setConnected(true);
           setProcessing(false);
-          setSessionActive(sessionId, true);
           onReady?.();
           break;
 
@@ -74,7 +70,7 @@ export function useAgentWebSocket({
 
           if (currentTurnMsgId) {
             // Update existing message - add segments chronologically
-            const messages = useAgentStore.getState().getMessages(sessionId);
+            const messages = useAgentStore.getState().messages;
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
             if (existingMsg) {
@@ -91,7 +87,7 @@ export function useAgentWebSocket({
                 segments.push({ type: 'text', content });
               }
 
-              updateMessage(sessionId, currentTurnMsgId, {
+              updateMessage(currentTurnMsgId, {
                 content: existingMsg.content + '\n\n' + content,
                 segments,
               });
@@ -119,7 +115,7 @@ export function useAgentWebSocket({
               timestamp: new Date().toISOString(),
               segments,
             };
-            addMessage(sessionId, message);
+            addMessage(message);
             setCurrentTurnMessageId(messageId);
           }
           break;
@@ -143,7 +139,7 @@ export function useAgentWebSocket({
             };
             addTraceLog(log);
             // Update the current turn message's trace in real-time
-            updateCurrentTurnTrace(sessionId);
+            updateCurrentTurnTrace();
           }
 
           // Auto-expand Right Panel for specific tools
@@ -184,11 +180,11 @@ export function useAgentWebSocket({
           // Mark the corresponding trace log as completed and store the output
           updateTraceLog(toolName, { completed: true, output, success });
           // Update the current turn message's trace in real-time
-          updateCurrentTurnTrace(sessionId);
+          updateCurrentTurnTrace();
 
           // Special handling for hf_jobs - update or create job message with output
           if (toolName === 'hf_jobs') {
-            const messages = useAgentStore.getState().getMessages(sessionId);
+            const messages = useAgentStore.getState().messages;
             const traceLogs = useAgentStore.getState().traceLogs;
 
             // Find existing approval message for this job
@@ -218,14 +214,14 @@ export function useAgentWebSocket({
                 },
                 toolOutput: output
               };
-              addMessage(sessionId, autoExecMessage);
+              addMessage(autoExecMessage);
               console.log('Created auto-exec message with tool output:', toolName);
             } else {
               // Update existing approval message
               const currentOutput = jobMsg.toolOutput || '';
               const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
 
-              useAgentStore.getState().updateMessage(sessionId, jobMsg.id, {
+              useAgentStore.getState().updateMessage(jobMsg.id, {
                 toolOutput: newOutput
               });
               console.log('Updated job message with tool output:', toolName);
@@ -295,7 +291,7 @@ export function useAgentWebSocket({
                 batch: { tools, count }
             }
           };
-          addMessage(sessionId, message);
+          addMessage(message);
 
           // Show the first tool's content in the panel so users see what they're approving
           if (tools && tools.length > 0) {

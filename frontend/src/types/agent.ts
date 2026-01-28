@@ -2,21 +2,11 @@
  * Agent-related types
  */
 
-export interface SessionMeta {
+export interface Session {
   id: string;
   title: string;
   createdAt: string;
-  isActive: boolean;
-}
-
-export interface PersistedSessionMeta {
-  session_id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-  status: 'active' | 'archived' | 'deleted';
-  message_count: number;
-  last_message_preview: string;
+  messageCount: number;
 }
 
 export interface MessageSegment {

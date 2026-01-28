@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import {
   Box,
   List,
@@ -34,76 +34,44 @@ const StatusDiode = ({ connected }: { connected: boolean }) => (
   />
 );
 
-const RunningIndicator = () => (
-  <Box
-    className="running-indicator"
-    sx={{
-      width: 10,
-      height: 10,
-      borderRadius: '50%',
-      bgcolor: 'var(--accent-yellow)',
-      boxShadow: '0 0 6px rgba(199,165,0,0.18)',
-    }}
-  />
-);
-
 export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   const {
     sessions,
     activeSessionId,
+    isLoading,
     createSession,
+    selectSession,
     deleteSession,
-    switchSession,
-    persistedSessions,
-    isLoadingPersisted,
-    loadPersistedSessions,
-    resumeSession,
   } = useSessionStore();
-  const { clearMessages, isConnected, isProcessing, setPlan, setPanelContent } = useAgentStore();
-  const { getAuthHeaders, isAuthenticated } = useAuthStore();
-
-  // Load persisted sessions on mount if authenticated
-  useEffect(() => {
-    if (isAuthenticated()) {
-      loadPersistedSessions();
-    }
-  }, [isAuthenticated, loadPersistedSessions]);
+  const { isConnected, isProcessing, setPlan, setPanelContent, clearMessages } = useAgentStore();
+  const { getAuthHeaders } = useAuthStore();
 
   const handleNewSession = useCallback(async () => {
-    try {
-      // Use the new async createSession which includes auth headers
-      const sessionId = await createSession();
-      if (sessionId) {
-        setPlan([]);
-        setPanelContent(null);
-        onClose?.();
-      }
-    } catch (e) {
-      console.error('Failed to create session:', e);
+    const sessionId = await createSession();
+    if (sessionId) {
+      clearMessages();
+      setPlan([]);
+      setPanelContent(null);
+      onClose?.();
     }
-  }, [createSession, setPlan, setPanelContent, onClose]);
-
-  const handleDeleteSession = useCallback(
-    async (sessionId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      try {
-        await deleteSession(sessionId);
-        clearMessages(sessionId);
-      } catch (e) {
-        console.error('Failed to delete session:', e);
-      }
-    },
-    [deleteSession, clearMessages]
-  );
+  }, [createSession, clearMessages, setPlan, setPanelContent, onClose]);
 
   const handleSelectSession = useCallback(
-    (sessionId: string) => {
-      switchSession(sessionId);
+    async (sessionId: string) => {
+      await selectSession(sessionId);
       setPlan([]);
       setPanelContent(null);
       onClose?.();
     },
-    [switchSession, setPlan, setPanelContent, onClose]
+    [selectSession, setPlan, setPanelContent, onClose]
+  );
+
+  const handleDeleteSession = useCallback(
+    async (sessionId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      await deleteSession(sessionId);
+    },
+    [deleteSession]
   );
 
   const handleUndo = useCallback(async () => {
@@ -118,54 +86,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     }
   }, [activeSessionId, getAuthHeaders]);
 
-  const handleResumeSession = useCallback(async (sessionId: string) => {
-    try {
-      const newSessionId = await resumeSession(sessionId);
-      if (newSessionId) {
-        setPlan([]);
-        setPanelContent(null);
-        onClose?.();
-      }
-    } catch (e) {
-      console.error('Failed to resume session:', e);
-    }
-  }, [resumeSession, setPlan, setPanelContent, onClose]);
-
-  // Combine active and persisted sessions into unified list
-  const inMemorySessionIds = new Set(sessions.map(s => s.id));
-
-  // Create unified session items
-  type UnifiedSession = {
-    id: string;
-    title: string;
-    createdAt: string;
-    isActive: boolean;
-    isPersisted: boolean;
-    messageCount?: number;
-  };
-
-  const unifiedSessions: UnifiedSession[] = [
-    // In-memory sessions
-    ...sessions.map((s, index) => ({
-      id: s.id,
-      title: s.title || `Session ${String(sessions.length - index).padStart(2, '0')}`,
-      createdAt: s.createdAt,
-      isActive: s.isActive,
-      isPersisted: false,
-    })),
-    // Persisted sessions not in memory
-    ...persistedSessions
-      .filter(ps => !inMemorySessionIds.has(ps.session_id))
-      .map(ps => ({
-        id: ps.session_id,
-        title: ps.title || `Session ${ps.session_id.slice(0, 8)}`,
-        createdAt: ps.created_at,
-        isActive: false,
-        isPersisted: true,
-        messageCount: ps.message_count,
-      })),
-  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -176,17 +96,9 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  const handleSessionClick = useCallback((session: UnifiedSession) => {
-    if (session.isPersisted) {
-      handleResumeSession(session.id);
-    } else {
-      handleSelectSession(session.id);
-    }
-  }, [handleResumeSession, handleSelectSession]);
-
   return (
     <Box className="sidebar" sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)' }}>
-      {/* Header - Aligned with AppLayout 60px */}
+      {/* Header */}
       <Box sx={{
         height: '60px',
         display: 'flex',
@@ -205,7 +117,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
       {/* Content */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2, overflow: 'hidden' }}>
-        {/* System Info / Status */}
+        {/* Status */}
         <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
           <StatusDiode connected={isConnected} />
           <Typography variant="caption" sx={{ color: 'var(--muted-text)', fontFamily: 'inherit' }}>
@@ -248,20 +160,20 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
         {/* Session List */}
         <Box sx={{ flex: 1, overflow: 'auto', mx: -1, px: 1 }}>
-          {isLoadingPersisted && (
+          {isLoading && (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
               <CircularProgress size={20} sx={{ color: 'var(--muted-text)' }} />
             </Box>
           )}
           <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {unifiedSessions.map((session) => {
+            {sessions.map((session) => {
               const isSelected = session.id === activeSessionId;
               return (
                 <ListItem
                   key={session.id}
                   disablePadding
                   className="session-item"
-                  onClick={() => handleSessionClick(session)}
+                  onClick={() => handleSelectSession(session.id)}
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
@@ -289,24 +201,21 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                       {session.title}
                     </Typography>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                      {session.isActive && <RunningIndicator />}
                       <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
                         {formatTime(session.createdAt)}
-                        {session.messageCount !== undefined && ` · ${session.messageCount} msgs`}
+                        {session.messageCount > 0 && ` · ${session.messageCount} msgs`}
                       </Typography>
                     </Box>
                   </Box>
 
-                  {!session.isPersisted && (
-                    <IconButton
-                      className="delete-btn"
-                      size="small"
-                      onClick={(e) => handleDeleteSession(session.id, e)}
-                      sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  )}
+                  <IconButton
+                    className="delete-btn"
+                    size="small"
+                    onClick={(e) => handleDeleteSession(session.id, e)}
+                    sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
                 </ListItem>
               );
             })}
@@ -318,7 +227,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
       <Box sx={{ p: 2, borderTop: '1px solid rgba(255,255,255,0.03)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Typography variant="caption" className="small-note" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
-            {sessions.length} active
+            {sessions.length} sessions
           </Typography>
           <Tooltip title="Undo last turn">
             <span>

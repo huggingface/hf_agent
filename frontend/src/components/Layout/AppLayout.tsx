@@ -34,8 +34,8 @@ const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
-  const { activeSessionId, createSession } = useSessionStore();
-  const { isConnected, isProcessing, getMessages, addMessage, setPlan, setPanelContent } = useAgentStore();
+  const { activeSessionId, sessions, isLoading: sessionsLoading, loadSessions, createSession } = useSessionStore();
+  const { isConnected, isProcessing, messages, addMessage, clearMessages, setPlan, setPanelContent } = useAgentStore();
   const {
     isLeftSidebarOpen,
     isRightPanelOpen,
@@ -84,7 +84,12 @@ export default function AppLayout() {
     };
   }, [handleMouseMove, stopResizing]);
 
-  const messages = activeSessionId ? getMessages(activeSessionId) : [];
+  // Load sessions when authenticated
+  useEffect(() => {
+    if (isAuthenticated() && !sessionsLoading && sessions.length === 0) {
+      loadSessions();
+    }
+  }, [isAuthenticated, sessionsLoading, sessions.length, loadSessions]);
 
   useAgentWebSocket({
     sessionId: activeSessionId,
@@ -108,7 +113,7 @@ export default function AppLayout() {
         content: text.trim(),
         timestamp: new Date().toISOString(),
       };
-      addMessage(activeSessionId, userMsg);
+      addMessage(userMsg);
 
       try {
         await fetch(`${API_BASE}/api/submit`, {
@@ -144,6 +149,7 @@ export default function AppLayout() {
     try {
       const sessionId = await createSession();
       if (sessionId) {
+        clearMessages();
         setPlan([]);
         setPanelContent(null);
       }
@@ -152,7 +158,7 @@ export default function AppLayout() {
     } finally {
       setIsCreatingSession(false);
     }
-  }, [createSession, setPlan, setPanelContent]);
+  }, [createSession, clearMessages, setPlan, setPanelContent]);
 
   // Show loading spinner while auth is loading
   if (authLoading) {
@@ -177,11 +183,31 @@ export default function AppLayout() {
     return <WelcomeScreen />;
   }
 
-  // Show setup prompt if no API key or no session
-  const needsSetup = !user?.has_anthropic_key;
-  const needsSession = !activeSessionId;
+  // Show loading while sessions are being fetched
+  if (sessionsLoading) {
+    return (
+      <Box
+        sx={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg)',
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
 
-  if (needsSetup || needsSession) {
+  // Show setup prompt only if:
+  // 1. No API key (always need to set that up first)
+  // 2. No sessions exist AND no active session (first time user)
+  const needsApiKey = !user?.has_anthropic_key;
+  const noSessionsAtAll = sessions.length === 0 && !activeSessionId;
+
+  if (needsApiKey || noSessionsAtAll) {
     return (
       <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
         {/* Minimal header for setup screens */}
@@ -239,7 +265,7 @@ export default function AppLayout() {
         {/* Setup content */}
         <Box sx={{ flex: 1 }}>
           <SetupPrompt
-            hasApiKey={!!user?.has_anthropic_key}
+            hasApiKey={!needsApiKey}
             onOpenSettings={handleOpenSettings}
             onStartSession={handleStartSession}
             isCreatingSession={isCreatingSession}

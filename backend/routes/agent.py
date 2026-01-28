@@ -10,7 +10,6 @@ from models import (
     ApprovalRequest,
     HealthResponse,
     MessageData,
-    ResumeSessionResponse,
     SessionInfo,
     SessionResponse,
     SubmitRequest,
@@ -22,6 +21,32 @@ from websocket import manager as ws_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
+
+
+# Models defined early so they can be used in route annotations
+class PersistedSessionInfo(BaseModel):
+    """Info about a persisted session."""
+
+    session_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    status: str
+    message_count: int
+    last_message_preview: str
+
+
+class SessionMessagesResponse(BaseModel):
+    """Response containing session messages."""
+
+    session_id: str
+    messages: list[MessageData]
+
+
+class SessionUpdateRequest(BaseModel):
+    """Request to update session metadata."""
+
+    title: Optional[str] = None
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -70,17 +95,77 @@ async def get_session(
     return SessionInfo(**info)
 
 
-@router.get("/sessions", response_model=list[SessionInfo])
+@router.get("/sessions")
 async def list_sessions(
     user: UserContext | None = Depends(get_current_user),
-) -> list[SessionInfo]:
-    """List sessions owned by the current user.
+) -> list[PersistedSessionInfo]:
+    """List all sessions for the current user (from HF Dataset).
 
     Returns empty list if not authenticated.
     """
-    user_id = user.user_id if user else None
-    sessions = session_manager.list_sessions(user_id=user_id)
-    return [SessionInfo(**s) for s in sessions]
+    if not user:
+        return []
+
+    entries = await lifecycle_manager.list_user_sessions(user.user_id)
+    return [
+        PersistedSessionInfo(
+            session_id=e.session_id,
+            title=e.title,
+            created_at=e.created_at,
+            updated_at=e.updated_at,
+            status=e.status,
+            message_count=e.message_count,
+            last_message_preview=e.last_message_preview,
+        )
+        for e in entries
+        if e.status != "deleted"
+    ]
+
+
+@router.get("/session/{session_id}/messages", response_model=SessionMessagesResponse)
+async def get_session_messages(
+    session_id: str,
+    user: UserContext = Depends(require_auth),
+) -> SessionMessagesResponse:
+    """Get messages for a session.
+
+    Loads from HF Dataset and creates in-memory session if needed.
+    """
+    import json
+
+    # Load persisted session
+    persisted = await lifecycle_manager.load_session(session_id)
+    if not persisted:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if persisted.user_id != user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if persisted.status == "deleted":
+        raise HTTPException(status_code=404, detail="Session has been deleted")
+
+    # Parse messages
+    messages = []
+    try:
+        raw_messages = json.loads(persisted.messages_json)
+        messages = [
+            MessageData(role=m.get("role", "unknown"), content=m.get("content", ""))
+            for m in raw_messages
+            if m.get("role") != "system"
+        ]
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse messages for session {session_id}")
+
+    # Create in-memory session if not already active (for continuing conversation)
+    await session_manager.create_session_with_id(
+        session_id=session_id,
+        user_id=user.user_id,
+        hf_token=user.hf_token,
+        anthropic_key=user.anthropic_key,
+    )
+
+    return SessionMessagesResponse(session_id=session_id, messages=messages)
 
 
 @router.delete("/session/{session_id}")
@@ -88,14 +173,19 @@ async def delete_session(
     session_id: str,
     user: UserContext | None = Depends(get_current_user),
 ) -> dict:
-    """Delete a session.
+    """Delete a session (soft delete in HF Dataset).
 
     Users can only delete their own sessions.
     """
-    user_id = user.user_id if user else None
-    success = await session_manager.delete_session(session_id, user_id=user_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Delete from in-memory if exists
+    await session_manager.delete_session(session_id, user_id=user.user_id)
+
+    # Soft delete from HF Dataset
+    await lifecycle_manager.delete_session(session_id, user.user_id)
+
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -210,107 +300,6 @@ async def shutdown_session(
 # ============================================================================
 # PERSISTENCE ENDPOINTS
 # ============================================================================
-
-
-class SessionResumeRequest(BaseModel):
-    """Request to resume a persisted session."""
-
-    session_id: str
-
-
-class SessionUpdateRequest(BaseModel):
-    """Request to update session metadata."""
-
-    title: Optional[str] = None
-
-
-class PersistedSessionInfo(BaseModel):
-    """Info about a persisted session."""
-
-    session_id: str
-    title: str
-    created_at: str
-    updated_at: str
-    status: str
-    message_count: int
-    last_message_preview: str
-
-
-@router.get("/sessions/persisted", response_model=list[PersistedSessionInfo])
-async def list_persisted_sessions(
-    user: UserContext = Depends(require_auth),
-) -> list[PersistedSessionInfo]:
-    """List user's persisted sessions from HF Dataset.
-
-    Returns sessions stored in the HF Dataset, not just in-memory sessions.
-    """
-    entries = await lifecycle_manager.list_user_sessions(user.user_id)
-    return [
-        PersistedSessionInfo(
-            session_id=e.session_id,
-            title=e.title,
-            created_at=e.created_at,
-            updated_at=e.updated_at,
-            status=e.status,
-            message_count=e.message_count,
-            last_message_preview=e.last_message_preview,
-        )
-        for e in entries
-        if e.status != "deleted"  # Filter out soft-deleted sessions
-    ]
-
-
-@router.post("/session/{session_id}/resume", response_model=ResumeSessionResponse)
-async def resume_session(
-    session_id: str,
-    user: UserContext = Depends(require_auth),
-) -> ResumeSessionResponse:
-    """Resume a persisted session.
-
-    Loads the session from HF Dataset and returns the messages for frontend display.
-    Uses the SAME session_id to avoid duplicates in the UI.
-    """
-    import json
-
-    # Load persisted session
-    persisted = await lifecycle_manager.load_session(session_id)
-    if not persisted:
-        raise HTTPException(status_code=404, detail="Session not found in storage")
-
-    # Verify ownership
-    if persisted.user_id != user.user_id:
-        raise HTTPException(
-            status_code=403, detail="Not authorized to access this session"
-        )
-
-    if persisted.status == "deleted":
-        raise HTTPException(status_code=404, detail="Session has been deleted")
-
-    # Parse messages from persisted session
-    messages = []
-    try:
-        raw_messages = json.loads(persisted.messages_json)
-        messages = [
-            MessageData(role=m.get("role", "unknown"), content=m.get("content", ""))
-            for m in raw_messages
-            if m.get("role") != "system"  # Skip system messages
-        ]
-    except json.JSONDecodeError:
-        logger.error(f"Failed to parse messages for session {session_id}")
-
-    # Create in-memory session with the SAME session_id for continuity
-    await session_manager.create_session_with_id(
-        session_id=session_id,
-        user_id=user.user_id,
-        hf_token=user.hf_token,
-        anthropic_key=user.anthropic_key,
-    )
-
-    return ResumeSessionResponse(
-        session_id=session_id,  # Return the SAME session_id
-        ready=True,
-        messages=messages,
-    )
 
 
 @router.patch("/session/{session_id}")
