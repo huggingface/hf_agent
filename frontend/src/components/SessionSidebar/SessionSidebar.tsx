@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
   Box,
   List,
@@ -7,9 +7,12 @@ import {
   Typography,
   Button,
   Tooltip,
+  Divider,
+  CircularProgress,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import UndoIcon from '@mui/icons-material/Undo';
+import HistoryIcon from '@mui/icons-material/History';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { useAuthStore } from '@/store/authStore';
@@ -53,9 +56,20 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     createSession,
     deleteSession,
     switchSession,
+    persistedSessions,
+    isLoadingPersisted,
+    loadPersistedSessions,
+    resumeSession,
   } = useSessionStore();
   const { clearMessages, isConnected, isProcessing, setPlan, setPanelContent } = useAgentStore();
-  const { getAuthHeaders } = useAuthStore();
+  const { getAuthHeaders, isAuthenticated } = useAuthStore();
+
+  // Load persisted sessions on mount if authenticated
+  useEffect(() => {
+    if (isAuthenticated()) {
+      loadPersistedSessions();
+    }
+  }, [isAuthenticated, loadPersistedSessions]);
 
   const handleNewSession = useCallback(async () => {
     try {
@@ -105,6 +119,25 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
       console.error('Undo failed:', e);
     }
   }, [activeSessionId, getAuthHeaders]);
+
+  const handleResumeSession = useCallback(async (sessionId: string) => {
+    try {
+      const newSessionId = await resumeSession(sessionId);
+      if (newSessionId) {
+        setPlan([]);
+        setPanelContent(null);
+        onClose?.();
+      }
+    } catch (e) {
+      console.error('Failed to resume session:', e);
+    }
+  }, [resumeSession, setPlan, setPanelContent, onClose]);
+
+  // Filter out persisted sessions that are already loaded in memory
+  const inMemorySessionIds = new Set(sessions.map(s => s.id));
+  const availablePersistedSessions = persistedSessions.filter(
+    ps => !inMemorySessionIds.has(ps.session_id)
+  );
 
   const formatTime = (dateString: string) => {
     return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -174,6 +207,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
         {/* Session List */}
         <Box sx={{ flex: 1, overflow: 'auto', mx: -1, px: 1 }}>
+          {/* Active Sessions */}
           <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {[...sessions].reverse().map((session, index) => {
               const sessionNumber = sessions.length - index;
@@ -230,6 +264,56 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
               );
             })}
           </List>
+
+          {/* Persisted Sessions (Saved History) */}
+          {isAuthenticated() && availablePersistedSessions.length > 0 && (
+            <>
+              <Divider sx={{ my: 2, borderColor: 'rgba(255,255,255,0.06)' }} />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                <HistoryIcon sx={{ fontSize: 16, color: 'var(--muted-text)' }} />
+                <Typography variant="caption" sx={{ color: 'var(--muted-text)', fontWeight: 500 }}>
+                  Saved Sessions
+                </Typography>
+                {isLoadingPersisted && <CircularProgress size={12} sx={{ color: 'var(--muted-text)' }} />}
+              </Box>
+              <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {availablePersistedSessions.map((ps) => (
+                  <ListItem
+                    key={ps.session_id}
+                    disablePadding
+                    className="session-item"
+                    onClick={() => handleResumeSession(ps.session_id)}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '10px',
+                      borderRadius: 'var(--radius-md)',
+                      bgcolor: 'transparent',
+                      cursor: 'pointer',
+                      opacity: 0.7,
+                      transition: 'background 0.18s ease, opacity 0.18s ease',
+                      '&:hover': {
+                        bgcolor: 'rgba(255,255,255,0.02)',
+                        opacity: 1,
+                      },
+                    }}
+                  >
+                    <Box sx={{ flex: 1, overflow: 'hidden' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {ps.title || `Session ${ps.session_id.slice(0, 8)}`}
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                        <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
+                          {ps.message_count} messages
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </ListItem>
+                ))}
+              </List>
+            </>
+          )}
         </Box>
       </Box>
 
