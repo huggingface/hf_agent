@@ -11,6 +11,7 @@ from typing import Any, Optional
 from websocket import manager as ws_manager
 
 from agent.config import load_config
+from lifecycle import lifecycle_manager
 from agent.core.agent_loop import process_submission
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
@@ -201,6 +202,10 @@ class SessionManager:
                             submission_queue.get(), timeout=1.0
                         )
                         should_continue = await process_submission(session, submission)
+
+                        # Persist session after each turn
+                        await self._persist_session(session_id)
+
                         if not should_continue:
                             break
                     except asyncio.TimeoutError:
@@ -226,6 +231,33 @@ class SessionManager:
                     self.sessions[session_id].is_active = False
 
             logger.info(f"Session {session_id} ended")
+
+    async def _persist_session(self, session_id: str) -> None:
+        """Persist session state to HF Dataset.
+
+        Called after each turn to save conversation history.
+        """
+        agent_session = self.sessions.get(session_id)
+        if not agent_session:
+            return
+
+        # Get messages from context manager
+        messages = []
+        for item in agent_session.session.context_manager.items:
+            messages.append({
+                "role": item.get("role", "unknown"),
+                "content": item.get("content", ""),
+            })
+
+        # Persist via lifecycle manager
+        await lifecycle_manager.persist_session(
+            session_id=session_id,
+            user_id=agent_session.user_id or "anonymous",
+            messages=messages,
+            config={"model_name": self.config.model_name},
+            title=f"Chat {session_id[:8]}",
+            status="active",
+        )
 
     async def _forward_events(
         self, session_id: str, event_queue: asyncio.Queue
@@ -316,6 +348,23 @@ class SessionManager:
                         await asyncio.wait_for(agent_session.task, timeout=5.0)
                     except asyncio.TimeoutError:
                         agent_session.task.cancel()
+
+            # Close and persist the session
+            agent_session = self.sessions.get(session_id)
+            if agent_session:
+                messages = []
+                for item in agent_session.session.context_manager.items:
+                    messages.append({
+                        "role": item.get("role", "unknown"),
+                        "content": item.get("content", ""),
+                    })
+                await lifecycle_manager.close_session(
+                    session_id=session_id,
+                    user_id=agent_session.user_id or "anonymous",
+                    messages=messages,
+                    config={"model_name": self.config.model_name},
+                    title=f"Chat {session_id[:8]}",
+                )
 
         return success
 

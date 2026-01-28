@@ -47,7 +47,8 @@ class LifecycleManager:
         self.repo_id = repo_id or os.environ.get(
             "SESSION_DATASET_REPO", "smolagents/hf-agent-sessions"
         )
-        self.hf_token = hf_token or os.environ.get("HF_TOKEN")
+        # Use dedicated admin token for session storage (not user OAuth tokens)
+        self.hf_token = hf_token or os.environ.get("HF_ADMIN_TOKEN")
 
         # Storage manager
         self._storage: Optional[HFStorageManager] = None
