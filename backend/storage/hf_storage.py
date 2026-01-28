@@ -290,11 +290,13 @@ class HFStorageManager:
         existing: dict[str, SessionIndexEntry] = {}
         try:
             index_path = f"index/users/{user_id}.jsonl"
+            # Force download to get latest version (bypass cache)
             content = await asyncio.to_thread(
                 self.api.hf_hub_download,
                 repo_id=self.repo_id,
                 filename=index_path,
                 repo_type="dataset",
+                force_download=True,
             )
             with open(content, "r") as f:
                 for line in f:
@@ -359,11 +361,13 @@ class HFStorageManager:
         """
         try:
             session_path = f"sessions/{session_id}.json"
+            # Force download to get latest version (bypass cache)
             local_path = await asyncio.to_thread(
                 self.api.hf_hub_download,
                 repo_id=self.repo_id,
                 filename=session_path,
                 repo_type="dataset",
+                force_download=True,
             )
             with open(local_path, "r") as f:
                 return PersistedSession.from_json(f.read())
@@ -384,11 +388,13 @@ class HFStorageManager:
         """
         try:
             index_path = f"index/users/{user_id}.jsonl"
+            # Force download to get latest version (bypass cache)
             local_path = await asyncio.to_thread(
                 self.api.hf_hub_download,
                 repo_id=self.repo_id,
                 filename=index_path,
                 repo_type="dataset",
+                force_download=True,
             )
             entries = []
             with open(local_path, "r") as f:
