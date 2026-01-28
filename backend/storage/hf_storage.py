@@ -386,8 +386,10 @@ class HFStorageManager:
         Returns:
             List of session index entries
         """
+        index_path = f"index/users/{user_id}.jsonl"
+        logger.info(f"Loading sessions for user {user_id} from {self.repo_id}/{index_path}")
+
         try:
-            index_path = f"index/users/{user_id}.jsonl"
             # Force download to get latest version (bypass cache)
             local_path = await asyncio.to_thread(
                 self.api.hf_hub_download,
@@ -396,17 +398,24 @@ class HFStorageManager:
                 repo_type="dataset",
                 force_download=True,
             )
+            logger.info(f"Downloaded index to {local_path}")
+
             entries = []
             with open(local_path, "r") as f:
-                for line in f:
+                content = f.read()
+                logger.info(f"Index file content length: {len(content)} bytes")
+                for line in content.strip().split('\n'):
                     line = line.strip()
                     if line:
                         entries.append(SessionIndexEntry.from_jsonl(line))
+
+            logger.info(f"Loaded {len(entries)} sessions for user {user_id}")
             return entries
-        except HfHubHTTPError:
+        except HfHubHTTPError as e:
+            logger.warning(f"HfHubHTTPError loading sessions for {user_id}: {e}")
             return []
         except Exception as e:
-            logger.error(f"Error loading user sessions for {user_id}: {e}")
+            logger.error(f"Error loading user sessions for {user_id}: {e}", exc_info=True)
             return []
 
     async def force_sync(self) -> None:
