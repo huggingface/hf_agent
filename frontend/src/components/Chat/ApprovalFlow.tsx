@@ -8,6 +8,7 @@ import LaunchIcon from '@mui/icons-material/Launch';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { useSessionStore } from '@/store/sessionStore';
+import { useAuthStore } from '@/store/authStore';
 import type { Message, ToolApproval } from '@/types/agent';
 
 interface ApprovalFlowProps {
@@ -18,6 +19,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
   const { setPanelContent, setPanelTab, setActivePanelTab, clearPanelTabs, updateMessage } = useAgentStore();
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
   const { activeSessionId } = useSessionStore();
+  const { getAuthHeaders } = useAuthStore();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [feedback, setFeedback] = useState('');
   const [decisions, setDecisions] = useState<ToolApproval[]>([]);
@@ -129,7 +131,10 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
       try {
         await fetch('/api/approve', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
           body: JSON.stringify({
             session_id: activeSessionId,
             approvals: newDecisions,

@@ -39,8 +39,9 @@ COPY configs/ ./configs/
 COPY --from=frontend-builder /app/frontend/dist ./static/
 
 # Create directories and set ownership
-RUN mkdir -p /app/session_logs && \
-    chown -R user:user /app
+# /data is the persistent storage volume in HF Spaces
+RUN mkdir -p /app/session_logs /data && \
+    chown -R user:user /app /data
 
 # Switch to non-root user
 USER user
@@ -49,7 +50,8 @@ USER user
 ENV HOME=/home/user \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    HF_HOME=/data
 
 # Expose port
 EXPOSE 7860

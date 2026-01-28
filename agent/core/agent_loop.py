@@ -129,12 +129,17 @@ class Handlers:
             tools = session.tool_router.get_tool_specs_for_llm()
 
             try:
-                response: ModelResponse = await acompletion(
-                    model=session.config.model_name,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                )
+                # Pass user's Anthropic API key if available
+                completion_kwargs = {
+                    "model": session.config.model_name,
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                }
+                if session.anthropic_key:
+                    completion_kwargs["api_key"] = session.anthropic_key
+
+                response: ModelResponse = await acompletion(**completion_kwargs)
 
                 # Extract text response, token usage, and tool calls
                 message = response.choices[0].message

@@ -1004,9 +1004,18 @@ HF_JOBS_TOOL_SPEC = {
 
 
 async def hf_jobs_handler(
-    arguments: Dict[str, Any], session: Any = None
+    arguments: Dict[str, Any], session: Any = None, hf_token: Optional[str] = None
 ) -> tuple[str, bool]:
-    """Handler for agent tool router"""
+    """Handler for agent tool router.
+
+    Args:
+        arguments: Tool arguments
+        session: Optional session for event callbacks
+        hf_token: Optional HF token (uses env var if not provided)
+
+    Returns:
+        Tuple of (formatted output, success bool)
+    """
     try:
 
         async def log_callback(log: str):
@@ -1015,13 +1024,13 @@ async def hf_jobs_handler(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
 
-        # Get token and namespace from HF token
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
-        namespace = HfApi(token=hf_token).whoami().get("name") if hf_token else None
+        # Use provided token or fall back to environment variable
+        token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        namespace = HfApi(token=token).whoami().get("name") if token else None
 
         tool = HfJobsTool(
             namespace=namespace,
-            hf_token=hf_token,
+            hf_token=token,
             log_callback=log_callback if session else None,
         )
         result = await tool.execute(arguments)

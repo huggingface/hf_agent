@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+from lifecycle import lifecycle_manager
 from routes.agent import router as agent_router
 from routes.auth import router as auth_router
 
@@ -24,8 +24,16 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info("Starting HF Agent backend...")
+
+    # Start lifecycle manager for persistence
+    await lifecycle_manager.start()
+
     yield
+
     logger.info("Shutting down HF Agent backend...")
+
+    # Stop lifecycle manager (flushes pending syncs)
+    await lifecycle_manager.stop()
 
 
 app = FastAPI(
@@ -36,14 +44,21 @@ app = FastAPI(
 )
 
 # CORS middleware for development
+# In production, SPACE_HOST will be set and we allow that origin
+space_host = os.environ.get("SPACE_HOST")
+allowed_origins = [
+    "http://localhost:5173",  # Vite dev server
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+if space_host:
+    allowed_origins.append(f"https://{space_host}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

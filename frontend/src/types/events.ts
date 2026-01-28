@@ -16,7 +16,13 @@ export type EventType =
   | 'shutdown'
   | 'interrupted'
   | 'undo_complete'
-  | 'plan_update';
+  | 'plan_update'
+  // New events for multi-user/persistence
+  | 'session_sync'
+  | 'tab_conflict'
+  | 'tab_joined'
+  | 'tab_left'
+  | 'server_shutdown';
 
 export interface AgentEvent {
   event_type: EventType;
@@ -77,4 +83,28 @@ export interface CompactedEventData {
 
 export interface ErrorEventData {
   error: string;
+}
+
+// New event data types for multi-user/persistence
+export interface SessionSyncEventData {
+  last_synced: string;
+  pending_count: number;
+}
+
+export interface TabConflictEventData {
+  conflicting_tab: string;
+}
+
+export interface TabJoinedEventData {
+  tab_id: string;
+  total_tabs: number;
+}
+
+export interface TabLeftEventData {
+  tab_id: string;
+  total_tabs: number;
+}
+
+export interface ServerShutdownEventData {
+  message: string;
 }

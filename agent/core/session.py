@@ -42,6 +42,7 @@ class Session:
         config: Config | None = None,
         tool_router=None,
         context_manager: ContextManager | None = None,
+        anthropic_key: Optional[str] = None,
     ):
         self.tool_router = tool_router
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
@@ -59,6 +60,9 @@ class Session:
         self.is_running = True
         self.current_task: asyncio.Task | None = None
         self.pending_approval: Optional[dict[str, Any]] = None
+
+        # User's Anthropic API key (optional, overrides env var)
+        self.anthropic_key = anthropic_key
 
         # Session trajectory logging
         self.logged_events: list[dict] = []

@@ -67,6 +67,7 @@ class SessionInfo(BaseModel):
     created_at: str
     is_active: bool
     message_count: int
+    user_id: str | None = None  # Owner of the session
 
 
 class HealthResponse(BaseModel):

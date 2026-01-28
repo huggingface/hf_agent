@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useAgentStore } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
 import { useLayoutStore } from '@/store/layoutStore';
+import { useAuthStore } from '@/store/authStore';
 import type { AgentEvent } from '@/types/events';
 import type { Message, TraceLog } from '@/types/agent';
 
@@ -381,6 +382,44 @@ export function useAgentWebSocket({
           // Could remove last messages from store
           break;
 
+        // New events for multi-user/persistence
+        case 'session_sync': {
+          const lastSynced = event.data?.last_synced as string;
+          const pendingCount = event.data?.pending_count as number;
+          useAuthStore.getState().setSyncStatus(lastSynced, pendingCount);
+          console.log(`Session synced at ${lastSynced}, ${pendingCount} pending`);
+          break;
+        }
+
+        case 'tab_conflict': {
+          const conflictingTab = event.data?.conflicting_tab as string;
+          console.warn(`Tab conflict detected with tab ${conflictingTab}`);
+          // Could show a warning to the user
+          break;
+        }
+
+        case 'tab_joined': {
+          const tabId = event.data?.tab_id as string;
+          const totalTabs = event.data?.total_tabs as number;
+          console.log(`Tab ${tabId} joined, total tabs: ${totalTabs}`);
+          break;
+        }
+
+        case 'tab_left': {
+          const tabId = event.data?.tab_id as string;
+          const totalTabs = event.data?.total_tabs as number;
+          console.log(`Tab ${tabId} left, total tabs: ${totalTabs}`);
+          break;
+        }
+
+        case 'server_shutdown': {
+          const message = event.data?.message as string;
+          console.warn('Server shutdown:', message);
+          setError(message || 'Server is shutting down');
+          setConnected(false);
+          break;
+        }
+
         default:
           console.log('Unknown event:', event);
       }
@@ -405,9 +444,13 @@ export function useAgentWebSocket({
     // In production, use the same host
     const isDev = import.meta.env.DEV;
     const host = isDev ? '127.0.0.1:7860' : window.location.host;
-    const wsUrl = `${protocol}//${host}/api/ws/${sessionId}`;
 
-    console.log('Connecting to WebSocket:', wsUrl);
+    // Pass auth token as query parameter (WebSocket can't use custom headers in browsers)
+    const token = useAuthStore.getState().token;
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    const wsUrl = `${protocol}//${host}/api/ws/${sessionId}${tokenParam}`;
+
+    console.log('Connecting to WebSocket:', wsUrl.replace(/token=[^&]+/, 'token=***'));
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

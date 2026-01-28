@@ -1,4 +1,4 @@
-"""Session manager for handling multiple concurrent agent sessions."""
+"""Session manager for handling multiple concurrent agent sessions with user isolation."""
 
 import asyncio
 import logging
@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class UserContext:
+    """Context for the authenticated user of a session."""
+
+    user_id: str  # HF username
+    hf_token: str  # HF OAuth access token
+    anthropic_key: Optional[str] = None  # User's Anthropic API key
+
+
+@dataclass
 class AgentSession:
     """Wrapper for an agent session with its associated resources."""
 
@@ -52,28 +61,63 @@ class AgentSession:
     created_at: datetime = field(default_factory=datetime.utcnow)
     is_active: bool = True
 
+    # User isolation
+    user_id: Optional[str] = None  # Owner of this session
+    user_context: Optional[UserContext] = None  # User's auth context
+
 
 class SessionManager:
-    """Manages multiple concurrent agent sessions."""
+    """Manages multiple concurrent agent sessions with user isolation."""
 
     def __init__(self, config_path: str | None = None) -> None:
         self.config = load_config(config_path or DEFAULT_CONFIG_PATH)
         self.sessions: dict[str, AgentSession] = {}
         self._lock = asyncio.Lock()
 
-    async def create_session(self) -> str:
-        """Create a new agent session and return its ID."""
+    async def create_session(
+        self,
+        user_id: Optional[str] = None,
+        hf_token: Optional[str] = None,
+        anthropic_key: Optional[str] = None,
+    ) -> str:
+        """Create a new agent session and return its ID.
+
+        Args:
+            user_id: Optional owner user ID (HF username)
+            hf_token: Optional HF OAuth token for the user
+            anthropic_key: Optional Anthropic API key for the user
+
+        Returns:
+            Session ID (UUID)
+        """
         session_id = str(uuid.uuid4())
 
         # Create queues for this session
         submission_queue: asyncio.Queue = asyncio.Queue()
         event_queue: asyncio.Queue = asyncio.Queue()
 
-        # Create tool router
-        tool_router = ToolRouter(self.config.mcpServers)
+        # Create user context if user is authenticated
+        user_context = None
+        if user_id and hf_token:
+            user_context = UserContext(
+                user_id=user_id,
+                hf_token=hf_token,
+                anthropic_key=anthropic_key,
+            )
 
-        # Create the agent session
-        session = Session(event_queue, config=self.config, tool_router=tool_router)
+        # Create tool router with user context for token injection
+        tool_router = ToolRouter(
+            self.config.mcpServers,
+            hf_token=hf_token,  # Pass user's HF token
+        )
+
+        # Create the agent session with user's Anthropic key if provided
+        session = Session(
+            event_queue,
+            config=self.config,
+            tool_router=tool_router,
+            anthropic_key=anthropic_key,
+        )
 
         # Create wrapper
         agent_session = AgentSession(
@@ -81,6 +125,8 @@ class SessionManager:
             session=session,
             tool_router=tool_router,
             submission_queue=submission_queue,
+            user_id=user_id,
+            user_context=user_context,
         )
 
         async with self._lock:
@@ -92,8 +138,34 @@ class SessionManager:
         )
         agent_session.task = task
 
-        logger.info(f"Created session {session_id}")
+        logger.info(f"Created session {session_id} for user {user_id or 'anonymous'}")
         return session_id
+
+    def _check_session_ownership(
+        self, session_id: str, user_id: Optional[str]
+    ) -> AgentSession | None:
+        """Check if user owns the session and return it if so.
+
+        Args:
+            session_id: Session to check
+            user_id: User to verify ownership
+
+        Returns:
+            AgentSession if user owns it or session has no owner, None otherwise
+        """
+        agent_session = self.sessions.get(session_id)
+        if not agent_session:
+            return None
+
+        # If session has an owner, verify it matches
+        if agent_session.user_id and agent_session.user_id != user_id:
+            logger.warning(
+                f"User {user_id} attempted to access session {session_id} "
+                f"owned by {agent_session.user_id}"
+            )
+            return None
+
+        return agent_session
 
     async def _run_session(
         self,
@@ -168,56 +240,76 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Error forwarding event for {session_id}: {e}")
 
-    async def submit(self, session_id: str, operation: Operation) -> bool:
-        """Submit an operation to a session."""
+    async def submit(
+        self, session_id: str, operation: Operation, user_id: Optional[str] = None
+    ) -> bool:
+        """Submit an operation to a session.
+
+        Args:
+            session_id: Target session
+            operation: Operation to submit
+            user_id: User making the request (for ownership check)
+
+        Returns:
+            True if submitted successfully
+        """
         async with self._lock:
-            agent_session = self.sessions.get(session_id)
+            agent_session = self._check_session_ownership(session_id, user_id)
 
         if not agent_session or not agent_session.is_active:
-            logger.warning(f"Session {session_id} not found or inactive")
+            logger.warning(
+                f"Session {session_id} not found, inactive, or access denied"
+            )
             return False
 
         submission = Submission(id=f"sub_{uuid.uuid4().hex[:8]}", operation=operation)
         await agent_session.submission_queue.put(submission)
         return True
 
-    async def submit_user_input(self, session_id: str, text: str) -> bool:
+    async def submit_user_input(
+        self, session_id: str, text: str, user_id: Optional[str] = None
+    ) -> bool:
         """Submit user input to a session."""
         operation = Operation(op_type=OpType.USER_INPUT, data={"text": text})
-        return await self.submit(session_id, operation)
+        return await self.submit(session_id, operation, user_id)
 
     async def submit_approval(
-        self, session_id: str, approvals: list[dict[str, Any]]
+        self,
+        session_id: str,
+        approvals: list[dict[str, Any]],
+        user_id: Optional[str] = None,
     ) -> bool:
         """Submit tool approvals to a session."""
         operation = Operation(
             op_type=OpType.EXEC_APPROVAL, data={"approvals": approvals}
         )
-        return await self.submit(session_id, operation)
+        return await self.submit(session_id, operation, user_id)
 
-    async def interrupt(self, session_id: str) -> bool:
+    async def interrupt(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Interrupt a session."""
         operation = Operation(op_type=OpType.INTERRUPT)
-        return await self.submit(session_id, operation)
+        return await self.submit(session_id, operation, user_id)
 
-    async def undo(self, session_id: str) -> bool:
+    async def undo(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Undo last turn in a session."""
         operation = Operation(op_type=OpType.UNDO)
-        return await self.submit(session_id, operation)
+        return await self.submit(session_id, operation, user_id)
 
-    async def compact(self, session_id: str) -> bool:
+    async def compact(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Compact context in a session."""
         operation = Operation(op_type=OpType.COMPACT)
-        return await self.submit(session_id, operation)
+        return await self.submit(session_id, operation, user_id)
 
-    async def shutdown_session(self, session_id: str) -> bool:
+    async def shutdown_session(
+        self, session_id: str, user_id: Optional[str] = None
+    ) -> bool:
         """Shutdown a specific session."""
         operation = Operation(op_type=OpType.SHUTDOWN)
-        success = await self.submit(session_id, operation)
+        success = await self.submit(session_id, operation, user_id)
 
         if success:
             async with self._lock:
-                agent_session = self.sessions.get(session_id)
+                agent_session = self._check_session_ownership(session_id, user_id)
                 if agent_session and agent_session.task:
                     # Wait for task to complete
                     try:
@@ -227,13 +319,25 @@ class SessionManager:
 
         return success
 
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a session entirely."""
-        async with self._lock:
-            agent_session = self.sessions.pop(session_id, None)
+    async def delete_session(
+        self, session_id: str, user_id: Optional[str] = None
+    ) -> bool:
+        """Delete a session entirely.
 
-        if not agent_session:
-            return False
+        Args:
+            session_id: Session to delete
+            user_id: User making the request (for ownership check)
+
+        Returns:
+            True if deleted successfully
+        """
+        async with self._lock:
+            agent_session = self._check_session_ownership(session_id, user_id)
+            if not agent_session:
+                return False
+
+            # Remove from sessions
+            self.sessions.pop(session_id, None)
 
         # Cancel the task if running
         if agent_session.task and not agent_session.task.done():
@@ -245,9 +349,19 @@ class SessionManager:
 
         return True
 
-    def get_session_info(self, session_id: str) -> dict[str, Any] | None:
-        """Get information about a session."""
-        agent_session = self.sessions.get(session_id)
+    def get_session_info(
+        self, session_id: str, user_id: Optional[str] = None
+    ) -> dict[str, Any] | None:
+        """Get information about a session.
+
+        Args:
+            session_id: Session to get info for
+            user_id: User making the request (for ownership check)
+
+        Returns:
+            Session info dict or None if not found/access denied
+        """
+        agent_session = self._check_session_ownership(session_id, user_id)
         if not agent_session:
             return None
 
@@ -256,15 +370,29 @@ class SessionManager:
             "created_at": agent_session.created_at.isoformat(),
             "is_active": agent_session.is_active,
             "message_count": len(agent_session.session.context_manager.items),
+            "user_id": agent_session.user_id,
         }
 
-    def list_sessions(self) -> list[dict[str, Any]]:
-        """List all sessions."""
-        return [
-            self.get_session_info(sid)
-            for sid in self.sessions
-            if self.get_session_info(sid)
-        ]
+    def list_sessions(self, user_id: Optional[str] = None) -> list[dict[str, Any]]:
+        """List sessions, optionally filtered by user.
+
+        Args:
+            user_id: If provided, only return sessions owned by this user
+
+        Returns:
+            List of session info dicts
+        """
+        results = []
+        for sid, agent_session in self.sessions.items():
+            # If user_id provided, only include sessions owned by that user
+            if user_id and agent_session.user_id != user_id:
+                continue
+
+            info = self.get_session_info(sid, user_id)
+            if info:
+                results.append(info)
+
+        return results
 
     @property
     def active_session_count(self) -> int:

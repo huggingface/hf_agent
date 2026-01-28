@@ -10,7 +10,7 @@
       "transport": "http",
       "url": "https://huggingface.co/mcp?login",
       "headers": {
-        "Authorization": "Bearer ${HF_TOKEN}"
+        "Authorization": "Bearer ${HF_TOKEN:-__USER_HF_TOKEN__}"
       }
     }
   }

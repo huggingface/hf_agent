@@ -54,9 +54,14 @@ class ContextManager:
         current_time = now.strftime("%H:%M:%S.%f")[:-3]
         current_timezone = f"{now.strftime('%Z')} (UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
 
-        # Get HF user info with explicit token from env
+        # Get HF user info (optional - may not be available at startup)
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
-        hf_user_info = HfApi(token=hf_token).whoami().get("name", "unknown")
+        hf_user_info = "user"  # Default; actual user info comes from OAuth
+        if hf_token and hf_token.strip():
+            try:
+                hf_user_info = HfApi(token=hf_token.strip()).whoami().get("name", "user")
+            except Exception:
+                pass  # Use default if whoami fails
 
         template = Template(template_str)
         return template.render(

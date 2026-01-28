@@ -12,6 +12,9 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import UndoIcon from '@mui/icons-material/Undo';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
+import { useAuthStore } from '@/store/authStore';
+
+const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 
 interface SessionSidebarProps {
   onClose?: () => void;
@@ -23,7 +26,7 @@ const StatusDiode = ({ connected }: { connected: boolean }) => (
       width: 10,
       height: 10,
       borderRadius: '50%',
-      bgcolor: connected ? 'var(--accent-green)' : 'var(--accent-red)', // Use green/red for connection status
+      bgcolor: connected ? 'var(--accent-green)' : 'var(--accent-red)',
       boxShadow: connected ? '0 0 6px rgba(47, 204, 113, 0.4)' : 'none',
       transition: 'all 0.3s ease',
     }}
@@ -31,32 +34,38 @@ const StatusDiode = ({ connected }: { connected: boolean }) => (
 );
 
 const RunningIndicator = () => (
-    <Box
-      className="running-indicator"
-      sx={{
-        width: 10,
-        height: 10,
-        borderRadius: '50%',
-        bgcolor: 'var(--accent-yellow)',
-        boxShadow: '0 0 6px rgba(199,165,0,0.18)',
-      }}
-    />
+  <Box
+    className="running-indicator"
+    sx={{
+      width: 10,
+      height: 10,
+      borderRadius: '50%',
+      bgcolor: 'var(--accent-yellow)',
+      boxShadow: '0 0 6px rgba(199,165,0,0.18)',
+    }}
+  />
 );
 
 export default function SessionSidebar({ onClose }: SessionSidebarProps) {
-  const { sessions, activeSessionId, createSession, deleteSession, switchSession } =
-    useSessionStore();
+  const {
+    sessions,
+    activeSessionId,
+    createSession,
+    deleteSession,
+    switchSession,
+  } = useSessionStore();
   const { clearMessages, isConnected, isProcessing, setPlan, setPanelContent } = useAgentStore();
+  const { getAuthHeaders } = useAuthStore();
 
   const handleNewSession = useCallback(async () => {
     try {
-      const response = await fetch('/api/session', { method: 'POST' });
-      const data = await response.json();
-      createSession(data.session_id);
-      // Clear plan and code panel for new session
-      setPlan([]);
-      setPanelContent(null);
-      onClose?.();
+      // Use the new async createSession which includes auth headers
+      const sessionId = await createSession();
+      if (sessionId) {
+        setPlan([]);
+        setPanelContent(null);
+        onClose?.();
+      }
     } catch (e) {
       console.error('Failed to create session:', e);
     }
@@ -66,8 +75,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     async (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
       try {
-        await fetch(`/api/session/${sessionId}`, { method: 'DELETE' });
-        deleteSession(sessionId);
+        await deleteSession(sessionId);
         clearMessages(sessionId);
       } catch (e) {
         console.error('Failed to delete session:', e);
@@ -79,7 +87,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   const handleSelectSession = useCallback(
     (sessionId: string) => {
       switchSession(sessionId);
-      // Clear plan and code panel when switching sessions
       setPlan([]);
       setPanelContent(null);
       onClose?.();
@@ -90,11 +97,14 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   const handleUndo = useCallback(async () => {
     if (!activeSessionId) return;
     try {
-      await fetch(`/api/undo/${activeSessionId}`, { method: 'POST' });
+      await fetch(`${API_BASE}/api/undo/${activeSessionId}`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
     } catch (e) {
       console.error('Undo failed:', e);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, getAuthHeaders]);
 
   const formatTime = (dateString: string) => {
     return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -103,19 +113,19 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   return (
     <Box className="sidebar" sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel)' }}>
       {/* Header - Aligned with AppLayout 60px */}
-      <Box sx={{ 
-        height: '60px', 
-        display: 'flex', 
-        alignItems: 'center', 
+      <Box sx={{
+        height: '60px',
+        display: 'flex',
+        alignItems: 'center',
         px: 2,
         borderBottom: '1px solid rgba(255,255,255,0.03)'
       }}>
         <Box className="brand-logo" sx={{ display: 'flex' }}>
-            <img 
-              src="/hf-log-only-white.png" 
-              alt="HF Agent" 
-              style={{ height: '24px', objectFit: 'contain' }} 
-            />
+          <img
+            src="/hf-log-only-white.png"
+            alt="HF Agent"
+            style={{ height: '24px', objectFit: 'contain' }}
+          />
         </Box>
       </Box>
 
@@ -147,15 +157,15 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
             textTransform: 'none',
             mb: 3,
             '&:hover': {
-                bgcolor: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.1)',
+              bgcolor: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.1)',
             },
             '&::before': {
-                content: '""',
-                width: '4px',
-                height: '20px',
-                background: 'linear-gradient(180deg, var(--accent-yellow), rgba(199,165,0,0.9))',
-                borderRadius: '4px',
+              content: '""',
+              width: '4px',
+              height: '20px',
+              background: 'linear-gradient(180deg, var(--accent-yellow), rgba(199,165,0,0.9))',
+              borderRadius: '4px',
             }
           }}
         >
@@ -164,83 +174,83 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
         {/* Session List */}
         <Box sx={{ flex: 1, overflow: 'auto', mx: -1, px: 1 }}>
-            <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {[...sessions].reverse().map((session, index) => {
-                const sessionNumber = sessions.length - index;
-                const isSelected = session.id === activeSessionId;
-                return (
-                <ListItem 
-                    key={session.id} 
-                    disablePadding 
-                    className="session-item"
-                    onClick={() => handleSelectSession(session.id)}
-                    sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '12px',
-                        padding: '10px',
-                        borderRadius: 'var(--radius-md)',
-                        bgcolor: isSelected ? 'rgba(255,255,255,0.05)' : 'transparent',
-                        cursor: 'pointer',
-                        transition: 'background 0.18s ease, transform 0.08s ease',
-                        '&:hover': {
-                            bgcolor: 'rgba(255,255,255,0.02)',
-                            transform: 'translateY(-1px)',
-                        },
-                        '& .delete-btn': {
-                            opacity: 0,
-                            transition: 'opacity 0.2s',
-                        },
-                        '&:hover .delete-btn': {
-                            opacity: 1,
-                        }
-                    }}
+              const sessionNumber = sessions.length - index;
+              const isSelected = session.id === activeSessionId;
+              return (
+                <ListItem
+                  key={session.id}
+                  disablePadding
+                  className="session-item"
+                  onClick={() => handleSelectSession(session.id)}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '10px',
+                    borderRadius: 'var(--radius-md)',
+                    bgcolor: isSelected ? 'rgba(255,255,255,0.05)' : 'transparent',
+                    cursor: 'pointer',
+                    transition: 'background 0.18s ease, transform 0.08s ease',
+                    '&:hover': {
+                      bgcolor: 'rgba(255,255,255,0.02)',
+                      transform: 'translateY(-1px)',
+                    },
+                    '& .delete-btn': {
+                      opacity: 0,
+                      transition: 'opacity 0.2s',
+                    },
+                    '&:hover .delete-btn': {
+                      opacity: 1,
+                    }
+                  }}
                 >
-                    <Box sx={{ flex: 1, overflow: 'hidden' }}>
-                        <Typography variant="body2" sx={{ fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            Session {String(sessionNumber).padStart(2, '0')}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                            {session.isActive && <RunningIndicator />}
-                            <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
-                                {formatTime(session.createdAt)}
-                            </Typography>
-                        </Box>
+                  <Box sx={{ flex: 1, overflow: 'hidden' }}>
+                    <Typography variant="body2" sx={{ fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      Session {String(sessionNumber).padStart(2, '0')}
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      {session.isActive && <RunningIndicator />}
+                      <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
+                        {formatTime(session.createdAt)}
+                      </Typography>
                     </Box>
-                    
-                    <IconButton
-                        className="delete-btn"
-                        size="small"
-                        onClick={(e) => handleDeleteSession(session.id, e)}
-                        sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
-                    >
-                        <DeleteIcon fontSize="small" />
-                    </IconButton>
+                  </Box>
+
+                  <IconButton
+                    className="delete-btn"
+                    size="small"
+                    onClick={(e) => handleDeleteSession(session.id, e)}
+                    sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
                 </ListItem>
-                );
+              );
             })}
-            </List>
+          </List>
         </Box>
       </Box>
 
       {/* Footer */}
       <Box sx={{ p: 2, borderTop: '1px solid rgba(255,255,255,0.03)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant="caption" className="small-note" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
+          <Typography variant="caption" className="small-note" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
             {sessions.length} active
-            </Typography>
-            <Tooltip title="Undo last turn">
+          </Typography>
+          <Tooltip title="Undo last turn">
             <span>
-                <IconButton
+              <IconButton
                 onClick={handleUndo}
                 disabled={!activeSessionId || isProcessing}
                 size="small"
                 sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--text)' } }}
-                >
+              >
                 <UndoIcon fontSize="small" />
-                </IconButton>
+              </IconButton>
             </span>
-            </Tooltip>
+          </Tooltip>
         </Box>
       </Box>
     </Box>

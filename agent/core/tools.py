@@ -124,9 +124,14 @@ class ToolRouter:
     Based on codex-rs/core/src/tools/router.rs
     """
 
-    def __init__(self, mcp_servers: dict[str, MCPServerConfig]):
+    def __init__(
+        self,
+        mcp_servers: dict[str, MCPServerConfig],
+        hf_token: Optional[str] = None,
+    ):
         self.tools: dict[str, ToolSpec] = {}
         self.mcp_servers: dict[str, dict[str, Any]] = {}
+        self.hf_token = hf_token  # User's HF token for tool operations
 
         for tool in create_builtin_tools():
             self.register_tool(tool)
@@ -134,7 +139,15 @@ class ToolRouter:
         if mcp_servers:
             mcp_servers_payload = {}
             for name, server in mcp_servers.items():
-                mcp_servers_payload[name] = server.model_dump()
+                server_config = server.model_dump()
+                # Inject user's HF token into MCP server headers if placeholder present
+                if hf_token and "headers" in server_config:
+                    for key, value in server_config["headers"].items():
+                        if isinstance(value, str) and "__USER_HF_TOKEN__" in value:
+                            server_config["headers"][key] = value.replace(
+                                "__USER_HF_TOKEN__", hf_token
+                            )
+                mcp_servers_payload[name] = server_config
             self.mcp_client = Client({"mcpServers": mcp_servers_payload})
         self._mcp_initialized = False
 
@@ -232,11 +245,17 @@ class ToolRouter:
         if tool and tool.handler:
             import inspect
 
-            # Check if handler accepts session argument
+            # Build kwargs based on what the handler accepts
             sig = inspect.signature(tool.handler)
+            kwargs = {}
+
             if "session" in sig.parameters:
-                return await tool.handler(arguments, session=session)
-            return await tool.handler(arguments)
+                kwargs["session"] = session
+
+            if "hf_token" in sig.parameters:
+                kwargs["hf_token"] = self.hf_token
+
+            return await tool.handler(arguments, **kwargs)
 
         # Otherwise, use MCP client
         if self._mcp_initialized:

@@ -1,37 +1,54 @@
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect, useState } from 'react';
 import {
   Box,
   Drawer,
-  Typography,
   IconButton,
+  Avatar,
+  Menu,
+  MenuItem,
+  Typography,
+  CircularProgress,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import SettingsIcon from '@mui/icons-material/Settings';
+import LogoutIcon from '@mui/icons-material/Logout';
 
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
+import { useAuthStore } from '@/store/authStore';
 import { useAgentWebSocket } from '@/hooks/useAgentWebSocket';
 import SessionSidebar from '@/components/SessionSidebar/SessionSidebar';
 import CodePanel from '@/components/CodePanel/CodePanel';
 import ChatInput from '@/components/Chat/ChatInput';
 import MessageList from '@/components/Chat/MessageList';
+import { WelcomeScreen } from '@/components/Welcome';
+import { SetupPrompt } from '@/components/Onboarding';
+import { SettingsModal } from '@/components/Settings';
 import type { Message } from '@/types/agent';
 
+const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
-  const { activeSessionId } = useSessionStore();
-  const { isConnected, isProcessing, getMessages, addMessage } = useAgentStore();
-  const { 
-    isLeftSidebarOpen, 
-    isRightPanelOpen, 
+  const { activeSessionId, createSession } = useSessionStore();
+  const { isConnected, isProcessing, getMessages, addMessage, setPlan, setPanelContent } = useAgentStore();
+  const {
+    isLeftSidebarOpen,
+    isRightPanelOpen,
     rightPanelWidth,
     setRightPanelWidth,
-    toggleLeftSidebar, 
-    toggleRightPanel 
+    toggleLeftSidebar,
+    toggleRightPanel
   } = useLayoutStore();
+  const { user, isLoading: authLoading, getAuthHeaders, isAuthenticated, logout } = useAuthStore();
+
+  const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   const isResizing = useRef(false);
 
@@ -78,7 +95,13 @@ export default function AppLayout() {
   const handleSendMessage = useCallback(
     async (text: string) => {
       if (!activeSessionId || !text.trim()) return;
-      
+
+      // Check if user has Anthropic key
+      if (isAuthenticated() && !user?.has_anthropic_key) {
+        setShowSettings(true);
+        return;
+      }
+
       const userMsg: Message = {
         id: `user_${Date.now()}`,
         role: 'user',
@@ -88,9 +111,12 @@ export default function AppLayout() {
       addMessage(activeSessionId, userMsg);
 
       try {
-        await fetch('/api/submit', {
+        await fetch(`${API_BASE}/api/submit`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
           body: JSON.stringify({
             session_id: activeSessionId,
             text: text.trim(),
@@ -100,9 +126,132 @@ export default function AppLayout() {
         console.error('Send failed:', e);
       }
     },
-    [activeSessionId, addMessage]
+    [activeSessionId, addMessage, getAuthHeaders, isAuthenticated, user]
   );
 
+  const handleLogout = async () => {
+    setUserMenuAnchor(null);
+    await logout();
+  };
+
+  const handleOpenSettings = () => {
+    setUserMenuAnchor(null);
+    setShowSettings(true);
+  };
+
+  const handleStartSession = useCallback(async () => {
+    setIsCreatingSession(true);
+    try {
+      const sessionId = await createSession();
+      if (sessionId) {
+        setPlan([]);
+        setPanelContent(null);
+      }
+    } catch (e) {
+      console.error('Failed to create session:', e);
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }, [createSession, setPlan, setPanelContent]);
+
+  // Show loading spinner while auth is loading
+  if (authLoading) {
+    return (
+      <Box
+        sx={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg)',
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  // Show welcome screen for unauthenticated users
+  if (!isAuthenticated()) {
+    return <WelcomeScreen />;
+  }
+
+  // Show setup prompt if no API key or no session
+  const needsSetup = !user?.has_anthropic_key;
+  const needsSession = !activeSessionId;
+
+  if (needsSetup || needsSession) {
+    return (
+      <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {/* Minimal header for setup screens */}
+        <Box
+          sx={{
+            height: '60px',
+            px: 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderBottom: 1,
+            borderColor: 'divider',
+            bgcolor: 'background.default',
+          }}
+        >
+          <img
+            src="/hf-logo-white.png"
+            alt="Hugging Face"
+            style={{ height: '32px', objectFit: 'contain' }}
+          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <IconButton onClick={handleOpenSettings} size="small">
+              <SettingsIcon />
+            </IconButton>
+            <IconButton
+              onClick={(e) => setUserMenuAnchor(e.currentTarget)}
+              size="small"
+            >
+              {user?.picture ? (
+                <Avatar src={user.picture} sx={{ width: 32, height: 32 }} />
+              ) : (
+                <AccountCircleIcon />
+              )}
+            </IconButton>
+            <Menu
+              anchorEl={userMenuAnchor}
+              open={Boolean(userMenuAnchor)}
+              onClose={() => setUserMenuAnchor(null)}
+            >
+              <MenuItem disabled>
+                <Typography variant="body2">{user?.name || user?.username}</Typography>
+              </MenuItem>
+              <MenuItem onClick={handleOpenSettings}>
+                <SettingsIcon sx={{ mr: 1 }} fontSize="small" />
+                Settings
+              </MenuItem>
+              <MenuItem onClick={handleLogout}>
+                <LogoutIcon sx={{ mr: 1 }} fontSize="small" />
+                Logout
+              </MenuItem>
+            </Menu>
+          </Box>
+        </Box>
+
+        {/* Setup content */}
+        <Box sx={{ flex: 1 }}>
+          <SetupPrompt
+            hasApiKey={!!user?.has_anthropic_key}
+            onOpenSettings={handleOpenSettings}
+            onStartSession={handleStartSession}
+            isCreatingSession={isCreatingSession}
+          />
+        </Box>
+
+        <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      </Box>
+    );
+  }
+
+  // Full app layout for authenticated users with active session
   return (
     <Box sx={{ display: 'flex', width: '100%', height: '100%' }}>
       {/* Left Sidebar Drawer */}
@@ -126,7 +275,7 @@ export default function AppLayout() {
               borderColor: 'divider',
               top: 0,
               height: '100%',
-              bgcolor: 'var(--panel)', // Ensure correct background matches sidebar
+              bgcolor: 'var(--panel)',
             },
           }}
           open={isLeftSidebarOpen}
@@ -147,38 +296,75 @@ export default function AppLayout() {
           overflow: 'hidden',
         }}
       >
-        {/* Top Header Bar (Fixed) */}
-        <Box sx={{ 
-          height: '60px',
-          px: 1, 
-          display: 'flex', 
-          alignItems: 'center', 
-          borderBottom: 1, 
-          borderColor: 'divider',
-          bgcolor: 'background.default',
-          zIndex: 1200,
-        }}>
+        {/* Top Header Bar */}
+        <Box
+          sx={{
+            height: '60px',
+            px: 1,
+            display: 'flex',
+            alignItems: 'center',
+            borderBottom: 1,
+            borderColor: 'divider',
+            bgcolor: 'background.default',
+            zIndex: 1200,
+          }}
+        >
           <IconButton onClick={toggleLeftSidebar} size="small">
             {isLeftSidebarOpen ? <ChevronLeftIcon /> : <MenuIcon />}
           </IconButton>
-          
+
           <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-            <img 
-              src="/hf-logo-white.png" 
-              alt="Hugging Face" 
-              style={{ height: '40px', objectFit: 'contain' }} 
+            <img
+              src="/hf-logo-white.png"
+              alt="Hugging Face"
+              style={{ height: '40px', objectFit: 'contain' }}
             />
           </Box>
 
-          <IconButton 
-            onClick={toggleRightPanel} 
-            size="small" 
-            sx={{ visibility: isRightPanelOpen ? 'hidden' : 'visible' }}
-          >
-            <MenuIcon />
-          </IconButton>
+          {/* User Section */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <IconButton onClick={handleOpenSettings} size="small">
+              <SettingsIcon />
+            </IconButton>
+            <IconButton
+              onClick={(e) => setUserMenuAnchor(e.currentTarget)}
+              size="small"
+            >
+              {user?.picture ? (
+                <Avatar src={user.picture} sx={{ width: 32, height: 32 }} />
+              ) : (
+                <AccountCircleIcon />
+              )}
+            </IconButton>
+            <Menu
+              anchorEl={userMenuAnchor}
+              open={Boolean(userMenuAnchor)}
+              onClose={() => setUserMenuAnchor(null)}
+            >
+              <MenuItem disabled>
+                <Typography variant="body2">{user?.name || user?.username}</Typography>
+              </MenuItem>
+              <MenuItem onClick={handleOpenSettings}>
+                <SettingsIcon sx={{ mr: 1 }} fontSize="small" />
+                Settings
+              </MenuItem>
+              <MenuItem onClick={handleLogout}>
+                <LogoutIcon sx={{ mr: 1 }} fontSize="small" />
+                Logout
+              </MenuItem>
+            </Menu>
+
+            <IconButton
+              onClick={toggleRightPanel}
+              size="small"
+              sx={{ visibility: isRightPanelOpen ? 'hidden' : 'visible' }}
+            >
+              <MenuIcon />
+            </IconButton>
+          </Box>
         </Box>
 
+        {/* Chat Area */}
         <Box
           component="main"
           className="chat-pane"
@@ -191,33 +377,8 @@ export default function AppLayout() {
             padding: '24px',
           }}
         >
-          {activeSessionId ? (
-            <>
-              <MessageList messages={messages} isProcessing={isProcessing} />
-              <ChatInput
-                onSend={handleSendMessage}
-                disabled={isProcessing || !isConnected}
-              />
-            </>
-          ) : (
-            <Box
-              sx={{
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexDirection: 'column',
-                gap: 2,
-              }}
-            >
-              <Typography variant="h5" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                NO SESSION SELECTED
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                Initialize a session via the sidebar
-              </Typography>
-            </Box>
-          )}
+          <MessageList messages={messages} isProcessing={isProcessing} />
+          <ChatInput onSend={handleSendMessage} disabled={isProcessing || !isConnected} />
         </Box>
       </Box>
 
@@ -240,12 +401,12 @@ export default function AppLayout() {
             },
           }}
         >
-          <DragIndicatorIcon 
-            sx={{ 
-              fontSize: '0.8rem', 
+          <DragIndicatorIcon
+            sx={{
+              fontSize: '0.8rem',
               color: 'text.secondary',
               pointerEvents: 'none',
-            }} 
+            }}
           />
         </Box>
       )}
@@ -279,6 +440,9 @@ export default function AppLayout() {
           <CodePanel />
         </Drawer>
       </Box>
+
+      {/* Settings Modal */}
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
     </Box>
   );
 }

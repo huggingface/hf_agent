@@ -30,6 +30,9 @@ agent = [
     "uvicorn[standard]>=0.32.0",
     "httpx>=0.27.0",
     "websockets>=13.0",
+    # Authentication
+    "pyjwt>=2.8.0",
+    "cryptography>=41.0.0",
 ]
 
 # Evaluation/benchmarking dependencies

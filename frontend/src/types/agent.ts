@@ -9,6 +9,16 @@ export interface SessionMeta {
   isActive: boolean;
 }
 
+export interface PersistedSessionMeta {
+  session_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  status: 'active' | 'archived' | 'deleted';
+  message_count: number;
+  last_message_preview: string;
+}
+
 export interface MessageSegment {
   type: 'text' | 'tools';
   content?: string;
@@ -66,7 +76,15 @@ export interface TraceLog {
 
 export interface User {
   authenticated: boolean;
+  user_id?: string;
   username?: string;
   name?: string;
   picture?: string;
+  has_anthropic_key?: boolean;
+}
+
+export interface AuthState {
+  token: string | null;
+  user: User | null;
+  isLoading: boolean;
 }
