@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from storage.hf_storage import HFStorageManager, PersistedSession, SessionIndexEntry
-from websocket import manager as ws_manager
+from event_manager import event_manager
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class LifecycleManager:
         logger.info(f"Received signal {sig.name}, initiating graceful shutdown...")
 
         # Notify clients about impending shutdown
-        await ws_manager.send_server_shutdown(
+        await event_manager.send_server_shutdown(
             f"Server shutting down ({sig.name}). Your session will be saved."
         )
 

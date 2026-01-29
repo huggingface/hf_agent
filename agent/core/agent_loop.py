@@ -135,17 +135,59 @@ class Handlers:
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": "auto",
+                    "stream": True,  # Enable streaming
                 }
                 if session.anthropic_key:
                     completion_kwargs["api_key"] = session.anthropic_key
 
-                response: ModelResponse = await acompletion(**completion_kwargs)
+                # Stream the response
+                content = ""
+                tool_calls: list[ToolCall] = []
+                token_count = 0
 
-                # Extract text response, token usage, and tool calls
-                message = response.choices[0].message
-                content = message.content
-                token_count = response.usage.total_tokens
-                tool_calls: list[ToolCall] = message.get("tool_calls", [])
+                response_stream: ModelResponse = await acompletion(**completion_kwargs)
+
+                async for chunk in response_stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if not delta:
+                        continue
+
+                    # Handle text content streaming
+                    if delta.content:
+                        content += delta.content
+                        await session.send_event(
+                            Event(
+                                event_type="stream_chunk",
+                                data={"content": delta.content},
+                            )
+                        )
+
+                    # Handle tool calls (accumulated across chunks)
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            # Extend tool_calls list if needed
+                            while len(tool_calls) <= idx:
+                                tool_calls.append(
+                                    ToolCall(
+                                        id="",
+                                        type="function",
+                                        function={"name": "", "arguments": ""},
+                                    )
+                                )
+
+                            tc = tool_calls[idx]
+                            if tc_delta.id:
+                                tc.id = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tc.function.name = tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tc.function.arguments += tc_delta.function.arguments
+
+                    # Get token usage from final chunk
+                    if hasattr(chunk, 'usage') and chunk.usage:
+                        token_count = chunk.usage.total_tokens
 
                 # If no tool calls, add assistant message and we're done
                 if not tool_calls:

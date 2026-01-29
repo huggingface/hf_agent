@@ -20,7 +20,7 @@ import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { useAuthStore } from '@/store/authStore';
-import { useAgentWebSocket } from '@/hooks/useAgentWebSocket';
+import { useAgentEvents } from '@/hooks/useAgentEvents';
 import SessionSidebar from '@/components/SessionSidebar/SessionSidebar';
 import CodePanel from '@/components/CodePanel/CodePanel';
 import ChatInput from '@/components/Chat/ChatInput';
@@ -91,7 +91,7 @@ export default function AppLayout() {
     }
   }, [isAuthenticated, sessionsLoading, sessions.length, loadSessions]);
 
-  useAgentWebSocket({
+  useAgentEvents({
     sessionId: activeSessionId,
     onReady: () => console.log('Agent ready'),
     onError: (error) => console.error('Agent error:', error),

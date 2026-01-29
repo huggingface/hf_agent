@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from websocket import manager as ws_manager
+from event_manager import event_manager
 
 from agent.config import load_config
 from lifecycle import lifecycle_manager
@@ -247,7 +247,7 @@ class SessionManager:
         event_queue: asyncio.Queue,
         tool_router: ToolRouter,
     ) -> None:
-        """Run the agent loop for a session and forward events to WebSocket."""
+        """Run the agent loop for a session and forward events to SSE clients."""
         agent_session = self.sessions.get(session_id)
         if not agent_session:
             logger.error(f"Session {session_id} not found")
@@ -334,11 +334,11 @@ class SessionManager:
     async def _forward_events(
         self, session_id: str, event_queue: asyncio.Queue
     ) -> None:
-        """Forward events from the agent to the WebSocket."""
+        """Forward events from the agent to SSE clients."""
         while True:
             try:
                 event: Event = await event_queue.get()
-                await ws_manager.send_event(session_id, event.event_type, event.data)
+                await event_manager.send_event(session_id, event.event_type, event.data)
             except asyncio.CancelledError:
                 break
             except Exception as e:

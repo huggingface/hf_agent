@@ -5,23 +5,25 @@ import { useAuthStore } from '@/store/authStore';
 import type { AgentEvent } from '@/types/events';
 import type { Message, TraceLog } from '@/types/agent';
 
-const WS_RECONNECT_DELAY = 1000;
-const WS_MAX_RECONNECT_DELAY = 30000;
+const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 
-interface UseAgentWebSocketOptions {
+interface UseAgentEventsOptions {
   sessionId: string | null;
   onReady?: () => void;
   onError?: (error: string) => void;
 }
 
-export function useAgentWebSocket({
+/**
+ * SSE-based hook for receiving agent events.
+ * EventSource auto-reconnects on connection loss.
+ */
+export function useAgentEvents({
   sessionId,
   onReady,
   onError,
-}: UseAgentWebSocketOptions) {
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
-  const reconnectDelayRef = useRef(WS_RECONNECT_DELAY);
+}: UseAgentEventsOptions) {
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const isConnectingRef = useRef(false);
 
   const {
     addMessage,
@@ -49,6 +51,11 @@ export function useAgentWebSocket({
       if (!sessionId) return;
 
       switch (event.event_type) {
+        case 'connected':
+          // Initial SSE connection established
+          setConnected(true);
+          break;
+
         case 'ready':
           setConnected(true);
           setProcessing(false);
@@ -58,10 +65,64 @@ export function useAgentWebSocket({
         case 'processing':
           setProcessing(true);
           clearTraceLogs();
-          // Don't clear panel tabs here - they should persist during approval flow
-          // Tabs will be cleared when a new tool_call sets up new content
-          setCurrentTurnMessageId(null); // Start a new turn
+          setCurrentTurnMessageId(null);
           break;
+
+        case 'stream_chunk': {
+          // Handle streaming text chunks from LLM
+          const chunk = (event.data?.content as string) || '';
+          if (!chunk) break;
+
+          const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+
+          if (currentTurnMsgId) {
+            // Append to existing streaming message
+            const messages = useAgentStore.getState().messages;
+            const existingMsg = messages.find(m => m.id === currentTurnMsgId);
+
+            if (existingMsg) {
+              const newContent = existingMsg.content + chunk;
+              // Update the last text segment or create one
+              const segments = existingMsg.segments ? [...existingMsg.segments] : [];
+              const lastSegment = segments[segments.length - 1];
+
+              if (lastSegment && lastSegment.type === 'text') {
+                lastSegment.content = (lastSegment.content || '') + chunk;
+              } else {
+                segments.push({ type: 'text', content: chunk });
+              }
+
+              updateMessage(currentTurnMsgId, {
+                content: newContent,
+                segments,
+              });
+            }
+          } else {
+            // Create new streaming message
+            const messageId = `msg_${Date.now()}`;
+            const currentTrace = useAgentStore.getState().traceLogs;
+            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
+
+            // Add any pending tool traces first
+            if (currentTrace.length > 0) {
+              segments.push({ type: 'tools', tools: [...currentTrace] });
+              clearTraceLogs();
+            }
+
+            segments.push({ type: 'text', content: chunk });
+
+            const message: Message = {
+              id: messageId,
+              role: 'assistant',
+              content: chunk,
+              timestamp: new Date().toISOString(),
+              segments,
+            };
+            addMessage(message);
+            setCurrentTurnMessageId(messageId);
+          }
+          break;
+        }
 
         case 'assistant_message': {
           const content = (event.data?.content as string) || '';
@@ -69,20 +130,17 @@ export function useAgentWebSocket({
           const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
 
           if (currentTurnMsgId) {
-            // Update existing message - add segments chronologically
             const messages = useAgentStore.getState().messages;
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
             if (existingMsg) {
               const segments = existingMsg.segments ? [...existingMsg.segments] : [];
 
-              // If there are pending traces, add them as a tools segment first
               if (currentTrace.length > 0) {
                 segments.push({ type: 'tools', tools: [...currentTrace] });
                 clearTraceLogs();
               }
 
-              // Add the new text segment
               if (content) {
                 segments.push({ type: 'text', content });
               }
@@ -93,17 +151,14 @@ export function useAgentWebSocket({
               });
             }
           } else {
-            // Create new message
             const messageId = `msg_${Date.now()}`;
             const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
 
-            // Add any pending traces first
             if (currentTrace.length > 0) {
               segments.push({ type: 'tools', tools: [...currentTrace] });
               clearTraceLogs();
             }
 
-            // Add the text
             if (content) {
               segments.push({ type: 'text', content });
             }
@@ -125,7 +180,6 @@ export function useAgentWebSocket({
           const toolName = (event.data?.tool as string) || 'unknown';
           const args = (event.data?.arguments as Record<string, any>) || {};
 
-          // Don't display plan_tool in trace logs (it shows up elsewhere in the UI)
           if (toolName !== 'plan_tool') {
             const log: TraceLog = {
               id: `tool_${Date.now()}`,
@@ -134,19 +188,14 @@ export function useAgentWebSocket({
               tool: toolName,
               timestamp: new Date().toISOString(),
               completed: false,
-              // Store args for auto-exec message creation later
               args: toolName === 'hf_jobs' ? args : undefined,
             };
             addTraceLog(log);
-            // Update the current turn message's trace in real-time
             updateCurrentTurnTrace();
           }
 
-          // Auto-expand Right Panel for specific tools
           if (toolName === 'hf_jobs' && (args.operation === 'run' || args.operation === 'scheduled run') && args.script) {
-            // Clear any existing tabs from previous jobs before setting new script
             clearPanelTabs();
-            // Use tab system for jobs - add script tab immediately
             setPanelTab({
               id: 'script',
               title: 'Script',
@@ -177,22 +226,16 @@ export function useAgentWebSocket({
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
 
-          // Mark the corresponding trace log as completed and store the output
           updateTraceLog(toolName, { completed: true, output, success });
-          // Update the current turn message's trace in real-time
           updateCurrentTurnTrace();
 
-          // Special handling for hf_jobs - update or create job message with output
           if (toolName === 'hf_jobs') {
             const messages = useAgentStore.getState().messages;
             const traceLogs = useAgentStore.getState().traceLogs;
 
-            // Find existing approval message for this job
             let jobMsg = [...messages].reverse().find(m => m.approval);
 
             if (!jobMsg) {
-              // No approval message exists - this was an auto-executed job
-              // Create a job execution message so user can see results
               const jobTrace = [...traceLogs].reverse().find(t => t.tool === 'hf_jobs');
               const args = jobTrace?.args || {};
 
@@ -202,7 +245,7 @@ export function useAgentWebSocket({
                 content: '',
                 timestamp: new Date().toISOString(),
                 approval: {
-                  status: 'approved', // Auto-approved (no user action needed)
+                  status: 'approved',
                   batch: {
                     tools: [{
                       tool: toolName,
@@ -217,7 +260,6 @@ export function useAgentWebSocket({
               addMessage(autoExecMessage);
               console.log('Created auto-exec message with tool output:', toolName);
             } else {
-              // Update existing approval message
               const currentOutput = jobMsg.toolOutput || '';
               const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
 
@@ -228,7 +270,6 @@ export function useAgentWebSocket({
             }
           }
 
-          // Don't create message bubbles for tool outputs - they only show in trace logs
           console.log('Tool output:', toolName, success);
           break;
         }
@@ -241,7 +282,6 @@ export function useAgentWebSocket({
             const currentTabs = useAgentStore.getState().panelTabs;
             const logsTab = currentTabs.find(t => t.id === 'logs');
 
-            // Append to existing logs tab or create new one
             const newContent = logsTab
               ? logsTab.content + '\n' + log
               : '--- Job execution started ---\n' + log;
@@ -253,7 +293,6 @@ export function useAgentWebSocket({
               language: 'text'
             });
 
-            // Auto-switch to logs tab when logs start streaming
             setActivePanelTab('logs');
 
             if (!useLayoutStore.getState().isRightPanelOpen) {
@@ -280,20 +319,18 @@ export function useAgentWebSocket({
           }>;
           const count = (event.data?.count as number) || 0;
 
-          // Create a persistent message for the approval request
           const message: Message = {
             id: `msg_approval_${Date.now()}`,
             role: 'assistant',
-            content: '', // Content is handled by the approval UI
+            content: '',
             timestamp: new Date().toISOString(),
             approval: {
-                status: 'pending',
-                batch: { tools, count }
+              status: 'pending',
+              batch: { tools, count }
             }
           };
           addMessage(message);
 
-          // Show the first tool's content in the panel so users see what they're approving
           if (tools && tools.length > 0) {
             const firstTool = tools[0];
             const args = firstTool.arguments as Record<string, any>;
@@ -321,7 +358,6 @@ export function useAgentWebSocket({
               });
               setActivePanelTab('content');
             } else {
-              // For other tools, show args as JSON
               setPanelTab({
                 id: 'args',
                 title: firstTool.tool,
@@ -336,10 +372,7 @@ export function useAgentWebSocket({
             setLeftSidebarOpen(false);
           }
 
-          // Clear currentTurnMessageId so subsequent assistant_message events create a new message below the approval
           setCurrentTurnMessageId(null);
-
-          // We don't set pendingApprovals in the global store anymore as the message handles the UI
           setPendingApprovals(null);
           setProcessing(false);
           break;
@@ -347,7 +380,7 @@ export function useAgentWebSocket({
 
         case 'turn_complete':
           setProcessing(false);
-          setCurrentTurnMessageId(null); // Clear the current turn
+          setCurrentTurnMessageId(null);
           break;
 
         case 'compacted': {
@@ -375,38 +408,7 @@ export function useAgentWebSocket({
           break;
 
         case 'undo_complete':
-          // Could remove last messages from store
           break;
-
-        // New events for multi-user/persistence
-        case 'session_sync': {
-          const lastSynced = event.data?.last_synced as string;
-          const pendingCount = event.data?.pending_count as number;
-          useAuthStore.getState().setSyncStatus(lastSynced, pendingCount);
-          console.log(`Session synced at ${lastSynced}, ${pendingCount} pending`);
-          break;
-        }
-
-        case 'tab_conflict': {
-          const conflictingTab = event.data?.conflicting_tab as string;
-          console.warn(`Tab conflict detected with tab ${conflictingTab}`);
-          // Could show a warning to the user
-          break;
-        }
-
-        case 'tab_joined': {
-          const tabId = event.data?.tab_id as string;
-          const totalTabs = event.data?.total_tabs as number;
-          console.log(`Tab ${tabId} joined, total tabs: ${totalTabs}`);
-          break;
-        }
-
-        case 'tab_left': {
-          const tabId = event.data?.tab_id as string;
-          const totalTabs = event.data?.total_tabs as number;
-          console.log(`Tab ${tabId} left, total tabs: ${totalTabs}`);
-          break;
-        }
 
         case 'server_shutdown': {
           const message = event.data?.message as string;
@@ -420,96 +422,69 @@ export function useAgentWebSocket({
           console.log('Unknown event:', event);
       }
     },
-    // Zustand setters are stable, so we don't need them in deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionId, onReady, onError]
   );
 
   const connect = useCallback(() => {
     if (!sessionId) return;
-    
-    // Don't connect if already connected or connecting
-    if (wsRef.current?.readyState === WebSocket.OPEN || 
-        wsRef.current?.readyState === WebSocket.CONNECTING) {
+
+    // Prevent duplicate connections
+    if (isConnectingRef.current || eventSourceRef.current?.readyState === EventSource.OPEN) {
       return;
     }
 
-    // Connect directly to backend (Vite doesn't proxy WebSockets)
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // In development, connect directly to backend port 7860
-    // In production, use the same host
-    const isDev = import.meta.env.DEV;
-    const host = isDev ? '127.0.0.1:7860' : window.location.host;
+    isConnectingRef.current = true;
 
-    // Pass auth token as query parameter (WebSocket can't use custom headers in browsers)
+    // Close existing connection if any
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    // Build SSE URL
     const token = useAuthStore.getState().token;
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-    const wsUrl = `${protocol}//${host}/api/ws/${sessionId}${tokenParam}`;
+    const sseUrl = `${API_BASE}/api/events/${sessionId}${tokenParam}`;
 
-    console.log('Connecting to WebSocket:', wsUrl.replace(/token=[^&]+/, 'token=***'));
-    const ws = new WebSocket(wsUrl);
+    console.log('Connecting to SSE:', sseUrl.replace(/token=[^&]+/, 'token=***'));
 
-    ws.onopen = () => {
-      console.log('WebSocket connected');
+    const eventSource = new EventSource(sseUrl);
+
+    eventSource.onopen = () => {
+      console.log('SSE connected');
+      isConnectingRef.current = false;
       setConnected(true);
-      reconnectDelayRef.current = WS_RECONNECT_DELAY;
     };
 
-    ws.onmessage = (event) => {
+    eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as AgentEvent;
         handleEvent(data);
       } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
+        console.error('Failed to parse SSE message:', e);
       }
     };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    ws.onclose = (event) => {
-      console.log('WebSocket closed', event.code, event.reason);
+    eventSource.onerror = (error) => {
+      console.error('SSE error:', error);
+      isConnectingRef.current = false;
       setConnected(false);
-
-      // Only reconnect if it wasn't a normal closure and session still exists
-      if (event.code !== 1000 && sessionId) {
-        // Attempt to reconnect with exponential backoff
-        if (reconnectTimeoutRef.current) {
-          clearTimeout(reconnectTimeoutRef.current);
-        }
-        reconnectTimeoutRef.current = window.setTimeout(() => {
-          reconnectDelayRef.current = Math.min(
-            reconnectDelayRef.current * 2,
-            WS_MAX_RECONNECT_DELAY
-          );
-          connect();
-        }, reconnectDelayRef.current);
-      }
+      // EventSource auto-reconnects, but we should track state
     };
 
-    wsRef.current = ws;
-  }, [sessionId, handleEvent]);
+    eventSourceRef.current = eventSource;
+  }, [sessionId, handleEvent, setConnected]);
 
   const disconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+      setConnected(false);
     }
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    setConnected(false);
-  }, []);
+  }, [setConnected]);
 
-  const sendPing = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'ping' }));
-    }
-  }, []);
-
-  // Connect when sessionId changes (with a small delay to ensure session is ready)
+  // Connect when sessionId changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!sessionId) {
       disconnect();
@@ -525,17 +500,10 @@ export function useAgentWebSocket({
       clearTimeout(timeoutId);
       disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  // Heartbeat
-  useEffect(() => {
-    const interval = setInterval(sendPing, 30000);
-    return () => clearInterval(interval);
-  }, [sendPing]);
+  }, [sessionId]); // Only reconnect when sessionId changes
 
   return {
-    isConnected: wsRef.current?.readyState === WebSocket.OPEN,
+    isConnected: eventSourceRef.current?.readyState === EventSource.OPEN,
     connect,
     disconnect,
   };

@@ -1,10 +1,13 @@
-"""Agent API routes - WebSocket and REST endpoints with user isolation."""
+"""Agent API routes - SSE and REST endpoints with user isolation."""
 
+import asyncio
+import json
 import logging
 from typing import Optional
 
 from auth.user_context import UserContext, get_current_user, require_auth
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from lifecycle import lifecycle_manager
 from models import (
     ApprovalRequest,
@@ -16,7 +19,7 @@ from models import (
 )
 from pydantic import BaseModel
 from session_manager import session_manager
-from websocket import manager as ws_manager
+from event_manager import event_manager
 
 logger = logging.getLogger(__name__)
 
@@ -322,17 +325,19 @@ async def update_session(
     return {"status": "updated", "session_id": session_id}
 
 
-@router.websocket("/ws/{session_id}")
-async def websocket_endpoint(
-    websocket: WebSocket, session_id: str, token: str | None = None
-) -> None:
-    """WebSocket endpoint for real-time events.
+@router.get("/events/{session_id}")
+async def event_stream(
+    session_id: str,
+    request: Request,
+    token: str | None = None,
+) -> StreamingResponse:
+    """Server-Sent Events endpoint for real-time agent events.
 
-    Authentication is passed via query parameter since WebSocket can't use custom headers.
+    Authentication is passed via query parameter for SSE compatibility.
     """
-    logger.info(f"WebSocket connection request for session {session_id}")
+    logger.info(f"SSE connection request for session {session_id}")
 
-    # Extract user_id from token (WebSocket auth via query param)
+    # Extract user_id from token
     user_id = None
     if token:
         from auth.jwt_handler import jwt_handler
@@ -345,25 +350,43 @@ async def websocket_endpoint(
     info = session_manager.get_session_info(session_id, user_id=user_id)
     if not info:
         logger.warning(
-            f"WebSocket connection rejected: Session {session_id} not found or not authorized"
+            f"SSE connection rejected: Session {session_id} not found or not authorized"
         )
-        await websocket.close(code=4003, reason="Session not found or not authorized")
-        return
+        raise HTTPException(status_code=404, detail="Session not found or not authorized")
 
-    await ws_manager.connect(websocket, session_id)
+    async def event_generator():
+        """Generate SSE events from the event queue."""
+        queue = await event_manager.subscribe(session_id)
 
-    try:
-        while True:
-            # Keep connection alive, handle ping/pong
-            data = await websocket.receive_json()
+        try:
+            # Send initial connection event
+            yield f"data: {json.dumps({'event_type': 'connected'})}\n\n"
 
-            # Handle client messages (e.g., ping)
-            if data.get("type") == "ping":
-                await websocket.send_json({"type": "pong"})
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    logger.info(f"SSE client disconnected for session {session_id}")
+                    break
 
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for session {session_id}")
-    except Exception as e:
-        logger.error(f"WebSocket error for session {session_id}: {e}")
-    finally:
-        ws_manager.disconnect(session_id)
+                try:
+                    # Wait for event with timeout to allow disconnect check
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment to prevent connection timeout
+                    yield ": keepalive\n\n"
+
+        except asyncio.CancelledError:
+            logger.info(f"SSE stream cancelled for session {session_id}")
+        finally:
+            await event_manager.unsubscribe(session_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )

@@ -11,16 +11,11 @@ interface AuthStore {
   isLoading: boolean;
   error: string | null;
 
-  // Sync state
-  lastSynced: string | null;
-  pendingSyncCount: number;
-
   // Actions
   setToken: (token: string | null) => void;
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
-  setSyncStatus: (lastSynced: string, pendingCount: number) => void;
 
   // Auth actions
   handleAuthCallback: () => Promise<boolean>;
@@ -41,17 +36,11 @@ export const useAuthStore = create<AuthStore>()(
       user: null,
       isLoading: true,
       error: null,
-      lastSynced: null,
-      pendingSyncCount: 0,
 
       setToken: (token) => set({ token }),
       setUser: (user) => set({ user }),
       setLoading: (isLoading) => set({ isLoading }),
       setError: (error) => set({ error }),
-      setSyncStatus: (lastSynced, pendingCount) => set({
-        lastSynced,
-        pendingSyncCount: pendingCount
-      }),
 
       handleAuthCallback: async () => {
         // Check for auth callback in URL fragment
