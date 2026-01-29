@@ -110,6 +110,7 @@ async def list_sessions(
         return []
 
     entries = await lifecycle_manager.list_user_sessions(user.user_id)
+
     return [
         PersistedSessionInfo(
             session_id=e.session_id,
@@ -137,9 +138,14 @@ async def get_session_messages(
     import json
 
     # Load persisted session
-    persisted = await lifecycle_manager.load_session(session_id)
+    try:
+        persisted = await lifecycle_manager.load_session(session_id)
+    except Exception as e:
+        logger.error(f"Failed to load session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load session: {str(e)}")
+
     if not persisted:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found in storage")
 
     # Verify ownership
     if persisted.user_id != user.user_id:
@@ -150,23 +156,57 @@ async def get_session_messages(
 
     # Parse messages
     messages = []
+    raw_messages = []
     try:
         raw_messages = json.loads(persisted.messages_json)
-        messages = [
-            MessageData(role=m.get("role", "unknown"), content=m.get("content", ""))
-            for m in raw_messages
-            if m.get("role") != "system"
-        ]
-    except json.JSONDecodeError:
-        logger.error(f"Failed to parse messages for session {session_id}")
+        for m in raw_messages:
+            role = m.get("role", "unknown")
+            if role == "system":
+                continue
+
+            # Handle content that can be string or list of content blocks
+            raw_content = m.get("content", "")
+            if isinstance(raw_content, str):
+                content = raw_content
+            elif isinstance(raw_content, list):
+                # Extract text from content blocks
+                text_parts = []
+                for block in raw_content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            text_parts.append(f"[Tool: {block.get('name', 'unknown')}]")
+                        elif block.get("type") == "tool_result":
+                            text_parts.append(f"[Tool Result]")
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                content = "\n".join(text_parts) if text_parts else ""
+            else:
+                content = str(raw_content) if raw_content else ""
+
+            messages.append(MessageData(role=role, content=content))
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse messages for session {session_id}: {e}")
+        # Return empty messages rather than failing completely
+        messages = []
+    except Exception as e:
+        logger.error(f"Failed to process messages for session {session_id}: {e}", exc_info=True)
+        messages = []
 
     # Create in-memory session if not already active (for continuing conversation)
-    await session_manager.create_session_with_id(
-        session_id=session_id,
-        user_id=user.user_id,
-        hf_token=user.hf_token,
-        anthropic_key=user.anthropic_key,
-    )
+    try:
+        await session_manager.create_session_with_id(
+            session_id=session_id,
+            user_id=user.user_id,
+            hf_token=user.hf_token,
+            anthropic_key=user.anthropic_key,
+            history=raw_messages,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create in-memory session {session_id}: {e}")
+        # Still return messages even if session creation fails
+        # User can retry or create a new session
 
     return SessionMessagesResponse(session_id=session_id, messages=messages)
 
@@ -335,7 +375,6 @@ async def event_stream(
 
     Authentication is passed via query parameter for SSE compatibility.
     """
-    logger.info(f"SSE connection request for session {session_id}")
 
     # Extract user_id from token
     user_id = None
@@ -365,7 +404,6 @@ async def event_stream(
             while True:
                 # Check if client disconnected
                 if await request.is_disconnected():
-                    logger.info(f"SSE client disconnected for session {session_id}")
                     break
 
                 try:
@@ -376,8 +414,6 @@ async def event_stream(
                     # Send keepalive comment to prevent connection timeout
                     yield ": keepalive\n\n"
 
-        except asyncio.CancelledError:
-            logger.info(f"SSE stream cancelled for session {session_id}")
         finally:
             await event_manager.unsubscribe(session_id, queue)
 

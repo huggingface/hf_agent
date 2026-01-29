@@ -130,25 +130,19 @@ export function useAgentEvents({
           const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
 
           if (currentTurnMsgId) {
+            // Message already exists from streaming - just finalize segments, don't duplicate content
             const messages = useAgentStore.getState().messages;
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
             if (existingMsg) {
-              const segments = existingMsg.segments ? [...existingMsg.segments] : [];
-
+              // Only update if there are pending tool traces to add
               if (currentTrace.length > 0) {
+                const segments = existingMsg.segments ? [...existingMsg.segments] : [];
                 segments.push({ type: 'tools', tools: [...currentTrace] });
                 clearTraceLogs();
+                updateMessage(currentTurnMsgId, { segments });
               }
-
-              if (content) {
-                segments.push({ type: 'text', content });
-              }
-
-              updateMessage(currentTurnMsgId, {
-                content: existingMsg.content + '\n\n' + content,
-                segments,
-              });
+              // Content was already streamed - don't duplicate
             }
           } else {
             const messageId = `msg_${Date.now()}`;

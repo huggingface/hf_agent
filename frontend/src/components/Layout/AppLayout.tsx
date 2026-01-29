@@ -34,7 +34,7 @@ const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
-  const { activeSessionId, sessions, isLoading: sessionsLoading, loadSessions, createSession } = useSessionStore();
+  const { activeSessionId, sessions, isLoading: sessionsLoading, isLoaded: sessionsLoaded, loadSessions, createSession } = useSessionStore();
   const { isConnected, isProcessing, messages, addMessage, clearMessages, setPlan, setPanelContent } = useAgentStore();
   const {
     isLeftSidebarOpen,
@@ -84,12 +84,13 @@ export default function AppLayout() {
     };
   }, [handleMouseMove, stopResizing]);
 
-  // Load sessions when authenticated
+  // Load sessions when authenticated (only once)
+  // Note: user is in deps to re-run when auth state changes (isAuthenticated is a stable function ref)
   useEffect(() => {
-    if (isAuthenticated() && !sessionsLoading && sessions.length === 0) {
+    if (isAuthenticated() && !sessionsLoading && !sessionsLoaded) {
       loadSessions();
     }
-  }, [isAuthenticated, sessionsLoading, sessions.length, loadSessions]);
+  }, [user, sessionsLoading, sessionsLoaded, loadSessions, isAuthenticated]);
 
   useAgentEvents({
     sessionId: activeSessionId,
@@ -160,6 +161,16 @@ export default function AppLayout() {
     }
   }, [createSession, clearMessages, setPlan, setPanelContent]);
 
+  // Auto-create session when user has API key but no sessions (only after sessions have been loaded)
+  const hasApiKey = user?.has_anthropic_key;
+  const noSessionsAtAll = sessions.length === 0 && !activeSessionId;
+
+  useEffect(() => {
+    if (isAuthenticated() && hasApiKey && sessionsLoaded && noSessionsAtAll && !isCreatingSession) {
+      handleStartSession();
+    }
+  }, [isAuthenticated, hasApiKey, sessionsLoaded, noSessionsAtAll, isCreatingSession, handleStartSession]);
+
   // Show loading spinner while auth is loading
   if (authLoading) {
     return (
@@ -201,13 +212,10 @@ export default function AppLayout() {
     );
   }
 
-  // Show setup prompt only if:
-  // 1. No API key (always need to set that up first)
-  // 2. No sessions exist AND no active session (first time user)
-  const needsApiKey = !user?.has_anthropic_key;
-  const noSessionsAtAll = sessions.length === 0 && !activeSessionId;
+  // Show setup prompt only if user needs to add API key
+  const needsApiKey = !hasApiKey;
 
-  if (needsApiKey || noSessionsAtAll) {
+  if (needsApiKey) {
     return (
       <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
         {/* Minimal header for setup screens */}
@@ -264,15 +272,28 @@ export default function AppLayout() {
 
         {/* Setup content */}
         <Box sx={{ flex: 1 }}>
-          <SetupPrompt
-            hasApiKey={!needsApiKey}
-            onOpenSettings={handleOpenSettings}
-            onStartSession={handleStartSession}
-            isCreatingSession={isCreatingSession}
-          />
+          <SetupPrompt onOpenSettings={handleOpenSettings} />
         </Box>
 
         <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      </Box>
+    );
+  }
+
+  // Show loading while auto-creating first session
+  if (isCreatingSession) {
+    return (
+      <Box
+        sx={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg)',
+        }}
+      >
+        <CircularProgress />
       </Box>
     );
   }

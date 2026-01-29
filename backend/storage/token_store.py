@@ -122,7 +122,6 @@ class TokenStore:
         )
         encrypted = self._encrypt(self._serialize_tokens(tokens))
         self._store[user_id] = encrypted
-        logger.info(f"Stored tokens for user {user_id}")
 
     def get_tokens(self, user_id: str) -> Optional[UserTokens]:
         """Get tokens for a user.
@@ -180,7 +179,6 @@ class TokenStore:
 
         tokens.anthropic_key = key
         self._store[user_id] = self._encrypt(self._serialize_tokens(tokens))
-        logger.info(f"Set Anthropic key for user {user_id}")
         return True
 
     def remove_anthropic_key(self, user_id: str) -> bool:
@@ -204,7 +202,6 @@ class TokenStore:
         """
         if user_id in self._store:
             del self._store[user_id]
-            logger.info(f"Removed tokens for user {user_id}")
             return True
         return False
 
@@ -231,9 +228,6 @@ class TokenStore:
 
         for user_id in to_remove:
             del self._store[user_id]
-
-        if to_remove:
-            logger.info(f"Cleaned up {len(to_remove)} expired token entries")
 
         return len(to_remove)
 

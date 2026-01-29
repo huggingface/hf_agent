@@ -38,8 +38,6 @@ class EventManager:
                 self.event_queues[session_id] = []
             self.event_queues[session_id].append(queue)
 
-        logger.info(f"SSE client subscribed to session {session_id} "
-                   f"(total clients: {len(self.event_queues[session_id])})")
         return queue
 
     async def unsubscribe(self, session_id: str, queue: asyncio.Queue) -> None:
@@ -60,7 +58,6 @@ class EventManager:
                 if not self.event_queues[session_id]:
                     del self.event_queues[session_id]
 
-        logger.info(f"SSE client unsubscribed from session {session_id}")
 
     async def send_event(
         self,

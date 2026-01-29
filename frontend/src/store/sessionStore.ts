@@ -8,6 +8,7 @@ interface SessionStore {
   sessions: Session[];
   activeSessionId: string | null;
   isLoading: boolean;
+  isLoaded: boolean;  // True once loadSessions has completed
   error: string | null;
 
   // Actions
@@ -22,12 +23,13 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   sessions: [],
   activeSessionId: null,
   isLoading: false,
+  isLoaded: false,
   error: null,
 
   loadSessions: async () => {
     const { isAuthenticated, getAuthHeaders } = useAuthStore.getState();
     if (!isAuthenticated()) {
-      set({ sessions: [], isLoading: false });
+      set({ sessions: [], isLoading: false, isLoaded: true });
       return;
     }
 
@@ -52,10 +54,10 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         messageCount: s.message_count || 0,
       }));
 
-      set({ sessions, isLoading: false });
+      set({ sessions, isLoading: false, isLoaded: true });
     } catch (error) {
       console.error('Failed to load sessions:', error);
-      set({ sessions: [], isLoading: false, error: 'Failed to load sessions' });
+      set({ sessions: [], isLoading: false, isLoaded: true, error: 'Failed to load sessions' });
     }
   },
 

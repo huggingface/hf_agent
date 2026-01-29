@@ -15,8 +15,8 @@ import signal
 from datetime import datetime, timezone
 from typing import Optional
 
-from storage.hf_storage import HFStorageManager, PersistedSession, SessionIndexEntry
 from event_manager import event_manager
+from storage.hf_storage import HFStorageManager, PersistedSession, SessionIndexEntry
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,8 @@ class LifecycleManager:
         """Start the lifecycle manager."""
         if self._storage:
             await self._storage.start()
-            logger.info(f"Lifecycle manager started with persistence to {self.repo_id}")
         else:
-            logger.warning(
-                "Lifecycle manager started without persistence (no HF token)"
-            )
+            logger.warning("No persistence configured (missing HF_ADMIN_TOKEN)")
 
         # Register signal handlers for graceful shutdown
         self._register_signal_handlers()
@@ -86,7 +83,6 @@ class LifecycleManager:
         if self._storage:
             await self._storage.stop()
 
-        logger.info("Lifecycle manager stopped")
 
     def _register_signal_handlers(self) -> None:
         """Register signal handlers for graceful shutdown."""
@@ -104,7 +100,6 @@ class LifecycleManager:
 
     async def _handle_signal(self, sig: signal.Signals) -> None:
         """Handle shutdown signal."""
-        logger.info(f"Received signal {sig.name}, initiating graceful shutdown...")
 
         # Notify clients about impending shutdown
         await event_manager.send_server_shutdown(
@@ -226,7 +221,6 @@ class LifecycleManager:
         if self._storage:
             await self._storage.force_sync()
 
-        logger.info(f"Session {session_id} closed and synced")
 
     async def load_session(self, session_id: str) -> Optional[PersistedSession]:
         """Load a session from persistence.

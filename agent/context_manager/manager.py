@@ -31,8 +31,8 @@ class ContextManager:
             prompt_file_suffix="system_prompt_v2.yaml",
             hf_token=hf_token,
         )
-        self.max_context = max_context
-        self.compact_size = int(max_context * compact_size)
+        self.max_context = max_context or 180_000
+        self.compact_size = int(self.max_context * compact_size)
         self.context_length = len(self.system_prompt) // 4
         self.untouched_messages = untouched_messages
         self.items: list[Message] = [Message(role="system", content=self.system_prompt)]

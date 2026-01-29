@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from event_manager import event_manager
+from lifecycle import lifecycle_manager
 
 from agent.config import load_config
-from lifecycle import lifecycle_manager
 from agent.core.agent_loop import process_submission
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
@@ -139,7 +139,6 @@ class SessionManager:
         )
         agent_session.task = task
 
-        logger.info(f"Created session {session_id} for user {user_id or 'anonymous'}")
         return session_id
 
     async def create_session_with_id(
@@ -148,6 +147,7 @@ class SessionManager:
         user_id: Optional[str] = None,
         hf_token: Optional[str] = None,
         anthropic_key: Optional[str] = None,
+        history: Optional[list[dict]] = None,
     ) -> str:
         """Create an agent session with a specific ID (for resuming).
 
@@ -162,7 +162,6 @@ class SessionManager:
         """
         # Check if session already exists in memory
         if session_id in self.sessions:
-            logger.info(f"Session {session_id} already exists in memory")
             return session_id
 
         # Create queues for this session
@@ -192,6 +191,18 @@ class SessionManager:
             anthropic_key=anthropic_key,
         )
 
+        # Restore conversation history if provided
+        if history:
+            from litellm import Message
+
+            for msg in history:
+                if msg.get("role") != "system":  # Skip system, we have our own
+                    session.context_manager.items.append(
+                        Message(
+                            role=msg.get("role", "user"), content=msg.get("content", "")
+                        )
+                    )
+
         # Create wrapper with the specified session_id
         agent_session = AgentSession(
             session_id=session_id,
@@ -211,7 +222,6 @@ class SessionManager:
         )
         agent_session.task = task
 
-        logger.info(f"Resumed session {session_id} for user {user_id or 'anonymous'}")
         return session_id
 
     def _check_session_ownership(
@@ -283,7 +293,6 @@ class SessionManager:
                     except asyncio.TimeoutError:
                         continue
                     except asyncio.CancelledError:
-                        logger.info(f"Session {session_id} cancelled")
                         break
                     except Exception as e:
                         logger.error(f"Error in session {session_id}: {e}")
@@ -302,7 +311,6 @@ class SessionManager:
                 if session_id in self.sessions:
                     self.sessions[session_id].is_active = False
 
-            logger.info(f"Session {session_id} ended")
 
     async def _persist_session(self, session_id: str) -> None:
         """Persist session state to HF Dataset.
@@ -316,10 +324,12 @@ class SessionManager:
         # Get messages from context manager
         messages = []
         for item in agent_session.session.context_manager.items:
-            messages.append({
-                "role": item.get("role", "unknown"),
-                "content": item.get("content", ""),
-            })
+            messages.append(
+                {
+                    "role": item.get("role", "unknown"),
+                    "content": item.get("content", ""),
+                }
+            )
 
         # Persist via lifecycle manager
         await lifecycle_manager.persist_session(
@@ -426,10 +436,12 @@ class SessionManager:
             if agent_session:
                 messages = []
                 for item in agent_session.session.context_manager.items:
-                    messages.append({
-                        "role": item.get("role", "unknown"),
-                        "content": item.get("content", ""),
-                    })
+                    messages.append(
+                        {
+                            "role": item.get("role", "unknown"),
+                            "content": item.get("content", ""),
+                        }
+                    )
                 await lifecycle_manager.close_session(
                     session_id=session_id,
                     user_id=agent_session.user_id or "anonymous",

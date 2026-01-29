@@ -17,12 +17,12 @@ Dataset Structure:
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional, Literal
+from typing import Literal, Optional
 
-from huggingface_hub import HfApi, CommitOperationAdd
-from huggingface_hub.utils import HfHubHTTPError
+from huggingface_hub import CommitOperationAdd, HfApi
+from huggingface_hub.utils import EntryNotFoundError, HfHubHTTPError
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,6 @@ class HFStorageManager:
 
         self._running = True
         self._sync_task = asyncio.create_task(self._sync_loop())
-        logger.info(f"HF Storage started for {self.repo_id}")
 
     async def stop(self) -> None:
         """Stop the background sync task and flush pending changes."""
@@ -158,7 +157,6 @@ class HFStorageManager:
 
         # Final flush
         await self._sync_dirty_sessions()
-        logger.info("HF Storage stopped")
 
     async def _sync_loop(self) -> None:
         """Background loop for periodic syncing."""
@@ -179,10 +177,9 @@ class HFStorageManager:
 
         # Exponential backoff: base * 2^failures, capped at max
         backoff = min(
-            self.sync_interval * (2 ** self._consecutive_failures),
+            self.sync_interval * (2**self._consecutive_failures),
             self._max_backoff_seconds,
         )
-        logger.info(f"Sync backoff: {backoff}s (failures: {self._consecutive_failures})")
         return backoff
 
     async def mark_dirty(self, session: PersistedSession) -> None:
@@ -219,7 +216,6 @@ class HFStorageManager:
         if not to_sync:
             return
 
-        logger.info(f"Syncing {len(to_sync)} dirty sessions to {self.repo_id}")
 
         try:
             # Build commit operations
@@ -261,7 +257,6 @@ class HFStorageManager:
                 await self._commit_with_retry(batch)
 
             self._consecutive_failures = 0
-            logger.info(f"Successfully synced {len(to_sync)} sessions")
 
         except Exception as e:
             # Put sessions back in dirty queue
@@ -342,7 +337,7 @@ class HFStorageManager:
             except HfHubHTTPError as e:
                 if e.response.status_code == 429:
                     # Rate limited
-                    wait_time = 2 ** attempt * 5  # 5s, 10s, 20s
+                    wait_time = 2**attempt * 5  # 5s, 10s, 20s
                     logger.warning(f"Rate limited, waiting {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
@@ -371,10 +366,15 @@ class HFStorageManager:
             )
             with open(local_path, "r") as f:
                 return PersistedSession.from_json(f.read())
-        except HfHubHTTPError:
+        except (HfHubHTTPError, EntryNotFoundError):
+            # Session file doesn't exist
+            return None
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            # Corrupted session file
+            logger.error(f"Corrupted session file {session_id}: {e}")
             return None
         except Exception as e:
-            logger.error(f"Error loading session {session_id}: {e}")
+            logger.error(f"Error loading session {session_id}: {e}", exc_info=True)
             return None
 
     async def load_user_sessions(self, user_id: str) -> list[SessionIndexEntry]:
@@ -387,10 +387,8 @@ class HFStorageManager:
             List of session index entries
         """
         index_path = f"index/users/{user_id}.jsonl"
-        logger.info(f"Loading sessions for user {user_id} from {self.repo_id}/{index_path}")
 
         try:
-            # Force download to get latest version (bypass cache)
             local_path = await asyncio.to_thread(
                 self.api.hf_hub_download,
                 repo_id=self.repo_id,
@@ -398,24 +396,25 @@ class HFStorageManager:
                 repo_type="dataset",
                 force_download=True,
             )
-            logger.info(f"Downloaded index to {local_path}")
 
             entries = []
             with open(local_path, "r") as f:
-                content = f.read()
-                logger.info(f"Index file content length: {len(content)} bytes")
-                for line in content.strip().split('\n'):
+                for line in f:
                     line = line.strip()
                     if line:
-                        entries.append(SessionIndexEntry.from_jsonl(line))
+                        try:
+                            entries.append(SessionIndexEntry.from_jsonl(line))
+                        except (json.JSONDecodeError, TypeError, KeyError):
+                            pass  # Skip corrupted entries
 
-            logger.info(f"Loaded {len(entries)} sessions for user {user_id}")
             return entries
         except HfHubHTTPError as e:
             logger.warning(f"HfHubHTTPError loading sessions for {user_id}: {e}")
             return []
         except Exception as e:
-            logger.error(f"Error loading user sessions for {user_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error loading user sessions for {user_id}: {e}", exc_info=True
+            )
             return []
 
     async def force_sync(self) -> None:
