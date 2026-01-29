@@ -7,6 +7,7 @@ from .hf_storage import (
     SessionIndexEntry,
     DirtySession,
 )
+from .duckdb_storage import DuckDBStorage
 
 __all__ = [
     "TokenStore",
@@ -15,4 +16,5 @@ __all__ = [
     "PersistedSession",
     "SessionIndexEntry",
     "DirtySession",
+    "DuckDBStorage",
 ]

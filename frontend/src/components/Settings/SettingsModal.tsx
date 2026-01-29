@@ -215,36 +215,6 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               </Typography>
             </Box>
           )}
-
-          {/* If key is present, show Update key button */}
-          {user?.has_anthropic_key && (
-            <Button
-              fullWidth
-              variant="contained"
-              onClick={handleSubmit}
-              disabled={isSubmitting || !apiKey.trim()}
-              sx={{
-                textTransform: 'none',
-                py: 1,
-                mt: 1,
-              }}
-            >
-              {isSubmitting ? <CircularProgress size={20} /> : 'Update Key'}
-            </Button>
-          )}
-        </Box>
-
-        {/* Future: Model Selection */}
-        
-        <Box sx={{ mb: 3 }}>
-          <Typography
-            variant="subtitle2"
-            sx={{ mb: 2, color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: 1 }}
-          >
-            Model
-          </Typography>
-          <Divider sx={{ mb: 3, borderColor: 'rgba(255,255,255,0.1)' }} />
-          // Model selector component here
         </Box>
        
       </DialogContent>

@@ -25,6 +25,9 @@ agent = [
     "nbformat>=5.10.4",
     "datasets>=4.3.0",  # For session logging to HF datasets
     "whoosh>=2.7.4",
+    # Storage
+    "duckdb>=0.10.0",
+    "pyarrow>=14.0.0",
     # Web backend dependencies
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",

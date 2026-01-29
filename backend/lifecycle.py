@@ -2,7 +2,7 @@
 
 Coordinates:
 - Session state transitions (active -> closing -> closed)
-- Background sync to HF Dataset
+- Background sync to HF Dataset (via DuckDB)
 - Graceful shutdown with flush
 - Session resume from persistence
 """
@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from event_manager import event_manager
-from storage.hf_storage import HFStorageManager, PersistedSession, SessionIndexEntry
+from storage.duckdb_storage import DuckDBStorage
+from storage.hf_storage import PersistedSession, SessionIndexEntry
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class LifecycleManager:
 
     Handles:
     - Converting in-memory sessions to persisted format
-    - Background sync coordination
+    - Background sync coordination (via DuckDB)
     - Graceful shutdown
     - Session resume
     """
@@ -45,18 +46,18 @@ class LifecycleManager:
             sync_interval: Sync interval in seconds
         """
         self.repo_id = repo_id or os.environ.get(
-            "SESSION_DATASET_REPO", "smolagents/hf-agent-sessions"
+            "SESSION_DATASET_REPO", "smolagents/hf-agent-sessions-2"
         )
         # Use dedicated admin token for session storage (not user OAuth tokens)
         self.hf_token = hf_token or os.environ.get("HF_ADMIN_TOKEN")
 
-        # Storage manager
-        self._storage: Optional[HFStorageManager] = None
+        # Storage manager (DuckDB with HF sync)
+        self._storage: Optional[DuckDBStorage] = None
         if self.repo_id and self.hf_token:
-            self._storage = HFStorageManager(
-                repo_id=self.repo_id,
+            self._storage = DuckDBStorage(
+                hf_repo_id=self.repo_id,
                 hf_token=self.hf_token,
-                sync_interval_seconds=sync_interval,
+                sync_interval=sync_interval,
             )
 
         # Track session states
@@ -248,7 +249,7 @@ class LifecycleManager:
         if not self._storage:
             return []
 
-        return await self._storage.load_user_sessions(user_id)
+        return await self._storage.list_user_sessions(user_id)
 
     async def delete_session(self, session_id: str, user_id: str) -> None:
         """Soft-delete a session.
@@ -260,20 +261,12 @@ class LifecycleManager:
         if not self._storage:
             return
 
-        # Load existing session
-        existing = await self._storage.load_session(session_id)
-        if not existing or existing.user_id != user_id:
-            return
+        # Use DuckDBStorage's delete method (handles ownership check)
+        deleted = await self._storage.delete_session(session_id, user_id)
 
-        # Mark as deleted
-        existing.status = "deleted"
-        existing.updated_at = datetime.now(timezone.utc).isoformat()
-        existing.version += 1
-
-        await self._storage.mark_dirty(existing)
-
-        async with self._lock:
-            self._session_states[session_id] = "deleted"
+        if deleted:
+            async with self._lock:
+                self._session_states[session_id] = "deleted"
 
     @property
     def is_shutdown_requested(self) -> bool:
