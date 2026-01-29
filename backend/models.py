@@ -37,6 +37,7 @@ class ToolApproval(BaseModel):
     tool_call_id: str
     approved: bool
     feedback: str | None = None
+    modified_arguments: dict[str, Any] | None = None  # For edited scripts
 
 
 class ApprovalRequest(BaseModel):

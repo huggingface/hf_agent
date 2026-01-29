@@ -409,6 +409,10 @@ class Handlers:
             approval_decision = approval_map.get(tc.id, {"approved": False})
 
             if approval_decision.get("approved", False):
+                # Use modified arguments if provided (for edited scripts)
+                modified_args = approval_decision.get("modified_arguments")
+                if modified_args:
+                    tool_args = {**tool_args, **modified_args}
                 approved_tasks.append((tc, tool_name, tool_args))
             else:
                 rejected_tasks.append((tc, tool_name, approval_decision))

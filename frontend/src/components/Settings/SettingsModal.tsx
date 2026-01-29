@@ -153,41 +153,71 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             )}
           </Box>
 
-          {/* Add/Update Key Form */}
-          <Box>
-            <Typography variant="body2" sx={{ color: 'var(--muted-text)', mb: 2 }}>
-              {user?.has_anthropic_key ? 'Update your API key:' : 'Add your API key:'}
-            </Typography>
+          {/* Add Key Form (only show if no key configured) */}
+          {!user?.has_anthropic_key && (
+            <Box>
+              <Typography variant="body2" sx={{ color: 'var(--muted-text)', mb: 2 }}>
+                Add your API key:
+              </Typography>
 
-            {error && (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            )}
+              {error && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  {error}
+                </Alert>
+              )}
 
-            {success && (
-              <Alert severity="success" sx={{ mb: 2 }}>
-                {success}
-              </Alert>
-            )}
+              {success && (
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  {success}
+                </Alert>
+              )}
 
-            <TextField
-              fullWidth
-              size="small"
-              label="Anthropic API Key"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-ant-..."
-              disabled={isSubmitting}
-              sx={{ mb: 2 }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !isSubmitting) {
-                  handleSubmit();
-                }
-              }}
-            />
+              <TextField
+                fullWidth
+                size="small"
+                label="Anthropic API Key"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-ant-..."
+                disabled={isSubmitting}
+                sx={{ mb: 2 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isSubmitting) {
+                    handleSubmit();
+                  }
+                }}
+              />
 
+              <Button
+                fullWidth
+                variant="contained"
+                onClick={handleSubmit}
+                disabled={isSubmitting || !apiKey.trim()}
+                sx={{
+                  textTransform: 'none',
+                  py: 1,
+                }}
+              >
+                {isSubmitting ? <CircularProgress size={20} /> : 'Save Key'}
+              </Button>
+
+              <Typography variant="caption" sx={{ display: 'block', mt: 2, color: 'var(--muted-text)' }}>
+                Get your API key from{' '}
+                <a
+                  href="https://console.anthropic.com/settings/keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: '#1976d2' }}
+                >
+                  console.anthropic.com
+                </a>
+              </Typography>
+            </Box>
+          )}
+
+          {/* If key is present, show Update key button */}
+          {user?.has_anthropic_key && (
             <Button
               fullWidth
               variant="contained"
@@ -196,27 +226,16 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               sx={{
                 textTransform: 'none',
                 py: 1,
+                mt: 1,
               }}
             >
-              {isSubmitting ? <CircularProgress size={20} /> : user?.has_anthropic_key ? 'Update Key' : 'Save Key'}
+              {isSubmitting ? <CircularProgress size={20} /> : 'Update Key'}
             </Button>
-
-            <Typography variant="caption" sx={{ display: 'block', mt: 2, color: 'var(--muted-text)' }}>
-              Get your API key from{' '}
-              <a
-                href="https://console.anthropic.com/settings/keys"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: '#1976d2' }}
-              >
-                console.anthropic.com
-              </a>
-            </Typography>
-          </Box>
+          )}
         </Box>
 
         {/* Future: Model Selection */}
-        {/*
+        
         <Box sx={{ mb: 3 }}>
           <Typography
             variant="subtitle2"
@@ -227,7 +246,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           <Divider sx={{ mb: 3, borderColor: 'rgba(255,255,255,0.1)' }} />
           // Model selector component here
         </Box>
-        */}
+       
       </DialogContent>
     </Dialog>
   );

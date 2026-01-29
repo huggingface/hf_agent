@@ -6,33 +6,15 @@ import {
   IconButton,
   Typography,
   Button,
-  Tooltip,
   CircularProgress,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import UndoIcon from '@mui/icons-material/Undo';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
-import { useAuthStore } from '@/store/authStore';
-
-const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 
 interface SessionSidebarProps {
   onClose?: () => void;
 }
-
-const StatusDiode = ({ connected }: { connected: boolean }) => (
-  <Box
-    sx={{
-      width: 10,
-      height: 10,
-      borderRadius: '50%',
-      bgcolor: connected ? 'var(--accent-green)' : 'var(--accent-red)',
-      boxShadow: connected ? '0 0 6px rgba(47, 204, 113, 0.4)' : 'none',
-      transition: 'all 0.3s ease',
-    }}
-  />
-);
 
 export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   const {
@@ -43,8 +25,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     selectSession,
     deleteSession,
   } = useSessionStore();
-  const { isConnected, isProcessing, setPlan, setPanelContent, clearMessages } = useAgentStore();
-  const { getAuthHeaders } = useAuthStore();
+  const { setPlan, setPanelContent, clearMessages } = useAgentStore();
 
   const handleNewSession = useCallback(async () => {
     const sessionId = await createSession();
@@ -73,18 +54,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     },
     [deleteSession]
   );
-
-  const handleUndo = useCallback(async () => {
-    if (!activeSessionId) return;
-    try {
-      await fetch(`${API_BASE}/api/undo/${activeSessionId}`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-      });
-    } catch (e) {
-      console.error('Undo failed:', e);
-    }
-  }, [activeSessionId, getAuthHeaders]);
 
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
@@ -117,14 +86,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
       {/* Content */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2, overflow: 'hidden' }}>
-        {/* Status */}
-        <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <StatusDiode connected={isConnected} />
-          <Typography variant="caption" sx={{ color: 'var(--muted-text)', fontFamily: 'inherit' }}>
-            {isConnected ? 'System Online' : 'Disconnected'}
-          </Typography>
-        </Box>
-
         <Button
           fullWidth
           className="create-session"
@@ -166,7 +127,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
             </Box>
           )}
           <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {sessions.map((session) => {
+            {[...sessions].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((session) => {
               const isSelected = session.id === activeSessionId;
               return (
                 <ListItem
@@ -203,7 +164,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                       <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
                         {formatTime(session.createdAt)}
-                        {session.messageCount > 0 && ` · ${session.messageCount} msgs`}
                       </Typography>
                     </Box>
                   </Box>
@@ -229,18 +189,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
           <Typography variant="caption" className="small-note" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
             {sessions.length} sessions
           </Typography>
-          <Tooltip title="Undo last turn">
-            <span>
-              <IconButton
-                onClick={handleUndo}
-                disabled={!activeSessionId || isProcessing}
-                size="small"
-                sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--text)' } }}
-              >
-                <UndoIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
         </Box>
       </Box>
     </Box>

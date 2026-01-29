@@ -15,6 +15,16 @@ interface PanelTab {
   parameters?: any;
 }
 
+export interface JobStatus {
+  jobId: string;
+  url: string;
+  status: 'queued' | 'pending' | 'running' | 'completed' | 'failed' | 'canceled' | 'error';
+  hardware: string;
+  isGpu: boolean;
+  submittedAt: string;
+  statusMessage?: string;
+}
+
 interface AgentStore {
   // Messages for current session only (not persisted)
   messages: Message[];
@@ -29,6 +39,8 @@ interface AgentStore {
   activePanelTab: string | null;
   plan: PlanItem[];
   currentTurnMessageId: string | null;
+  editedScripts: Record<string, string>;  // tool_call_id -> edited content
+  activeJob: JobStatus | null;  // Currently running/monitored job
 
   // Actions
   setMessages: (messages: Message[]) => void;
@@ -45,6 +57,7 @@ interface AgentStore {
   clearTraceLogs: () => void;
   setPanelContent: (content: { title: string; content: string; language?: string; parameters?: any } | null) => void;
   setPanelTab: (tab: PanelTab) => void;
+  updatePanelTabContent: (tabId: string, content: string) => void;
   setActivePanelTab: (tabId: string) => void;
   clearPanelTabs: () => void;
   removePanelTab: (tabId: string) => void;
@@ -52,6 +65,11 @@ interface AgentStore {
   setCurrentTurnMessageId: (id: string | null) => void;
   updateCurrentTurnTrace: () => void;
   showToolOutput: (log: TraceLog) => void;
+  setEditedScript: (toolCallId: string, content: string) => void;
+  getEditedScript: (toolCallId: string) => string | undefined;
+  clearEditedScripts: () => void;
+  setActiveJob: (job: JobStatus | null) => void;
+  updateJobStatus: (status: JobStatus['status'], message?: string) => void;
 }
 
 export const useAgentStore = create<AgentStore>()((set, get) => ({
@@ -67,6 +85,8 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
   activePanelTab: null,
   plan: [],
   currentTurnMessageId: null,
+  editedScripts: {},
+  activeJob: null,
 
   setMessages: (messages: Message[]) => {
     set({ messages });
@@ -154,6 +174,15 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
     });
   },
 
+  updatePanelTabContent: (tabId: string, content: string) => {
+    set((state) => {
+      const newTabs = state.panelTabs.map(tab =>
+        tab.id === tabId ? { ...tab, content } : tab
+      );
+      return { panelTabs: newTabs };
+    });
+  },
+
   setActivePanelTab: (tabId: string) => {
     set({ activePanelTab: tabId });
   },
@@ -220,6 +249,37 @@ export const useAgentStore = create<AgentStore>()((set, get) => ({
     set({
       panelTabs: [...otherTabs, newTab],
       activePanelTab: 'tool_output',
+    });
+  },
+
+  setEditedScript: (toolCallId: string, content: string) => {
+    set((state) => ({
+      editedScripts: { ...state.editedScripts, [toolCallId]: content },
+    }));
+  },
+
+  getEditedScript: (toolCallId: string) => {
+    return get().editedScripts[toolCallId];
+  },
+
+  clearEditedScripts: () => {
+    set({ editedScripts: {} });
+  },
+
+  setActiveJob: (job: JobStatus | null) => {
+    set({ activeJob: job });
+  },
+
+  updateJobStatus: (status: JobStatus['status'], message?: string) => {
+    set((state) => {
+      if (!state.activeJob) return state;
+      return {
+        activeJob: {
+          ...state.activeJob,
+          status,
+          statusMessage: message,
+        },
+      };
     });
   },
 }));

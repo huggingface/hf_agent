@@ -1,5 +1,5 @@
-import { useRef, useEffect, useMemo } from 'react';
-import { Box, Typography, IconButton } from '@mui/material';
+import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import { Box, Typography, IconButton, Button, Tooltip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -7,6 +7,10 @@ import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import CodeIcon from '@mui/icons-material/Code';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import ArticleIcon from '@mui/icons-material/Article';
+import EditIcon from '@mui/icons-material/Edit';
+import UndoIcon from '@mui/icons-material/Undo';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CheckIcon from '@mui/icons-material/Check';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
@@ -14,15 +18,77 @@ import remarkGfm from 'remark-gfm';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { processLogs } from '@/utils/logProcessor';
+import JobStatusHeader from './JobStatusHeader';
 
 export default function CodePanel() {
-  const { panelContent, panelTabs, activePanelTab, setActivePanelTab, removePanelTab, plan } = useAgentStore();
+  const { panelContent, panelTabs, activePanelTab, setActivePanelTab, removePanelTab, plan, updatePanelTabContent, setEditedScript, activeJob } = useAgentStore();
   const { setRightPanelOpen } = useLayoutStore();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState('');
+  const [originalContent, setOriginalContent] = useState('');
+  const [copied, setCopied] = useState(false);
 
   // Get the active tab content, or fall back to panelContent for backwards compatibility
   const activeTab = panelTabs.find(t => t.id === activePanelTab);
   const currentContent = activeTab || panelContent;
+
+  // Check if this is an editable script tab
+  const isEditableScript = activeTab?.id === 'script' && activeTab?.language === 'python';
+  const hasUnsavedChanges = isEditing && editedContent !== originalContent;
+
+  // Sync edited content when switching tabs or content changes
+  useEffect(() => {
+    if (currentContent?.content && isEditableScript) {
+      setOriginalContent(currentContent.content);
+      if (!isEditing) {
+        setEditedContent(currentContent.content);
+      }
+    }
+  }, [currentContent?.content, isEditableScript, isEditing]);
+
+  const handleStartEdit = useCallback(() => {
+    if (currentContent?.content) {
+      setEditedContent(currentContent.content);
+      setOriginalContent(currentContent.content);
+      setIsEditing(true);
+      // Focus textarea after render
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    }
+  }, [currentContent?.content]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditedContent(originalContent);
+    setIsEditing(false);
+  }, [originalContent]);
+
+  const handleSaveEdit = useCallback(() => {
+    if (activeTab && editedContent !== originalContent) {
+      // Update the panel tab content
+      updatePanelTabContent(activeTab.id, editedContent);
+      // Store the edited script for approval - use tool_call_id from parameters
+      const toolCallId = activeTab.parameters?.tool_call_id;
+      if (toolCallId) {
+        setEditedScript(toolCallId, editedContent);
+      }
+      setOriginalContent(editedContent);
+    }
+    setIsEditing(false);
+  }, [activeTab, editedContent, originalContent, updatePanelTabContent, setEditedScript]);
+
+  const handleCopy = useCallback(async () => {
+    const contentToCopy = isEditing ? editedContent : (currentContent?.content || '');
+    if (contentToCopy) {
+      try {
+        await navigator.clipboard.writeText(contentToCopy);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
+    }
+  }, [isEditing, editedContent, currentContent?.content]);
 
   const displayContent = useMemo(() => {
     if (!currentContent?.content) return '';
@@ -125,10 +191,99 @@ export default function CodePanel() {
             {currentContent?.title || 'Code Panel'}
           </Typography>
         )}
-        <IconButton size="small" onClick={() => setRightPanelOpen(false)} sx={{ color: 'var(--muted-text)' }}>
-          <CloseIcon fontSize="small" />
-        </IconButton>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {/* Copy button */}
+          {currentContent?.content && (
+            <Tooltip title={copied ? 'Copied!' : 'Copy'} placement="top">
+              <IconButton
+                size="small"
+                onClick={handleCopy}
+                sx={{
+                  color: copied ? 'var(--accent-green)' : 'var(--muted-text)',
+                  '&:hover': {
+                    color: 'var(--accent-primary)',
+                    bgcolor: 'rgba(255,255,255,0.05)',
+                  },
+                }}
+              >
+                {copied ? <CheckIcon sx={{ fontSize: 18 }} /> : <ContentCopyIcon sx={{ fontSize: 18 }} />}
+              </IconButton>
+            </Tooltip>
+          )}
+          {/* Edit controls for script tab */}
+          {isEditableScript && !isEditing && (
+            <Button
+              size="small"
+              startIcon={<EditIcon sx={{ fontSize: 14 }} />}
+              onClick={handleStartEdit}
+              sx={{
+                textTransform: 'none',
+                color: 'var(--muted-text)',
+                fontSize: '0.75rem',
+                py: 0.5,
+                '&:hover': {
+                  color: 'var(--accent-primary)',
+                  bgcolor: 'rgba(255,255,255,0.05)',
+                },
+              }}
+            >
+              Edit
+            </Button>
+          )}
+          {isEditing && (
+            <>
+              <Button
+                size="small"
+                startIcon={<UndoIcon sx={{ fontSize: 14 }} />}
+                onClick={handleCancelEdit}
+                sx={{
+                  textTransform: 'none',
+                  color: 'var(--muted-text)',
+                  fontSize: '0.75rem',
+                  py: 0.5,
+                  '&:hover': {
+                    color: 'var(--accent-red)',
+                    bgcolor: 'rgba(255,255,255,0.05)',
+                  },
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={handleSaveEdit}
+                disabled={!hasUnsavedChanges}
+                sx={{
+                  textTransform: 'none',
+                  fontSize: '0.75rem',
+                  py: 0.5,
+                  bgcolor: hasUnsavedChanges ? 'var(--accent-green)' : 'rgba(255,255,255,0.1)',
+                  color: hasUnsavedChanges ? '#000' : 'var(--muted-text)',
+                  '&:hover': {
+                    bgcolor: hasUnsavedChanges ? 'var(--accent-green)' : 'rgba(255,255,255,0.1)',
+                    opacity: 0.9,
+                  },
+                  '&.Mui-disabled': {
+                    bgcolor: 'rgba(255,255,255,0.05)',
+                    color: 'rgba(255,255,255,0.3)',
+                  },
+                }}
+              >
+                Save
+              </Button>
+            </>
+          )}
+          <IconButton size="small" onClick={() => setRightPanelOpen(false)} sx={{ color: 'var(--muted-text)' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
       </Box>
+
+      {/* Job Status Header - shown when there's an active job */}
+      {activeJob && (activePanelTab === 'logs' || activePanelTab === 'script') && (
+        <JobStatusHeader job={activeJob} />
+      )}
 
       {/* Main Content Area */}
       <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -156,7 +311,26 @@ export default function CodePanel() {
               }}
             >
               {currentContent.content ? (
-                currentContent.language === 'python' ? (
+                isEditing && isEditableScript ? (
+                  <textarea
+                    ref={textareaRef}
+                    value={editedContent}
+                    onChange={(e) => setEditedContent(e.target.value)}
+                    spellCheck={false}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      resize: 'none',
+                      color: 'var(--text)',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace',
+                      fontSize: '13px',
+                      lineHeight: 1.55,
+                    }}
+                  />
+                ) : currentContent.language === 'python' ? (
                   <SyntaxHighlighter
                     language="python"
                     style={vscDarkPlus}

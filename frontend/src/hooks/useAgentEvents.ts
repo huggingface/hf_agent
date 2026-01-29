@@ -42,6 +42,8 @@ export function useAgentEvents({
     setPlan,
     setCurrentTurnMessageId,
     updateCurrentTurnTrace,
+    setActiveJob,
+    updateJobStatus,
   } = useAgentStore();
 
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
@@ -189,6 +191,8 @@ export function useAgentEvents({
           }
 
           if (toolName === 'hf_jobs' && (args.operation === 'run' || args.operation === 'scheduled run') && args.script) {
+            // Clear previous job state when starting a new job
+            setActiveJob(null);
             clearPanelTabs();
             setPanelTab({
               id: 'script',
@@ -278,7 +282,7 @@ export function useAgentEvents({
 
             const newContent = logsTab
               ? logsTab.content + '\n' + log
-              : '--- Job execution started ---\n' + log;
+              : log;
 
             setPanelTab({
               id: 'logs',
@@ -292,6 +296,70 @@ export function useAgentEvents({
             if (!useLayoutStore.getState().isRightPanelOpen) {
               setRightPanelOpen(true);
             }
+          }
+          break;
+        }
+
+        case 'job_started': {
+          const jobId = (event.data?.job_id as string) || '';
+          const url = (event.data?.url as string) || '';
+          const hardware = (event.data?.hardware as string) || 'cpu-basic';
+          const isGpu = (event.data?.is_gpu as boolean) || false;
+
+          // Set the active job - this will show the JobStatusHeader
+          setActiveJob({
+            jobId,
+            url,
+            status: isGpu ? 'queued' : 'pending',
+            hardware,
+            isGpu,
+            submittedAt: new Date().toISOString(),
+            statusMessage: isGpu ? 'Waiting for GPU resources...' : 'Starting job...',
+          });
+
+          // Create logs tab with initial empty content
+          setPanelTab({
+            id: 'logs',
+            title: 'Logs',
+            content: '',
+            language: 'text'
+          });
+
+          // Switch to logs tab and open panel
+          setActivePanelTab('logs');
+          if (!useLayoutStore.getState().isRightPanelOpen) {
+            setRightPanelOpen(true);
+          }
+          break;
+        }
+
+        case 'job_status': {
+          const status = (event.data?.status as string) || '';
+          const message = (event.data?.message as string) || '';
+
+          // Map backend status to frontend status type
+          const statusMap: Record<string, 'queued' | 'pending' | 'running' | 'completed' | 'failed' | 'canceled' | 'error'> = {
+            'queued': 'queued',
+            'pending': 'pending',
+            'running': 'running',
+            'completed': 'completed',
+            'failed': 'failed',
+            'canceled': 'canceled',
+            'error': 'error',
+          };
+
+          const mappedStatus = statusMap[status.toLowerCase()] || 'pending';
+          updateJobStatus(mappedStatus, message);
+
+          // Clear active job when job completes - wait 3 seconds so user can see final status
+          if (['completed', 'failed', 'canceled', 'error'].includes(mappedStatus)) {
+            setTimeout(() => {
+              // Only clear if this is still the same job and still in terminal state
+              const currentJob = useAgentStore.getState().activeJob;
+              if (currentJob && ['completed', 'failed', 'canceled', 'error'].includes(currentJob.status)) {
+                setActiveJob(null);
+              }
+            }, 3000);
           }
           break;
         }
@@ -337,7 +405,7 @@ export function useAgentEvents({
                 title: 'Script',
                 content: args.script,
                 language: 'python',
-                parameters: args
+                parameters: { ...args, tool_call_id: firstTool.tool_call_id }
               });
               setActivePanelTab('script');
             } else if (firstTool.tool === 'hf_repo_files' && args.content) {
@@ -348,7 +416,7 @@ export function useAgentEvents({
                 title: filename.split('/').pop() || 'Content',
                 content: args.content,
                 language: isPython ? 'python' : 'text',
-                parameters: args
+                parameters: { ...args, tool_call_id: firstTool.tool_call_id }
               });
               setActivePanelTab('content');
             } else {
@@ -357,7 +425,7 @@ export function useAgentEvents({
                 title: firstTool.tool,
                 content: JSON.stringify(args, null, 2),
                 language: 'json',
-                parameters: args
+                parameters: { ...args, tool_call_id: firstTool.tool_call_id }
               });
               setActivePanelTab('args');
             }

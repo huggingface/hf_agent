@@ -25,8 +25,13 @@ from agent.tools.utilities import (
 )
 
 # Hardware flavors
-CPU_FLAVORS = ["cpu-basic", "cpu-upgrade", "cpu-performance", "cpu-xl"]
+CPU_FLAVORS = [
+    "cpu-basic",
+]
 GPU_FLAVORS = [
+    "cpu-upgrade",
+    "cpu-performance",
+    "cpu-xl",
     "sprx8",
     "zero-a10g",
     "t4-small",
@@ -278,11 +283,19 @@ class HfJobsTool:
         hf_token: Optional[str] = None,
         namespace: Optional[str] = None,
         log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        job_started_callback: Optional[
+            Callable[[str, str, str, bool], Awaitable[None]]
+        ] = None,
+        job_status_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ):
         self.api = HfApi(token=hf_token)
         self.hf_token = hf_token  # Store for injecting into job environment
         self.namespace = namespace
         self.log_callback = log_callback
+        self.job_started_callback = (
+            job_started_callback  # (job_id, url, hardware, is_gpu)
+        )
+        self.job_status_callback = job_status_callback  # (status, message)
 
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
         """Execute the specified operation"""
@@ -368,11 +381,13 @@ class HfJobsTool:
         terminal_states = {"COMPLETED", "FAILED", "CANCELED", "ERROR"}
         max_retries = 100  # Allow many retries for 8h+ jobs
         retry_delay = 5  # Seconds between retries
+        first_log_received = False
+        status_check_interval = 15  # Check job status every 15s while waiting
 
-        for _ in range(max_retries):
+        for retry_num in range(max_retries):
             try:
                 # Use a queue to bridge sync generator to async consumer
-                queue = asyncio.Queue()
+                queue: asyncio.Queue = asyncio.Queue()
                 loop = asyncio.get_running_loop()
 
                 def log_producer():
@@ -394,23 +409,91 @@ class HfJobsTool:
                 producer_future = loop.run_in_executor(None, log_producer)
 
                 # Consume logs from the queue as they arrive
+                # Use timeout to provide status updates while waiting
                 while True:
-                    item = await queue.get()
+                    try:
+                        # Wait for log with timeout for status updates
+                        item = await asyncio.wait_for(
+                            queue.get(), timeout=status_check_interval
+                        )
 
-                    # EOF sentinel
-                    if item is None:
-                        break
+                        # EOF sentinel
+                        if item is None:
+                            break
 
-                    # Error occurred in producer
-                    if isinstance(item, Exception):
-                        raise item
+                        # Error occurred in producer
+                        if isinstance(item, Exception):
+                            raise item
 
-                    # Process log line
-                    log_line = item
-                    print("\t" + log_line)
-                    if self.log_callback:
-                        await self.log_callback(log_line)
-                    all_logs.append(log_line)
+                        # Process log line
+                        log_line = item
+
+                        # First log received - notify user
+                        if not first_log_received:
+                            first_log_received = True
+                            if self.job_status_callback:
+                                await self.job_status_callback(
+                                    "running", "Streaming logs"
+                                )
+                            if self.log_callback:
+                                await self.log_callback("--- Logs streaming ---")
+
+                        print("\t" + log_line)
+                        if self.log_callback:
+                            await self.log_callback(log_line)
+                        all_logs.append(log_line)
+
+                    except asyncio.TimeoutError:
+                        # No logs received yet - check job status and notify
+                        if not first_log_received:
+                            try:
+                                job_info = await _async_call(
+                                    self.api.inspect_job,
+                                    job_id=job_id,
+                                    namespace=namespace,
+                                )
+                                current_status = job_info.status.stage
+                                status_msg = job_info.status.message or ""
+
+                                if current_status in terminal_states:
+                                    # Job finished without producing logs
+                                    if self.job_status_callback:
+                                        await self.job_status_callback(
+                                            current_status.lower(), status_msg
+                                        )
+                                    if self.log_callback:
+                                        await self.log_callback(
+                                            f"Job finished with status: {current_status}"
+                                        )
+                                        if status_msg:
+                                            await self.log_callback(
+                                                f"Message: {status_msg}"
+                                            )
+                                    break
+
+                                # Still waiting - send status update
+                                if self.job_status_callback:
+                                    await self.job_status_callback(
+                                        current_status.lower(), status_msg
+                                    )
+                                if self.log_callback:
+                                    status_text = f"Status: {current_status}"
+                                    if status_msg:
+                                        status_text += f" - {status_msg}"
+                                    await self.log_callback(f"[waiting] {status_text}")
+
+                            except Exception:
+                                # Couldn't check status, just continue waiting
+                                if self.job_status_callback:
+                                    await self.job_status_callback(
+                                        "pending", "Waiting for job to start..."
+                                    )
+                                if self.log_callback:
+                                    await self.log_callback(
+                                        "[waiting] Checking job status..."
+                                    )
+                        # Continue waiting for logs
+                        continue
 
                 # If we get here, streaming completed normally (EOF received)
                 # Wait for thread to cleanup (should be done)
@@ -425,7 +508,7 @@ class HfJobsTool:
                 httpx.RemoteProtocolError,
                 httpx.ReadError,
                 HfHubHTTPError,
-            ) as e:
+            ):
                 # Connection dropped - check if job is still running
                 try:
                     job_info = await _async_call(
@@ -436,18 +519,31 @@ class HfJobsTool:
                     if current_status in terminal_states:
                         # Job finished, no need to retry
                         print(f"\tJob reached terminal state: {current_status}")
+                        if self.job_status_callback:
+                            await self.job_status_callback(current_status.lower(), "")
+                        if self.log_callback:
+                            await self.log_callback(
+                                f"Job reached terminal state: {current_status}"
+                            )
                         break
 
                     # Job still running, retry connection
-                    print(
-                        f"\tConnection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
+                    reconnect_msg = (
+                        f"Connection interrupted, reconnecting in {retry_delay}s..."
                     )
+                    print(f"\t{reconnect_msg}")
+                    if self.log_callback:
+                        await self.log_callback(f"[reconnecting] {reconnect_msg}")
                     await asyncio.sleep(retry_delay)
                     continue
 
                 except (ConnectionError, TimeoutError, OSError):
                     # Can't even check job status, wait and retry
                     print(f"\tConnection error, retrying in {retry_delay}s...")
+                    if self.log_callback:
+                        await self.log_callback(
+                            f"[reconnecting] Connection error, retrying in {retry_delay}s..."
+                        )
                     await asyncio.sleep(retry_delay)
                     continue
 
@@ -456,6 +552,13 @@ class HfJobsTool:
             self.api.inspect_job, job_id=job_id, namespace=namespace
         )
         final_status = job_info.status.stage
+
+        # Send completion notification
+        if self.job_status_callback:
+            await self.job_status_callback(final_status.lower(), "")
+        if self.log_callback:
+            await self.log_callback("")
+            await self.log_callback("--- Job finished ---")
 
         return final_status, all_logs
 
@@ -498,6 +601,10 @@ class HfJobsTool:
                 image = args.get("image", "python:3.12")
                 job_type = "Docker"
 
+            # Determine if this is a GPU job
+            flavor = args.get("hardware_flavor", "cpu-basic")
+            is_gpu_job = flavor not in CPU_FLAVORS
+
             # Run the job
             job = await _async_call(
                 self.api.run_job,
@@ -505,14 +612,23 @@ class HfJobsTool:
                 command=command,
                 env=args.get("env"),
                 secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
-                flavor=args.get("hardware_flavor", "cpu-basic"),
+                flavor=flavor,
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
             )
 
-            # Wait for completion and stream logs
+            # Immediately notify frontend that job was submitted
             print(f"{job_type} job started: {job.url}")
             print("Streaming logs...\n---\n")
+
+            # Send structured job_started event for native UI display
+            if self.job_started_callback:
+                await self.job_started_callback(
+                    job_id=job.id,
+                    url=job.url,
+                    hardware=flavor,
+                    is_gpu=is_gpu_job,
+                )
 
             final_status, all_logs = await self._wait_for_job_completion(
                 job_id=job.id,
@@ -1030,6 +1146,31 @@ async def hf_jobs_handler(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
 
+        async def job_started_callback(
+            job_id: str, url: str, hardware: str, is_gpu: bool
+        ):
+            if session:
+                await session.send_event(
+                    Event(
+                        event_type="job_started",
+                        data={
+                            "job_id": job_id,
+                            "url": url,
+                            "hardware": hardware,
+                            "is_gpu": is_gpu,
+                        },
+                    )
+                )
+
+        async def job_status_callback(status: str, message: str):
+            if session:
+                await session.send_event(
+                    Event(
+                        event_type="job_status",
+                        data={"status": status, "message": message},
+                    )
+                )
+
         # Use provided token or fall back to environment variable
         token = hf_token or os.environ.get("HF_TOKEN", "")
         namespace = (
@@ -1040,6 +1181,8 @@ async def hf_jobs_handler(
             namespace=namespace,
             hf_token=token,
             log_callback=log_callback if session else None,
+            job_started_callback=job_started_callback if session else None,
+            job_status_callback=job_status_callback if session else None,
         )
         result = await tool.execute(arguments)
         return result["formatted"], not result.get("isError", False)

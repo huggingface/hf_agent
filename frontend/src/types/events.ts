@@ -11,6 +11,8 @@ export type EventType =
   | 'tool_call'
   | 'tool_output'
   | 'tool_log'
+  | 'job_started'  // HF job submitted successfully
+  | 'job_status'   // HF job status update
   | 'approval_required'
   | 'turn_complete'
   | 'compacted'
@@ -56,6 +58,18 @@ export interface ToolOutputEventData {
 export interface ToolLogEventData {
   tool: string;
   log: string;
+}
+
+export interface JobStartedEventData {
+  job_id: string;
+  url: string;
+  hardware: string;
+  is_gpu: boolean;
+}
+
+export interface JobStatusEventData {
+  status: string;
+  message: string;
 }
 
 export interface PlanUpdateEventData {

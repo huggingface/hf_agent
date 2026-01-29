@@ -41,6 +41,7 @@ export interface ToolApproval {
   tool_call_id: string;
   approved: boolean;
   feedback?: string | null;
+  modified_arguments?: Record<string, unknown>;  // For edited scripts
 }
 
 export interface ApprovalBatch {

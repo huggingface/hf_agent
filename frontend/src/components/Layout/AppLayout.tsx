@@ -370,9 +370,6 @@ export default function AppLayout() {
 
           {/* User Section */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <IconButton onClick={handleOpenSettings} size="small">
-              <SettingsIcon />
-            </IconButton>
             <IconButton
               onClick={(e) => setUserMenuAnchor(e.currentTarget)}
               size="small"

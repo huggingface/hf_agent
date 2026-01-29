@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Box, Typography, Button, TextField, IconButton, Link } from '@mui/material';
+import { Box, Typography, Button, TextField, IconButton } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
-import LaunchIcon from '@mui/icons-material/Launch';
+import EditIcon from '@mui/icons-material/Edit';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { useSessionStore } from '@/store/sessionStore';
@@ -16,7 +16,7 @@ interface ApprovalFlowProps {
 }
 
 export default function ApprovalFlow({ message }: ApprovalFlowProps) {
-  const { setPanelContent, setPanelTab, setActivePanelTab, clearPanelTabs, updateMessage } = useAgentStore();
+  const { setPanelContent, setPanelTab, setActivePanelTab, clearPanelTabs, updateMessage, panelTabs, editedScripts, clearEditedScripts } = useAgentStore();
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
   const { activeSessionId } = useSessionStore();
   const { getAuthHeaders } = useAuthStore();
@@ -30,29 +30,13 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
 
   const { batch, status } = approvalData;
 
-  // Parse toolOutput to extract job info (URL, status, logs, errors)
+  // Parse toolOutput to extract job info (logs, errors)
   let logsContent = '';
   let showLogsButton = false;
-  let jobUrl = '';
-  let jobStatus = '';
-  let jobFailed = false;
   let errorMessage = '';
 
   if (message.toolOutput) {
     const output = message.toolOutput;
-
-    // Extract job URL: **View at:** https://...
-    const urlMatch = output.match(/\*\*View at:\*\*\s*(https:\/\/[^\s\n]+)/);
-    if (urlMatch) {
-      jobUrl = urlMatch[1];
-    }
-
-    // Extract job status: **Final Status:** ...
-    const statusMatch = output.match(/\*\*Final Status:\*\*\s*([^\n]+)/);
-    if (statusMatch) {
-      jobStatus = statusMatch[1].trim();
-      jobFailed = jobStatus.toLowerCase().includes('error') || jobStatus.toLowerCase().includes('failed');
-    }
 
     // Extract logs
     if (output.includes('**Logs:**')) {
@@ -68,7 +52,6 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
     }
 
     // Detect errors - if output exists but doesn't have the expected job completion format
-    // This catches early failures (validation errors, API errors, etc.)
     const isExpectedFormat = output.includes('**Job ID:**') || output.includes('**View at:**');
     const looksLikeError = output.toLowerCase().includes('error') ||
                           output.toLowerCase().includes('failed') ||
@@ -78,7 +61,6 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
     if (!isExpectedFormat || (looksLikeError && !logsContent)) {
       // This is likely an error message - show it
       errorMessage = output;
-      jobFailed = true;
     }
   }
 
@@ -113,12 +95,31 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
     if (!batch || !activeSessionId) return;
 
     const currentTool = batch.tools[currentIndex];
-    const newDecisions = [
+
+    // Check if script was edited - look in panelTabs for modified content
+    let modifiedArguments: Record<string, unknown> | undefined = undefined;
+    if (approved && currentTool.tool === 'hf_jobs') {
+      const scriptTab = panelTabs.find(t => t.id === 'script');
+      const originalScript = (currentTool.arguments as any)?.script;
+
+      // Check if there's an edited version in the store
+      const editedScript = editedScripts[currentTool.tool_call_id];
+
+      // Use edited script from store, or check if tab content differs from original
+      if (editedScript && editedScript !== originalScript) {
+        modifiedArguments = { script: editedScript };
+      } else if (scriptTab?.content && scriptTab.content !== originalScript) {
+        modifiedArguments = { script: scriptTab.content };
+      }
+    }
+
+    const newDecisions: ToolApproval[] = [
       ...decisions,
       {
         tool_call_id: currentTool.tool_call_id,
         approved,
         feedback: approved ? null : feedback || 'Rejected by user',
+        ...(modifiedArguments && { modified_arguments: modifiedArguments }),
       },
     ];
 
@@ -140,7 +141,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
             approvals: newDecisions,
           }),
         });
-        
+
         // Update message status
         updateMessage(message.id, {
             approval: {
@@ -149,12 +150,15 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
                 decisions: newDecisions
             }
         });
-        
+
+        // Clear edited scripts after approval
+        clearEditedScripts();
+
       } catch (e) {
         console.error('Approval submission failed:', e);
       }
     }
-  }, [activeSessionId, message.id, batch, currentIndex, feedback, decisions, approvalData, updateMessage]);
+  }, [activeSessionId, message.id, batch, currentIndex, feedback, decisions, approvalData, updateMessage, panelTabs, editedScripts, clearEditedScripts]);
 
   if (!batch || currentIndex >= batch.tools.length) return null;
 
@@ -183,17 +187,25 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
     );
   };
 
+  // Check if script has been modified
+  const isScriptModified = currentTool.tool === 'hf_jobs' &&
+    (editedScripts[currentTool.tool_call_id] !== undefined ||
+     panelTabs.find(t => t.id === 'script')?.content !== (currentTool.arguments as any)?.script);
+
   const showCode = () => {
     const args = currentTool.arguments as any;
     if (currentTool.tool === 'hf_jobs' && args.script) {
       // Clear existing tabs and set up script tab (and logs if available)
       clearPanelTabs();
+      // Use edited content if available, otherwise original
+      const editedScript = editedScripts[currentTool.tool_call_id];
+      const scriptContent = editedScript || args.script;
       setPanelTab({
         id: 'script',
         title: 'Script',
-        content: args.script,
+        content: scriptContent,
         language: 'python',
-        parameters: args
+        parameters: { ...args, tool_call_id: currentTool.tool_call_id }
       });
       // If logs are available (job completed), also add logs tab
       if (logsContent) {
@@ -212,36 +224,11 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
         title: `Tool: ${currentTool.tool}`,
         content: JSON.stringify(args, null, 2),
         language: 'json',
-        parameters: args
+        parameters: { ...args, tool_call_id: currentTool.tool_call_id }
       });
       setRightPanelOpen(true);
       setLeftSidebarOpen(false);
     }
-  };
-
-  const handleViewLogs = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const args = currentTool.arguments as any;
-    // Set up both tabs so user can switch between script and logs
-    clearPanelTabs();
-    if (currentTool.tool === 'hf_jobs' && args.script) {
-      setPanelTab({
-        id: 'script',
-        title: 'Script',
-        content: args.script,
-        language: 'python',
-        parameters: args
-      });
-    }
-    setPanelTab({
-      id: 'logs',
-      title: 'Logs',
-      content: logsContent,
-      language: 'text'
-    });
-    setActivePanelTab('logs');
-    setRightPanelOpen(true);
-    setLeftSidebarOpen(false);
   };
 
   return (
@@ -295,15 +282,16 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
       {/* Script/Logs buttons for hf_jobs - always show when we have a script */}
       {currentTool.tool === 'hf_jobs' && args.script && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button
               variant="outlined"
               size="small"
+              startIcon={status === 'pending' ? <EditIcon sx={{ fontSize: 14 }} /> : undefined}
               onClick={showCode}
               sx={{
                 textTransform: 'none',
-                borderColor: 'rgba(255,255,255,0.1)',
-                color: 'var(--muted-text)',
+                borderColor: isScriptModified ? 'var(--accent-yellow)' : 'rgba(255,255,255,0.1)',
+                color: isScriptModified ? 'var(--accent-yellow)' : 'var(--muted-text)',
                 fontSize: '0.75rem',
                 py: 0.5,
                 '&:hover': {
@@ -313,71 +301,9 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
                 }
               }}
             >
-              View Script
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={handleViewLogs}
-              disabled={!logsContent && status === 'pending'}
-              sx={{
-                textTransform: 'none',
-                borderColor: 'rgba(255,255,255,0.1)',
-                color: logsContent ? 'var(--accent-primary)' : 'var(--muted-text)',
-                fontSize: '0.75rem',
-                py: 0.5,
-                '&:hover': {
-                  borderColor: 'var(--accent-primary)',
-                  bgcolor: 'rgba(255,255,255,0.03)'
-                },
-                '&.Mui-disabled': {
-                  color: 'rgba(255,255,255,0.3)',
-                  borderColor: 'rgba(255,255,255,0.05)',
-                }
-              }}
-            >
-              {logsContent ? 'View Logs' : 'Logs (waiting for job...)'}
+              {status === 'pending' ? (isScriptModified ? 'Edit Script (Modified)' : 'Edit Script') : 'View Script'}
             </Button>
           </Box>
-
-          {/* Job URL - only show when we have a specific URL */}
-          {jobUrl && (
-            <Link
-              href={jobUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-                color: 'var(--accent-primary)',
-                fontSize: '0.75rem',
-                textDecoration: 'none',
-                opacity: 0.9,
-                '&:hover': {
-                  opacity: 1,
-                  textDecoration: 'underline',
-                }
-              }}
-            >
-              <LaunchIcon sx={{ fontSize: 14 }} />
-              View Job on Hugging Face
-            </Link>
-          )}
-
-          {/* Show job status if available */}
-          {jobStatus && (
-            <Typography
-              variant="caption"
-              sx={{
-                color: jobFailed ? 'var(--accent-red)' : 'var(--accent-green)',
-                fontSize: '0.75rem',
-                fontWeight: 500,
-              }}
-            >
-              Status: {jobStatus}
-            </Typography>
-          )}
         </Box>
       )}
 
