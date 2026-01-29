@@ -197,11 +197,7 @@ class SessionManager:
 
             for msg in history:
                 if msg.get("role") != "system":  # Skip system, we have our own
-                    session.context_manager.items.append(
-                        Message(
-                            role=msg.get("role", "user"), content=msg.get("content", "")
-                        )
-                    )
+                    session.context_manager.items.append(Message(**msg))
 
         # Create wrapper with the specified session_id
         agent_session = AgentSession(
@@ -311,27 +307,17 @@ class SessionManager:
                 if session_id in self.sessions:
                     self.sessions[session_id].is_active = False
 
-
     async def _persist_session(self, session_id: str) -> None:
-        """Persist session state to HF Dataset.
-
-        Called after each turn to save conversation history.
-        """
+        """Persist session state to HF Dataset."""
         agent_session = self.sessions.get(session_id)
         if not agent_session:
             return
 
-        # Get messages from context manager
-        messages = []
-        for item in agent_session.session.context_manager.items:
-            messages.append(
-                {
-                    "role": item.get("role", "unknown"),
-                    "content": item.get("content", ""),
-                }
-            )
+        # Serialize full message objects (preserves tool_calls, tool_call_id, etc.)
+        messages = [
+            item.model_dump() for item in agent_session.session.context_manager.items
+        ]
 
-        # Persist via lifecycle manager
         await lifecycle_manager.persist_session(
             session_id=session_id,
             user_id=agent_session.user_id or "anonymous",
@@ -434,14 +420,10 @@ class SessionManager:
             # Close and persist the session
             agent_session = self.sessions.get(session_id)
             if agent_session:
-                messages = []
-                for item in agent_session.session.context_manager.items:
-                    messages.append(
-                        {
-                            "role": item.get("role", "unknown"),
-                            "content": item.get("content", ""),
-                        }
-                    )
+                messages = [
+                    item.model_dump()
+                    for item in agent_session.session.context_manager.items
+                ]
                 await lifecycle_manager.close_session(
                     session_id=session_id,
                     user_id=agent_session.user_id or "anonymous",
