@@ -1,8 +1,176 @@
 import { create } from 'zustand';
-import type { Session } from '@/types/agent';
+import type { Session, Message, MessageSegment, TraceLog } from '@/types/agent';
 import { useAuthStore } from './authStore';
 
 const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
+
+/**
+ * Transform raw LiteLLM messages into UI Message format with segments.
+ * Groups ALL consecutive assistant/tool messages between user messages into ONE blob.
+ * This ensures one user message → one assistant response blob in the UI.
+ */
+function transformRawMessages(rawMessages: any[], sessionId: string): Message[] {
+  const messages: Message[] = [];
+
+  console.log('[transformRawMessages] Input:', rawMessages.length, 'messages');
+
+  // Build a map of tool_call_id -> tool result for quick lookup
+  const toolResults = new Map<string, { content: string; success: boolean }>();
+  for (const msg of rawMessages) {
+    if (msg.role === 'tool' && msg.tool_call_id) {
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      // Check for error indicators in the content
+      const isError = content.toLowerCase().includes('error') ||
+                      content.toLowerCase().includes('traceback') ||
+                      content.toLowerCase().includes('exception');
+      toolResults.set(msg.tool_call_id, { content, success: !isError });
+    }
+  }
+
+  let msgIndex = 0;
+  let currentAssistantBlob: {
+    segments: MessageSegment[];
+    content: string;
+    hasJobTool: boolean;
+    jobToolOutput?: string;
+    jobToolCalls?: any[];
+  } | null = null;
+
+  const flushAssistantBlob = () => {
+    if (!currentAssistantBlob) return;
+
+    if (currentAssistantBlob.hasJobTool && currentAssistantBlob.jobToolCalls) {
+      // Create as an approved job message
+      messages.push({
+        id: `msg-${sessionId}-${msgIndex++}`,
+        role: 'assistant',
+        content: currentAssistantBlob.content,
+        timestamp: new Date().toISOString(),
+        segments: currentAssistantBlob.segments,
+        approval: {
+          status: 'approved',
+          batch: {
+            tools: currentAssistantBlob.jobToolCalls,
+            count: currentAssistantBlob.jobToolCalls.length,
+          },
+        },
+        toolOutput: currentAssistantBlob.jobToolOutput,
+      });
+    } else {
+      // Regular assistant message
+      messages.push({
+        id: `msg-${sessionId}-${msgIndex++}`,
+        role: 'assistant',
+        content: currentAssistantBlob.content,
+        timestamp: new Date().toISOString(),
+        segments: currentAssistantBlob.segments.length > 0 ? currentAssistantBlob.segments : undefined,
+      });
+    }
+    currentAssistantBlob = null;
+  };
+
+  for (const msg of rawMessages) {
+    // Skip tool result messages - they're looked up via toolResults map
+    if (msg.role === 'tool') continue;
+
+    if (msg.role === 'user') {
+      // Flush any pending assistant blob before adding user message
+      flushAssistantBlob();
+
+      const content = extractTextContent(msg.content);
+      messages.push({
+        id: `msg-${sessionId}-${msgIndex++}`,
+        role: 'user',
+        content,
+        timestamp: new Date().toISOString(),
+      });
+    } else if (msg.role === 'assistant') {
+      // Initialize blob if needed
+      if (!currentAssistantBlob) {
+        currentAssistantBlob = {
+          segments: [],
+          content: '',
+          hasJobTool: false,
+        };
+      }
+
+      const textContent = extractTextContent(msg.content);
+      const toolCalls = msg.tool_calls || [];
+
+      // Append text content
+      if (textContent) {
+        if (currentAssistantBlob.content) {
+          currentAssistantBlob.content += '\n\n' + textContent;
+        } else {
+          currentAssistantBlob.content = textContent;
+        }
+        currentAssistantBlob.segments.push({ type: 'text', content: textContent });
+      }
+
+      // Process tool calls
+      if (toolCalls.length > 0) {
+        const tools: TraceLog[] = toolCalls.map((tc: any, idx: number) => {
+          const toolCallId = tc.id || `tool_${msgIndex}_${idx}`;
+          const toolName = tc.function?.name || tc.name || 'unknown';
+          const args = tc.function?.arguments || tc.arguments || {};
+          const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
+          const result = toolResults.get(toolCallId);
+
+          return {
+            id: toolCallId,
+            type: 'call' as const,
+            text: `Executed ${toolName}`,
+            tool: toolName,
+            timestamp: new Date().toISOString(),
+            completed: true,
+            args: parsedArgs,
+            output: result?.content,
+            success: result?.success ?? true,
+          };
+        });
+
+        currentAssistantBlob.segments.push({ type: 'tools', tools });
+
+        // Check for hf_jobs approval tool
+        const jobTool = tools.find(t => t.tool === 'hf_jobs' && t.args?.script);
+        if (jobTool) {
+          currentAssistantBlob.hasJobTool = true;
+          currentAssistantBlob.jobToolOutput = jobTool.output;
+          currentAssistantBlob.jobToolCalls = toolCalls.map((tc: any) => ({
+            tool: tc.function?.name || tc.name || 'unknown',
+            arguments: typeof tc.function?.arguments === 'string'
+              ? JSON.parse(tc.function.arguments)
+              : (tc.function?.arguments || tc.arguments || {}),
+            tool_call_id: tc.id,
+          }));
+        }
+      }
+    }
+  }
+
+  // Flush final assistant blob
+  flushAssistantBlob();
+
+  console.log('[transformRawMessages] Output:', messages.length, 'messages');
+
+  return messages;
+}
+
+/**
+ * Extract text content from LiteLLM message content (string or content blocks array).
+ */
+function extractTextContent(content: any): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter((block: any) => block.type === 'text')
+      .map((block: any) => block.text || '')
+      .join('\n');
+  }
+  return '';
+}
 
 interface SessionStore {
   sessions: Session[];
@@ -129,13 +297,8 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const { useAgentStore } = await import('./agentStore');
       const setMessages = useAgentStore.getState().setMessages;
 
-      // Transform and set messages (REPLACE, not append)
-      const messages = (data.messages || []).map((msg: any, index: number) => ({
-        id: `msg-${id}-${index}`,
-        role: msg.role,
-        content: msg.content,
-        timestamp: new Date().toISOString(),
-      }));
+      // Transform raw LiteLLM messages into UI format with segments, approvals, etc.
+      const messages = transformRawMessages(data.messages || [], id);
 
       setMessages(messages);
       set({ activeSessionId: id, isLoading: false });

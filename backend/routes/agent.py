@@ -43,7 +43,7 @@ class SessionMessagesResponse(BaseModel):
     """Response containing session messages."""
 
     session_id: str
-    messages: list[MessageData]
+    messages: list[dict]  # Raw LiteLLM message objects for full UI reconstruction
 
 
 class SessionUpdateRequest(BaseModel):
@@ -154,45 +154,18 @@ async def get_session_messages(
     if persisted.status == "deleted":
         raise HTTPException(status_code=404, detail="Session has been deleted")
 
-    # Parse messages
-    messages = []
+    # Parse messages - return raw LiteLLM messages for full UI reconstruction
     raw_messages = []
     try:
         raw_messages = json.loads(persisted.messages_json)
-        for m in raw_messages:
-            role = m.get("role", "unknown")
-            if role == "system":
-                continue
-
-            # Handle content that can be string or list of content blocks
-            raw_content = m.get("content", "")
-            if isinstance(raw_content, str):
-                content = raw_content
-            elif isinstance(raw_content, list):
-                # Extract text from content blocks
-                text_parts = []
-                for block in raw_content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif block.get("type") == "tool_use":
-                            text_parts.append(f"[Tool: {block.get('name', 'unknown')}]")
-                        elif block.get("type") == "tool_result":
-                            text_parts.append(f"[Tool Result]")
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                content = "\n".join(text_parts) if text_parts else ""
-            else:
-                content = str(raw_content) if raw_content else ""
-
-            messages.append(MessageData(role=role, content=content))
+        # Filter out system messages
+        raw_messages = [m for m in raw_messages if m.get("role") != "system"]
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse messages for session {session_id}: {e}")
-        # Return empty messages rather than failing completely
-        messages = []
+        raw_messages = []
     except Exception as e:
         logger.error(f"Failed to process messages for session {session_id}: {e}", exc_info=True)
-        messages = []
+        raw_messages = []
 
     # Create in-memory session if not already active (for continuing conversation)
     try:
@@ -208,7 +181,7 @@ async def get_session_messages(
         # Still return messages even if session creation fails
         # User can retry or create a new session
 
-    return SessionMessagesResponse(session_id=session_id, messages=messages)
+    return SessionMessagesResponse(session_id=session_id, messages=raw_messages)
 
 
 @router.delete("/session/{session_id}")

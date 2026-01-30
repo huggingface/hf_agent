@@ -295,6 +295,21 @@ export default function CodePanel() {
           </Box>
         ) : (
           <Box sx={{ flex: 1, overflow: 'hidden', p: 2 }}>
+            {activeTab?.id === 'tool_output' && (
+              <Typography
+                variant="caption"
+                sx={{
+                  display: 'block',
+                  mb: 1,
+                  color: 'var(--muted-text)',
+                  fontSize: '0.7rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}
+              >
+                Tool output
+              </Typography>
+            )}
             <Box
               ref={scrollRef}
               className="code-panel"

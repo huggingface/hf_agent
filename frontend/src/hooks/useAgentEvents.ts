@@ -228,43 +228,56 @@ export function useAgentEvents({
           updateCurrentTurnTrace();
 
           if (toolName === 'hf_jobs') {
-            const messages = useAgentStore.getState().messages;
-            const traceLogs = useAgentStore.getState().traceLogs;
+            const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
 
-            let jobMsg = [...messages].reverse().find(m => m.approval);
-
-            if (!jobMsg) {
-              const jobTrace = [...traceLogs].reverse().find(t => t.tool === 'hf_jobs');
-              const args = jobTrace?.args || {};
-
-              const autoExecMessage: Message = {
-                id: `msg_auto_${Date.now()}`,
-                role: 'assistant',
-                content: '',
-                timestamp: new Date().toISOString(),
-                approval: {
-                  status: 'approved',
-                  batch: {
-                    tools: [{
-                      tool: toolName,
-                      arguments: args,
-                      tool_call_id: `auto_${Date.now()}`
-                    }],
-                    count: 1
-                  }
-                },
-                toolOutput: output
-              };
-              addMessage(autoExecMessage);
-              console.log('Created auto-exec message with tool output:', toolName);
-            } else {
-              const currentOutput = jobMsg.toolOutput || '';
+            if (currentTurnMsgId) {
+              // Update current turn message with job output
+              const messages = useAgentStore.getState().messages;
+              const currentMsg = messages.find(m => m.id === currentTurnMsgId);
+              const currentOutput = currentMsg?.toolOutput || '';
               const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
 
-              useAgentStore.getState().updateMessage(jobMsg.id, {
-                toolOutput: newOutput
-              });
-              console.log('Updated job message with tool output:', toolName);
+              updateMessage(currentTurnMsgId, { toolOutput: newOutput });
+              console.log('Updated current turn message with job output:', toolName);
+            } else {
+              // Fallback: look for recent message with approval or create new one
+              const messages = useAgentStore.getState().messages;
+              const jobMsg = [...messages].reverse().find(m => m.approval);
+
+              if (jobMsg) {
+                const currentOutput = jobMsg.toolOutput || '';
+                const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
+                updateMessage(jobMsg.id, { toolOutput: newOutput });
+                console.log('Updated approval message with job output:', toolName);
+              } else {
+                // Last resort: create new message (shouldn't happen with new flow)
+                const traceLogs = useAgentStore.getState().traceLogs;
+                const jobTrace = [...traceLogs].reverse().find(t => t.tool === 'hf_jobs');
+                const args = jobTrace?.args || {};
+
+                const messageId = `msg_${Date.now()}`;
+                const autoExecMessage: Message = {
+                  id: messageId,
+                  role: 'assistant',
+                  content: '',
+                  timestamp: new Date().toISOString(),
+                  approval: {
+                    status: 'approved',
+                    batch: {
+                      tools: [{
+                        tool: toolName,
+                        arguments: args,
+                        tool_call_id: `auto_${Date.now()}`
+                      }],
+                      count: 1
+                    }
+                  },
+                  toolOutput: output
+                };
+                addMessage(autoExecMessage);
+                setCurrentTurnMessageId(messageId);
+                console.log('Created auto-exec message with tool output:', toolName);
+              }
             }
           }
 
@@ -381,17 +394,38 @@ export function useAgentEvents({
           }>;
           const count = (event.data?.count as number) || 0;
 
-          const message: Message = {
-            id: `msg_approval_${Date.now()}`,
-            role: 'assistant',
-            content: '',
-            timestamp: new Date().toISOString(),
-            approval: {
-              status: 'pending',
-              batch: { tools, count }
-            }
+          const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+          const approvalData = {
+            status: 'pending' as const,
+            batch: { tools, count }
           };
-          addMessage(message);
+
+          if (currentTurnMsgId) {
+            // Add approval to existing turn message
+            updateMessage(currentTurnMsgId, { approval: approvalData });
+          } else {
+            // No message yet - create one with approval
+            const messageId = `msg_${Date.now()}`;
+            const currentTrace = useAgentStore.getState().traceLogs;
+            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
+
+            // Add any pending tool traces
+            if (currentTrace.length > 0) {
+              segments.push({ type: 'tools', tools: [...currentTrace] });
+              clearTraceLogs();
+            }
+
+            const message: Message = {
+              id: messageId,
+              role: 'assistant',
+              content: '',
+              timestamp: new Date().toISOString(),
+              segments: segments.length > 0 ? segments : undefined,
+              approval: approvalData,
+            };
+            addMessage(message);
+            setCurrentTurnMessageId(messageId);
+          }
 
           if (tools && tools.length > 0) {
             const firstTool = tools[0];
@@ -434,7 +468,7 @@ export function useAgentEvents({
             setLeftSidebarOpen(false);
           }
 
-          setCurrentTurnMessageId(null);
+          // Don't reset currentTurnMessageId - keep accumulating into same blob
           setPendingApprovals(null);
           setProcessing(false);
           break;
@@ -442,7 +476,8 @@ export function useAgentEvents({
 
         case 'turn_complete':
           setProcessing(false);
-          setCurrentTurnMessageId(null);
+          // Don't reset currentTurnMessageId here - keep accumulating into same message
+          // until user sends a new message (reset happens in 'processing' event)
           break;
 
         case 'compacted': {
