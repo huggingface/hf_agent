@@ -6,7 +6,6 @@ export type EventType =
   | 'connected'  // SSE connection established
   | 'ready'
   | 'processing'
-  | 'stream_chunk'  // Streaming text chunk from LLM
   | 'assistant_message'
   | 'tool_call'
   | 'tool_output'
@@ -37,10 +36,6 @@ export interface ProcessingEventData {
 }
 
 export interface AssistantMessageEventData {
-  content: string;
-}
-
-export interface StreamChunkEventData {
   content: string;
 }
 

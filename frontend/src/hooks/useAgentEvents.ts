@@ -41,7 +41,6 @@ export function useAgentEvents({
     clearPanelTabs,
     setPlan,
     setCurrentTurnMessageId,
-    updateCurrentTurnTrace,
     setActiveJob,
     updateJobStatus,
   } = useAgentStore();
@@ -70,101 +69,34 @@ export function useAgentEvents({
           setCurrentTurnMessageId(null);
           break;
 
-        case 'stream_chunk': {
-          // Handle streaming text chunks from LLM
-          const chunk = (event.data?.content as string) || '';
-          if (!chunk) break;
+        case 'assistant_message': {
+          const content = (event.data?.content as string) || '';
+          if (!content) break; // No text content, nothing to add
 
           const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
 
           if (currentTurnMsgId) {
-            // Append to existing streaming message
+            // Add text segment to existing message
             const messages = useAgentStore.getState().messages;
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
             if (existingMsg) {
-              const newContent = existingMsg.content + chunk;
-              // Update the last text segment or create one
-              const segments = existingMsg.segments ? [...existingMsg.segments] : [];
-              const lastSegment = segments[segments.length - 1];
-
-              if (lastSegment && lastSegment.type === 'text') {
-                lastSegment.content = (lastSegment.content || '') + chunk;
-              } else {
-                segments.push({ type: 'text', content: chunk });
-              }
-
+              const existingSegments = existingMsg.segments || [];
+              const newContent = existingMsg.content + content;
               updateMessage(currentTurnMsgId, {
                 content: newContent,
-                segments,
+                segments: [...existingSegments, { type: 'text', content }],
               });
             }
           } else {
-            // Create new streaming message
+            // Create new message with text segment
             const messageId = `msg_${Date.now()}`;
-            const currentTrace = useAgentStore.getState().traceLogs;
-            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
-
-            // Add any pending tool traces first
-            if (currentTrace.length > 0) {
-              segments.push({ type: 'tools', tools: [...currentTrace] });
-              clearTraceLogs();
-            }
-
-            segments.push({ type: 'text', content: chunk });
-
-            const message: Message = {
-              id: messageId,
-              role: 'assistant',
-              content: chunk,
-              timestamp: new Date().toISOString(),
-              segments,
-            };
-            addMessage(message);
-            setCurrentTurnMessageId(messageId);
-          }
-          break;
-        }
-
-        case 'assistant_message': {
-          const content = (event.data?.content as string) || '';
-          const currentTrace = useAgentStore.getState().traceLogs;
-          const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
-
-          if (currentTurnMsgId) {
-            // Message already exists from streaming - just finalize segments, don't duplicate content
-            const messages = useAgentStore.getState().messages;
-            const existingMsg = messages.find(m => m.id === currentTurnMsgId);
-
-            if (existingMsg) {
-              // Only update if there are pending tool traces to add
-              if (currentTrace.length > 0) {
-                const segments = existingMsg.segments ? [...existingMsg.segments] : [];
-                segments.push({ type: 'tools', tools: [...currentTrace] });
-                clearTraceLogs();
-                updateMessage(currentTurnMsgId, { segments });
-              }
-              // Content was already streamed - don't duplicate
-            }
-          } else {
-            const messageId = `msg_${Date.now()}`;
-            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
-
-            if (currentTrace.length > 0) {
-              segments.push({ type: 'tools', tools: [...currentTrace] });
-              clearTraceLogs();
-            }
-
-            if (content) {
-              segments.push({ type: 'text', content });
-            }
-
             const message: Message = {
               id: messageId,
               role: 'assistant',
               content,
               timestamp: new Date().toISOString(),
-              segments,
+              segments: [{ type: 'text', content }],
             };
             addMessage(message);
             setCurrentTurnMessageId(messageId);
@@ -186,8 +118,46 @@ export function useAgentEvents({
               completed: false,
               args: toolName === 'hf_jobs' ? args : undefined,
             };
+
+            // Add tool to traceLogs for reference
             addTraceLog(log);
-            updateCurrentTurnTrace();
+
+            // Immediately add/update tools segment in current message
+            const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+            const currentTrace = useAgentStore.getState().traceLogs;
+
+            if (currentTurnMsgId) {
+              // Add to existing message's tools segment
+              const messages = useAgentStore.getState().messages;
+              const existingMsg = messages.find(m => m.id === currentTurnMsgId);
+
+              if (existingMsg) {
+                const segments = existingMsg.segments ? [...existingMsg.segments] : [];
+                const lastSegment = segments[segments.length - 1];
+
+                if (lastSegment && lastSegment.type === 'tools') {
+                  // Append to existing tools segment
+                  lastSegment.tools = [...currentTrace];
+                } else {
+                  // Create new tools segment
+                  segments.push({ type: 'tools', tools: [...currentTrace] });
+                }
+
+                updateMessage(currentTurnMsgId, { segments });
+              }
+            } else {
+              // No message yet - create one with tools segment
+              const messageId = `msg_${Date.now()}`;
+              const message: Message = {
+                id: messageId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString(),
+                segments: [{ type: 'tools', tools: [...currentTrace] }],
+              };
+              addMessage(message);
+              setCurrentTurnMessageId(messageId);
+            }
           }
 
           if (toolName === 'hf_jobs' && (args.operation === 'run' || args.operation === 'scheduled run') && args.script) {
@@ -224,8 +194,28 @@ export function useAgentEvents({
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
 
+          // Update the trace log
           updateTraceLog(toolName, { completed: true, output, success });
-          updateCurrentTurnTrace();
+
+          // Update the tools segment in current message to reflect completion
+          const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+          const currentTrace = useAgentStore.getState().traceLogs;
+
+          if (currentTurnMsgId) {
+            const messages = useAgentStore.getState().messages;
+            const existingMsg = messages.find(m => m.id === currentTurnMsgId);
+
+            if (existingMsg && existingMsg.segments) {
+              // Find and update the tools segment with updated trace logs
+              const segments = existingMsg.segments.map(seg => {
+                if (seg.type === 'tools') {
+                  return { ...seg, tools: [...currentTrace] };
+                }
+                return seg;
+              });
+              updateMessage(currentTurnMsgId, { segments });
+            }
+          }
 
           if (toolName === 'hf_jobs') {
             const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
@@ -404,23 +394,13 @@ export function useAgentEvents({
             // Add approval to existing turn message
             updateMessage(currentTurnMsgId, { approval: approvalData });
           } else {
-            // No message yet - create one with approval
+            // No message yet - create one with approval (shouldn't happen with new flow)
             const messageId = `msg_${Date.now()}`;
-            const currentTrace = useAgentStore.getState().traceLogs;
-            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
-
-            // Add any pending tool traces
-            if (currentTrace.length > 0) {
-              segments.push({ type: 'tools', tools: [...currentTrace] });
-              clearTraceLogs();
-            }
-
             const message: Message = {
               id: messageId,
               role: 'assistant',
               content: '',
               timestamp: new Date().toISOString(),
-              segments: segments.length > 0 ? segments : undefined,
               approval: approvalData,
             };
             addMessage(message);
