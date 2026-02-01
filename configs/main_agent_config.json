@@ -1,5 +1,5 @@
 {
-  "model_name": "huggingface/novita/deepseek-ai/DeepSeek-V3.1",
+  "model_name": "huggingface/novita/deepseek-ai/DeepSeek-V3.2",
   "save_sessions": true,
   "session_dataset_repo": "akseljoonas/hf-agent-sessions",
   "yolo_mode": false,

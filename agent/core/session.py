@@ -60,7 +60,7 @@ class Session:
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())
         self.config = config or Config(
-            model_name="huggingface/novita/deepseek-ai/DeepSeek-V3.1",
+            model_name="huggingface/novita/deepseek-ai/DeepSeek-V3.2",
         )
         self.is_running = True
         self.current_task: asyncio.Task | None = None
