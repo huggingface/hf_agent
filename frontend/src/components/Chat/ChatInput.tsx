@@ -1,6 +1,10 @@
 import { useState, useCallback, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography } from '@mui/material';
+import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Snackbar, Alert } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import { useSessionStore } from '@/store/sessionStore';
+import { useAuthStore } from '@/store/authStore';
+import { useAgentStore } from '@/store/agentStore';
 
 interface ChatInputProps {
   onSend: (text: string) => void;
@@ -9,6 +13,12 @@ interface ChatInputProps {
 
 export default function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const [input, setInput] = useState('');
+  const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { switchModel, createSession } = useSessionStore();
+  const { user } = useAuthStore();
+  const { clearMessages, setPlan, setPanelContent } = useAgentStore();
+  const [currentModel, setCurrentModel] = useState<'qwen' | 'anthropic'>('qwen');
 
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled) {
@@ -26,6 +36,40 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
     },
     [handleSend]
   );
+
+  const handleModelClick = (event: React.MouseEvent<HTMLElement>) => {
+    setModelAnchorEl(event.currentTarget);
+  };
+
+  const handleModelClose = () => {
+    setModelAnchorEl(null);
+  };
+
+  const handleSwitchModel = async (model: 'qwen' | 'anthropic') => {
+    // Check if user has Anthropic API key when switching to Claude
+    if (model === 'anthropic' && !user?.has_anthropic_key) {
+      setErrorMessage('Please set your Anthropic API key in Settings before using Claude models');
+      handleModelClose();
+      return;
+    }
+
+    const modelName = model === 'qwen'
+      ? 'huggingface/novita/deepseek-ai/DeepSeek-V3.1'
+      : 'anthropic/claude-opus-4-5-20251101';
+
+    const success = await switchModel(modelName);
+    if (success) {
+      setCurrentModel(model);
+      // Create a new session when switching models (following AppLayout pattern)
+      const sessionId = await createSession();
+      if (sessionId) {
+        clearMessages();
+        setPlan([]);
+        setPanelContent(null);
+      }
+    }
+    handleModelClose();
+  };
 
   return (
     <Box
@@ -111,15 +155,86 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
         </Box>
         
         {/* Powered By Badge */}
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 1.5, gap: 0.8, opacity: 0.5 }}>
+        <Box 
+          onClick={handleModelClick}
+          sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            mt: 1.5, 
+            gap: 0.8, 
+            opacity: 0.6,
+            cursor: 'pointer',
+            transition: 'opacity 0.2s',
+            '&:hover': {
+              opacity: 1
+            }
+          }}
+        >
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
             powered by
           </Typography>
-          <img src="/claude-logo.png" alt="Claude" style={{ height: '12px', objectFit: 'contain' }} />
+          <img
+            src={currentModel === 'qwen' ? "/deepseek-logo.png" : "/claude-logo.png"}
+            alt={currentModel === 'qwen' ? "DeepSeek" : "Claude"}
+            style={{ height: '14px', objectFit: 'contain', borderRadius: currentModel === 'qwen' ? '2px' : 0 }}
+          />
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            claude-opus-4-5-20251101
+            {currentModel === 'qwen' ? "DeepSeek-V3.1" : "Claude Opus 4.5"}
           </Typography>
         </Box>
+
+        <Menu
+          anchorEl={modelAnchorEl}
+          open={Boolean(modelAnchorEl)}
+          onClose={handleModelClose}
+          anchorOrigin={{
+            vertical: 'top',
+            horizontal: 'center',
+          }}
+          transformOrigin={{
+            vertical: 'bottom',
+            horizontal: 'center',
+          }}
+          PaperProps={{
+            sx: {
+              bgcolor: 'var(--panel)',
+              border: '1px solid var(--divider)',
+              mb: 1
+            }
+          }}
+        >
+          <MenuItem 
+            onClick={() => handleSwitchModel('qwen')}
+            selected={currentModel === 'qwen'}
+          >
+            <ListItemIcon>
+              <img src="/deepseek-logo.png" style={{ width: 20, height: 20, borderRadius: '2px' }} />
+            </ListItemIcon>
+            <ListItemText primary="DeepSeek V3.1 (HF)" secondary="Via Novita provider" />
+          </MenuItem>
+          <MenuItem
+            onClick={() => handleSwitchModel('anthropic')}
+            selected={currentModel === 'anthropic'}
+          >
+            <ListItemIcon>
+              <img src="/claude-logo.png" style={{ width: 20, height: 20 }} />
+            </ListItemIcon>
+            <ListItemText primary="Claude Opus 4.5" secondary="Requires Anthropic API Key" />
+          </MenuItem>
+        </Menu>
+
+        {/* Error message snackbar */}
+        <Snackbar
+          open={!!errorMessage}
+          autoHideDuration={4000}
+          onClose={() => setErrorMessage(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert onClose={() => setErrorMessage(null)} severity="warning" sx={{ width: '100%' }}>
+            {errorMessage}
+          </Alert>
+        </Snackbar>
       </Box>
     </Box>
   );

@@ -148,7 +148,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               </Box>
             ) : (
               <Typography variant="body2" sx={{ color: 'var(--muted-text)', mb: 2 }}>
-                No API key configured. Add your Anthropic API key to use the agent.
+                Optional. Add your Anthropic API key if you want to use Anthropic models. Hugging Face models work by default with your account.
               </Typography>
             )}
           </Box>

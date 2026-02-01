@@ -50,6 +50,7 @@ class SessionUpdateRequest(BaseModel):
     """Request to update session metadata."""
 
     title: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -324,7 +325,7 @@ async def update_session(
     request: SessionUpdateRequest,
     user: UserContext = Depends(require_auth),
 ) -> dict:
-    """Update session metadata (e.g., title).
+    """Update session metadata (e.g., title, model).
 
     Users can only update their own sessions.
     """
@@ -333,8 +334,15 @@ async def update_session(
     if not info:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # For now, just return success - full implementation would update the session
-    # and mark it dirty for persistence
+    # Update model if provided
+    if request.model_name:
+        success = await session_manager.update_session_model(
+            session_id, request.model_name, user_id=user.user_id
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update session model")
+
+    # For now, just return success
     return {"status": "updated", "session_id": session_id}
 
 

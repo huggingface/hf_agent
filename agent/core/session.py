@@ -43,28 +43,32 @@ class Session:
         tool_router=None,
         context_manager: ContextManager | None = None,
         anthropic_key: Optional[str] = None,
+        hf_token: Optional[str] = None,
     ):
         self.tool_router = tool_router
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
-        hf_token = tool_router.hf_token if tool_router else None
+        # Use provided hf_token or fallback to tool_router's
+        effective_hf_token = hf_token or (tool_router.hf_token if tool_router else None)
+        
         self.context_manager = context_manager or ContextManager(
             max_context=get_max_tokens(config.model_name),
             compact_size=0.1,
             untouched_messages=5,
             tool_specs=tool_specs,
-            hf_token=hf_token,
+            hf_token=effective_hf_token,
         )
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())
         self.config = config or Config(
-            model_name="anthropic/claude-sonnet-4-5-20250929",
+            model_name="huggingface/novita/deepseek-ai/DeepSeek-V3.1",
         )
         self.is_running = True
         self.current_task: asyncio.Task | None = None
         self.pending_approval: Optional[dict[str, Any]] = None
 
-        # User's Anthropic API key (optional, overrides env var)
+        # User's keys
         self.anthropic_key = anthropic_key
+        self.hf_token = effective_hf_token
 
         # Session trajectory logging
         self.logged_events: list[dict] = []

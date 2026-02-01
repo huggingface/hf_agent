@@ -184,6 +184,7 @@ interface SessionStore {
   createSession: () => Promise<string | null>;
   selectSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
+  switchModel: (modelName: string) => Promise<boolean>;
   clearError: () => void;
 }
 
@@ -342,6 +343,34 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
     } catch (error) {
       console.error('Failed to delete session:', error);
       set({ error: 'Failed to delete session' });
+    }
+  },
+
+  switchModel: async (modelName: string) => {
+    const { activeSessionId } = get();
+    if (!activeSessionId) return false;
+
+    const { getAuthHeaders } = useAuthStore.getState();
+
+    try {
+      const response = await fetch(`${API_BASE}/api/session/${activeSessionId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ model_name: modelName }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to switch model');
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Failed to switch model:', error);
+      set({ error: 'Failed to switch model' });
+      return false;
     }
   },
 

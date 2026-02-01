@@ -102,12 +102,7 @@ export default function AppLayout() {
     async (text: string) => {
       if (!activeSessionId || !text.trim()) return;
 
-      // Check if user has Anthropic key
-      if (isAuthenticated() && !user?.has_anthropic_key) {
-        setShowSettings(true);
-        return;
-      }
-
+      // Bypass Anthropic key check as we use HF token
       const userMsg: Message = {
         id: `user_${Date.now()}`,
         role: 'user',
@@ -132,7 +127,7 @@ export default function AppLayout() {
         console.error('Send failed:', e);
       }
     },
-    [activeSessionId, addMessage, getAuthHeaders, isAuthenticated, user]
+    [activeSessionId, addMessage, getAuthHeaders]
   );
 
   const handleLogout = async () => {
@@ -161,15 +156,14 @@ export default function AppLayout() {
     }
   }, [createSession, clearMessages, setPlan, setPanelContent]);
 
-  // Auto-create session when user has API key but no sessions (only after sessions have been loaded)
-  const hasApiKey = user?.has_anthropic_key;
+  // Auto-create session when authenticated but no sessions (only after sessions have been loaded)
   const noSessionsAtAll = sessions.length === 0 && !activeSessionId;
 
   useEffect(() => {
-    if (isAuthenticated() && hasApiKey && sessionsLoaded && noSessionsAtAll && !isCreatingSession) {
+    if (isAuthenticated() && sessionsLoaded && noSessionsAtAll && !isCreatingSession) {
       handleStartSession();
     }
-  }, [isAuthenticated, hasApiKey, sessionsLoaded, noSessionsAtAll, isCreatingSession, handleStartSession]);
+  }, [isAuthenticated, sessionsLoaded, noSessionsAtAll, isCreatingSession, handleStartSession]);
 
   // Show loading spinner while auth is loading
   if (authLoading) {
@@ -212,8 +206,8 @@ export default function AppLayout() {
     );
   }
 
-  // Show setup prompt only if user needs to add API key
-  const needsApiKey = !hasApiKey;
+  // Bypassed setup prompt logic as we use HF token
+  const needsApiKey = false;
 
   if (needsApiKey) {
     return (

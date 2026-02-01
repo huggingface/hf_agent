@@ -5,6 +5,7 @@ Main agent implementation with integrated tool system and MCP support
 import asyncio
 import json
 
+import litellm
 from litellm import ChatCompletionMessageToolCall, Message, ModelResponse, acompletion
 from lmnr import observe
 
@@ -129,14 +130,19 @@ class Handlers:
             tools = session.tool_router.get_tool_specs_for_llm()
 
             try:
-                # Pass user's Anthropic API key if available
+                # Pass user's keys if available
                 completion_kwargs = {
                     "model": session.config.model_name,
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": "auto",
                 }
-                if session.anthropic_key:
+                
+                # Logic for key selection
+                if session.config.model_name.startswith("huggingface/"):
+                    if session.hf_token:
+                        completion_kwargs["api_key"] = session.hf_token
+                elif session.anthropic_key:
                     completion_kwargs["api_key"] = session.anthropic_key
 
                 # Get complete response (non-streaming)

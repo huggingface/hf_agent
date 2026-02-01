@@ -112,12 +112,13 @@ class SessionManager:
             hf_token=hf_token,  # Pass user's HF token
         )
 
-        # Create the agent session with user's Anthropic key if provided
+        # Create the agent session with user's keys if provided
         session = Session(
             event_queue,
             config=self.config,
             tool_router=tool_router,
             anthropic_key=anthropic_key,
+            hf_token=hf_token,
         )
 
         # Create wrapper
@@ -189,6 +190,7 @@ class SessionManager:
             config=self.config,
             tool_router=tool_router,
             anthropic_key=anthropic_key,
+            hf_token=hf_token,
         )
 
         # Restore conversation history if provided
@@ -462,6 +464,33 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
 
+        return True
+
+    async def update_session_model(
+        self, session_id: str, model_name: str, user_id: Optional[str] = None
+    ) -> bool:
+        """Update the model for an active session.
+
+        Args:
+            session_id: Target session
+            model_name: New model name
+            user_id: User making the request (for ownership check)
+
+        Returns:
+            True if updated successfully
+        """
+        async with self._lock:
+            agent_session = self._check_session_ownership(session_id, user_id)
+
+        if not agent_session:
+            return False
+
+        # Update the model in session config
+        agent_session.session.config.model_name = model_name
+        
+        # Persist the change
+        await self._persist_session(session_id)
+        
         return True
 
     def get_session_info(
