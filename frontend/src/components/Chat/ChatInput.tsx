@@ -17,7 +17,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
   const { switchModel, createSession, activeSessionModelName } = useSessionStore();
   const { user } = useAuthStore();
   const { clearMessages, setPlan, setPanelContent } = useAgentStore();
-  const [currentModel, setCurrentModel] = useState<'qwen' | 'anthropic'>('qwen');
+  const [currentModel, setCurrentModel] = useState<'deepseek' | 'anthropic'>('deepseek');
 
   // Sync currentModel with the active session's model
   useEffect(() => {
@@ -26,7 +26,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
       if (activeSessionModelName.includes('anthropic') || activeSessionModelName.includes('claude')) {
         setCurrentModel('anthropic');
       } else {
-        setCurrentModel('qwen');
+        setCurrentModel('deepseek');
       }
     }
   }, [activeSessionModelName]);
@@ -56,7 +56,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
     setModelAnchorEl(null);
   };
 
-  const handleSwitchModel = async (model: 'qwen' | 'anthropic') => {
+  const handleSwitchModel = async (model: 'deepseek' | 'anthropic') => {
     // Check if user has Anthropic API key when switching to Claude
     if (model === 'anthropic' && !user?.has_anthropic_key) {
       setErrorMessage('Please set your Anthropic API key in Settings before using Claude models');
@@ -64,8 +64,8 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
       return;
     }
 
-    const modelName = model === 'qwen'
-      ? 'huggingface/novita/deepseek-ai/DeepSeek-V3.1'
+    const modelName = model === 'deepseek'
+      ? 'huggingface/novita/deepseek-ai/DeepSeek-V3.2'
       : 'anthropic/claude-opus-4-5-20251101';
 
     const success = await switchModel(modelName);
@@ -186,12 +186,12 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             powered by
           </Typography>
           <img
-            src={currentModel === 'qwen' ? "/deepseek-logo.png" : "/claude-logo.png"}
-            alt={currentModel === 'qwen' ? "DeepSeek" : "Claude"}
-            style={{ height: '14px', objectFit: 'contain', borderRadius: currentModel === 'qwen' ? '2px' : 0 }}
+            src={currentModel === 'deepseek' ? "/deepseek-logo.png" : "/claude-logo.png"}
+            alt={currentModel === 'deepseek' ? "DeepSeek" : "Claude"}
+            style={{ height: '14px', objectFit: 'contain', borderRadius: currentModel === 'deepseek' ? '2px' : 0 }}
           />
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            {currentModel === 'qwen' ? "DeepSeek-V3.1" : "Claude Opus 4.5"}
+            {currentModel === 'deepseek' ? "DeepSeek-V3.2" : "Claude Opus 4.5"}
           </Typography>
         </Box>
 
@@ -216,13 +216,13 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
           }}
         >
           <MenuItem 
-            onClick={() => handleSwitchModel('qwen')}
-            selected={currentModel === 'qwen'}
+            onClick={() => handleSwitchModel('deepseek')}
+            selected={currentModel === 'deepseek'}
           >
             <ListItemIcon>
               <img src="/deepseek-logo.png" style={{ width: 20, height: 20, borderRadius: '2px' }} />
             </ListItemIcon>
-            <ListItemText primary="DeepSeek V3.1" secondary="Via Hugging Face (Novita)" />
+            <ListItemText primary="DeepSeek V3.2" secondary="Via Hugging Face (Novita)" />
           </MenuItem>
           <MenuItem
             onClick={() => handleSwitchModel('anthropic')}
