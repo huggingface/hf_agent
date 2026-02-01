@@ -43,6 +43,7 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 frontend/.cache/
+frontend/.vite/
 frontend/*.local
 frontend/.eslintcache
 frontend/npm-debug.log*
