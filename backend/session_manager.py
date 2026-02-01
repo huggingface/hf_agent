@@ -515,6 +515,7 @@ class SessionManager:
             "is_active": agent_session.is_active,
             "message_count": len(agent_session.session.context_manager.items),
             "user_id": agent_session.user_id,
+            "model_name": agent_session.session.config.model_name,
         }
 
     def list_sessions(self, user_id: Optional[str] = None) -> list[dict[str, Any]]:

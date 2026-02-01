@@ -7,6 +7,7 @@ export interface Session {
   title: string;
   createdAt: string;
   messageCount: number;
+  modelName?: string;
 }
 
 export interface MessageSegment {

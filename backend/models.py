@@ -59,6 +59,7 @@ class SessionResponse(BaseModel):
 
     session_id: str
     ready: bool = True
+    model_name: str | None = None
 
 
 class MessageData(BaseModel):
@@ -84,6 +85,7 @@ class SessionInfo(BaseModel):
     is_active: bool
     message_count: int
     user_id: str | None = None  # Owner of the session
+    model_name: str | None = None
 
 
 class HealthResponse(BaseModel):

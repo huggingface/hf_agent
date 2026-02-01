@@ -1,7 +1,6 @@
-import { useState, useCallback, KeyboardEvent } from 'react';
+import { useState, useCallback, useEffect, KeyboardEvent } from 'react';
 import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Snackbar, Alert } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAuthStore } from '@/store/authStore';
 import { useAgentStore } from '@/store/agentStore';
@@ -15,10 +14,22 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
   const [input, setInput] = useState('');
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const { switchModel, createSession } = useSessionStore();
+  const { switchModel, createSession, activeSessionModelName } = useSessionStore();
   const { user } = useAuthStore();
   const { clearMessages, setPlan, setPanelContent } = useAgentStore();
   const [currentModel, setCurrentModel] = useState<'qwen' | 'anthropic'>('qwen');
+
+  // Sync currentModel with the active session's model
+  useEffect(() => {
+    if (activeSessionModelName) {
+      // Determine model type from model_name string
+      if (activeSessionModelName.includes('anthropic') || activeSessionModelName.includes('claude')) {
+        setCurrentModel('anthropic');
+      } else {
+        setCurrentModel('qwen');
+      }
+    }
+  }, [activeSessionModelName]);
 
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled) {
@@ -211,7 +222,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             <ListItemIcon>
               <img src="/deepseek-logo.png" style={{ width: 20, height: 20, borderRadius: '2px' }} />
             </ListItemIcon>
-            <ListItemText primary="DeepSeek V3.1 (HF)" secondary="Via Novita provider" />
+            <ListItemText primary="DeepSeek V3.1" secondary="Via Hugging Face (Novita)" />
           </MenuItem>
           <MenuItem
             onClick={() => handleSwitchModel('anthropic')}

@@ -80,7 +80,12 @@ async def create_session(
         hf_token=hf_token,
         anthropic_key=anthropic_key,
     )
-    return SessionResponse(session_id=session_id, ready=True)
+
+    # Get session info to retrieve model_name
+    info = session_manager.get_session_info(session_id, user_id=user_id)
+    model_name = info.get("model_name") if info else None
+
+    return SessionResponse(session_id=session_id, ready=True, model_name=model_name)
 
 
 @router.get("/session/{session_id}", response_model=SessionInfo)

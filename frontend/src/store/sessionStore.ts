@@ -175,6 +175,7 @@ function extractTextContent(content: any): string {
 interface SessionStore {
   sessions: Session[];
   activeSessionId: string | null;
+  activeSessionModelName: string | null;
   isLoading: boolean;
   isLoaded: boolean;  // True once loadSessions has completed
   error: string | null;
@@ -191,6 +192,7 @@ interface SessionStore {
 export const useSessionStore = create<SessionStore>()((set, get) => ({
   sessions: [],
   activeSessionId: null,
+  activeSessionModelName: null,
   isLoading: false,
   isLoaded: false,
   error: null,
@@ -248,6 +250,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
 
       const data = await response.json();
       const sessionId = data.session_id;
+      const modelName = data.model_name;
 
       // Add new session to the list
       const newSession: Session = {
@@ -255,11 +258,13 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         title: `Chat ${sessionId.slice(0, 8)}`,
         createdAt: new Date().toISOString(),
         messageCount: 0,
+        modelName: modelName,
       };
 
       set((state) => ({
         sessions: [newSession, ...state.sessions],
         activeSessionId: sessionId,
+        activeSessionModelName: modelName,
       }));
 
       return sessionId;
@@ -283,6 +288,17 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
+      // Fetch session info to get model_name
+      const infoResponse = await fetch(`${API_BASE}/api/session/${id}`, {
+        headers: getAuthHeaders(),
+      });
+
+      let modelName: string | null = null;
+      if (infoResponse.ok) {
+        const infoData = await infoResponse.json();
+        modelName = infoData.model_name;
+      }
+
       // Fetch messages for this session
       const response = await fetch(`${API_BASE}/api/session/${id}/messages`, {
         headers: getAuthHeaders(),
@@ -302,7 +318,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const messages = transformRawMessages(data.messages || [], id);
 
       setMessages(messages);
-      set({ activeSessionId: id, isLoading: false });
+      set({ activeSessionId: id, activeSessionModelName: modelName, isLoading: false });
     } catch (error) {
       console.error('Failed to select session:', error);
       set({ isLoading: false, error: 'Failed to load session' });
@@ -365,6 +381,9 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       if (!response.ok) {
         throw new Error('Failed to switch model');
       }
+
+      // Update the active session model name in store
+      set({ activeSessionModelName: modelName });
 
       return true;
     } catch (error) {
