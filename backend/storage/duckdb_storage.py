@@ -28,12 +28,11 @@ HF Dataset Structure:
 
 import asyncio
 import logging
-import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 from uuid import uuid4
 
 import duckdb
@@ -272,7 +271,9 @@ class DuckDBStorage:
                 repo_type="dataset",
             )
 
-            session_files = [f for f in files if f.startswith("sessions/") and f.endswith(".json")]
+            session_files = [
+                f for f in files if f.startswith("sessions/") and f.endswith(".json")
+            ]
             logger.info(f"Found {len(session_files)} JSON session files for recovery")
 
             recovered = 0
@@ -360,7 +361,21 @@ class DuckDBStorage:
         if not self.conn:
             return []
 
-        status_filter = "('active', 'archived')" if include_archived else "('active')"
+        # Include active and closed sessions (closed = properly shut down but resumable)
+        # Archived sessions only if requested, deleted sessions never
+        if include_archived:
+            status_filter = "('active', 'closed', 'archived')"
+        else:
+            status_filter = "('active', 'closed')"
+
+        # Debug: log total sessions in DB for this user
+        total = self.conn.execute(
+            "SELECT COUNT(*), GROUP_CONCAT(DISTINCT status) FROM sessions WHERE user_id = ?",
+            [user_id],
+        ).fetchone()
+        logger.debug(
+            f"list_user_sessions: user_id={user_id}, total sessions={total[0]}, statuses={total[1]}"
+        )
 
         result = self.conn.execute(
             f"""
@@ -375,6 +390,10 @@ class DuckDBStorage:
             """,
             [user_id, limit, offset],
         ).fetchall()
+
+        logger.debug(
+            f"list_user_sessions: returning {len(result)} sessions for user_id={user_id}"
+        )
 
         return [
             SessionIndexEntry(
@@ -545,7 +564,9 @@ class DuckDBStorage:
                     )
 
                 # Mark as synced
-                self.conn.execute("UPDATE sessions SET is_dirty = FALSE WHERE is_dirty = TRUE")
+                self.conn.execute(
+                    "UPDATE sessions SET is_dirty = FALSE WHERE is_dirty = TRUE"
+                )
                 self._consecutive_failures = 0
                 logger.info(f"Synced {dirty_count} sessions to {remote_path}")
 

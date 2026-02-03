@@ -1,7 +1,11 @@
 """FastAPI application for HF Agent web interface."""
 
-import logging
 import os
+
+# Disable huggingface_hub progress bars (must be set before import)
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +22,12 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Suppress noisy loggers
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("litellm").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

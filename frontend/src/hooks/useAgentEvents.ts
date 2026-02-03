@@ -464,13 +464,16 @@ export function useAgentEvents() {
     []
   );
 
-  // Main effect: connect SSE when phase is 'ready'
+  // Main effect: connect SSE when phase is 'ready', keep alive when 'active'
   useEffect(() => {
-    // Only connect when phase is 'ready'
-    if (phase.status !== 'ready') {
-      // If we have an existing connection and phase is no longer ready/active, close it
-      if (eventSourceRef.current && phase.status !== 'active') {
-        console.log('[SSE] Closing connection (phase changed to:', phase.status, ')');
+    const isReadyOrActive = phase.status === 'ready' || phase.status === 'active';
+    const sessionId = phase.status === 'ready' ? phase.sessionId :
+                      phase.status === 'active' ? phase.sessionId : null;
+
+    // If not ready/active, close any existing connection
+    if (!isReadyOrActive) {
+      if (eventSourceRef.current) {
+        console.log('[SSE] Closing connection (phase:', phase.status, ')');
         eventSourceRef.current.close();
         eventSourceRef.current = null;
         currentSessionIdRef.current = null;
@@ -479,10 +482,13 @@ export function useAgentEvents() {
       return;
     }
 
-    const sessionId = phase.sessionId;
-
-    // Don't reconnect if we're already connected to this session
+    // Already connected to this session - do nothing
     if (currentSessionIdRef.current === sessionId && eventSourceRef.current) {
+      return;
+    }
+
+    // Only initiate new connection when phase is 'ready' (not 'active')
+    if (phase.status !== 'ready') {
       return;
     }
 
@@ -530,14 +536,21 @@ export function useAgentEvents() {
 
     eventSourceRef.current = eventSource;
 
+    // Only cleanup on unmount, not on phase changes
+    // Phase changes are handled at the top of the effect
+  }, [phase, handleEvent, setConnected, markActive, markError]);
+
+  // Separate cleanup effect for unmount only
+  useEffect(() => {
     return () => {
-      console.log('[SSE] Cleanup: closing connection');
-      eventSource.close();
-      eventSourceRef.current = null;
-      currentSessionIdRef.current = null;
-      setConnected(false);
+      if (eventSourceRef.current) {
+        console.log('[SSE] Unmount: closing connection');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+        currentSessionIdRef.current = null;
+      }
     };
-  }, [phase.status, phase.status === 'ready' ? phase.sessionId : null, handleEvent, setConnected, markActive, markError]);
+  }, []);
 
   return {
     isConnected: useAgentStore((s) => s.isConnected),

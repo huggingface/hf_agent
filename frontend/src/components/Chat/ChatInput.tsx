@@ -1,10 +1,88 @@
 import { useState, useCallback, useEffect, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Snackbar, Alert } from '@mui/material';
+import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Snackbar, Alert, Chip } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAuthStore } from '@/store/authStore';
 import { useAgentStore } from '@/store/agentStore';
+
+// Model configuration
+interface ModelOption {
+  id: string;
+  name: string;
+  description: string;
+  provider: 'huggingface' | 'anthropic';
+  modelPath: string; // Full path for API
+  avatarUrl: string; // Logo URL
+  recommended?: boolean;
+  requiresApiKey?: boolean;
+}
+
+// Helper to get HF avatar URL from model ID
+const getHfAvatarUrl = (modelId: string) => {
+  const org = modelId.split('/')[0];
+  return `https://huggingface.co/api/avatars/${org}`;
+};
+
+// Curated model list
+const MODEL_OPTIONS: ModelOption[] = [
+  {
+    id: 'claude-opus',
+    name: 'Claude Opus 4.5',
+    description: 'Requires API Key',
+    provider: 'anthropic',
+    modelPath: 'anthropic/claude-opus-4-5-20251101',
+    avatarUrl: '/claude-logo.png',
+    recommended: true,
+    requiresApiKey: true,
+  },
+  {
+    id: 'minimax-m2.1',
+    name: 'MiniMax M2.1',
+    description: 'Via Novita',
+    provider: 'huggingface',
+    modelPath: 'huggingface/novita/MiniMaxAI/MiniMax-M2.1',
+    avatarUrl: getHfAvatarUrl('MiniMaxAI/MiniMax-M2.1'),
+    recommended: true,
+  },
+  {
+    id: 'kimi-k2.5',
+    name: 'Kimi K2.5',
+    description: 'Via Novita',
+    provider: 'huggingface',
+    modelPath: 'huggingface/novita/moonshotai/Kimi-K2.5',
+    avatarUrl: getHfAvatarUrl('moonshotai/Kimi-K2.5'),
+  },
+  {
+    id: 'glm-4.7',
+    name: 'GLM 4.7',
+    description: 'Via Novita',
+    provider: 'huggingface',
+    modelPath: 'huggingface/novita/zai-org/GLM-4.7',
+    avatarUrl: getHfAvatarUrl('zai-org/GLM-4.7'),
+  },
+  {
+    id: 'deepseek-v3.2',
+    name: 'DeepSeek V3.2',
+    description: 'Via Novita',
+    provider: 'huggingface',
+    modelPath: 'huggingface/novita/deepseek-ai/DeepSeek-V3.2',
+    avatarUrl: getHfAvatarUrl('deepseek-ai/DeepSeek-V3.2'),
+  },
+  {
+    id: 'qwen3-coder-480b',
+    name: 'Qwen3 Coder 480B',
+    description: 'Via Nebius',
+    provider: 'huggingface',
+    modelPath: 'huggingface/nebius/Qwen/Qwen3-Coder-480B-A35B-Instruct',
+    avatarUrl: getHfAvatarUrl('Qwen/Qwen3-Coder-480B-A35B-Instruct'),
+  },
+];
+
+// Find model by path (for syncing with backend)
+const findModelByPath = (path: string): ModelOption | undefined => {
+  return MODEL_OPTIONS.find(m => m.modelPath === path || path?.includes(m.id));
+};
 
 interface ChatInputProps {
   onSend: (text: string) => void;
@@ -18,19 +96,21 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
   const { switchModel, createSession, activeModelName } = useSessionStore();
   const { user } = useAuthStore();
   const { clearMessages, setPlan, setPanelContent } = useAgentStore();
-  const [currentModel, setCurrentModel] = useState<'deepseek' | 'anthropic'>('deepseek');
 
-  // Sync currentModel with the active session's model
+  // Track selected model by ID
+  const [selectedModelId, setSelectedModelId] = useState<string>('minimax-m2.1');
+
+  // Sync selectedModelId with the active session's model
   useEffect(() => {
     if (activeModelName) {
-      // Determine model type from model_name string
-      if (activeModelName.includes('anthropic') || activeModelName.includes('claude')) {
-        setCurrentModel('anthropic');
-      } else {
-        setCurrentModel('deepseek');
+      const model = findModelByPath(activeModelName);
+      if (model) {
+        setSelectedModelId(model.id);
       }
     }
   }, [activeModelName]);
+
+  const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId) || MODEL_OPTIONS[0];
 
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled) {
@@ -57,22 +137,18 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
     setModelAnchorEl(null);
   };
 
-  const handleSwitchModel = async (model: 'deepseek' | 'anthropic') => {
+  const handleSwitchModel = async (model: ModelOption) => {
     // Check if user has Anthropic API key when switching to Claude
-    if (model === 'anthropic' && !user?.has_anthropic_key) {
+    if (model.requiresApiKey && !user?.has_anthropic_key) {
       setErrorMessage('Please set your Anthropic API key in Settings before using Claude models');
       handleModelClose();
       return;
     }
 
-    const modelName = model === 'deepseek'
-      ? 'huggingface/novita/deepseek-ai/DeepSeek-V3.2'
-      : 'anthropic/claude-opus-4-5-20251101';
-
-    const success = await switchModel(modelName);
+    const success = await switchModel(model.modelPath);
     if (success) {
-      setCurrentModel(model);
-      // Create a new session when switching models (following AppLayout pattern)
+      setSelectedModelId(model.id);
+      // Create a new session when switching models
       const sessionId = await createSession();
       if (sessionId) {
         clearMessages();
@@ -120,17 +196,19 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             placeholder="Ask anything..."
             disabled={disabled}
             variant="standard"
-            InputProps={{
+            slotProps={{
+              input: {
                 disableUnderline: true,
                 sx: {
-                    color: 'var(--text)',
-                    fontSize: '15px',
-                    fontFamily: 'inherit',
-                    padding: 0,
-                    lineHeight: 1.5,
-                    minHeight: '56px',
-                    alignItems: 'flex-start',
+                  color: 'var(--text)',
+                  fontSize: '15px',
+                  fontFamily: 'inherit',
+                  padding: 0,
+                  lineHeight: 1.5,
+                  minHeight: '56px',
+                  alignItems: 'flex-start',
                 }
+              }
             }}
             sx={{
                 flex: 1,
@@ -165,16 +243,16 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             {disabled ? <CircularProgress size={20} color="inherit" /> : <ArrowUpwardIcon fontSize="small" />}
           </IconButton>
         </Box>
-        
+
         {/* Powered By Badge */}
-        <Box 
+        <Box
           onClick={handleModelClick}
-          sx={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            mt: 1.5, 
-            gap: 0.8, 
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            mt: 1.5,
+            gap: 0.8,
             opacity: 0.6,
             cursor: 'pointer',
             transition: 'opacity 0.2s',
@@ -187,12 +265,12 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             powered by
           </Typography>
           <img
-            src={currentModel === 'deepseek' ? "/deepseek-logo.png" : "/claude-logo.png"}
-            alt={currentModel === 'deepseek' ? "DeepSeek" : "Claude"}
-            style={{ height: '14px', objectFit: 'contain', borderRadius: currentModel === 'deepseek' ? '2px' : 0 }}
+            src={selectedModel.avatarUrl}
+            alt={selectedModel.name}
+            style={{ height: '14px', width: '14px', objectFit: 'contain', borderRadius: '2px' }}
           />
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            {currentModel === 'deepseek' ? "DeepSeek-V3.2" : "Claude Opus 4.5"}
+            {selectedModel.name}
           </Typography>
           <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
         </Box>
@@ -209,32 +287,62 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             vertical: 'bottom',
             horizontal: 'center',
           }}
-          PaperProps={{
-            sx: {
-              bgcolor: 'var(--panel)',
-              border: '1px solid var(--divider)',
-              mb: 1
+          slotProps={{
+            paper: {
+              sx: {
+                bgcolor: 'var(--panel)',
+                border: '1px solid var(--divider)',
+                mb: 1,
+                maxHeight: '400px',
+              }
             }
           }}
         >
-          <MenuItem 
-            onClick={() => handleSwitchModel('deepseek')}
-            selected={currentModel === 'deepseek'}
-          >
-            <ListItemIcon>
-              <img src="/deepseek-logo.png" style={{ width: 20, height: 20, borderRadius: '2px' }} />
-            </ListItemIcon>
-            <ListItemText primary="DeepSeek V3.2" secondary="Via Hugging Face (Novita)" />
-          </MenuItem>
-          <MenuItem
-            onClick={() => handleSwitchModel('anthropic')}
-            selected={currentModel === 'anthropic'}
-          >
-            <ListItemIcon>
-              <img src="/claude-logo.png" style={{ width: 20, height: 20 }} />
-            </ListItemIcon>
-            <ListItemText primary="Claude Opus 4.5" secondary="Requires Anthropic API Key" />
-          </MenuItem>
+          {MODEL_OPTIONS.map((model) => (
+            <MenuItem
+              key={model.id}
+              onClick={() => handleSwitchModel(model)}
+              selected={selectedModelId === model.id}
+              sx={{
+                py: 1.5,
+                '&.Mui-selected': {
+                  bgcolor: 'rgba(255,255,255,0.05)',
+                }
+              }}
+            >
+              <ListItemIcon>
+                <img
+                  src={model.avatarUrl}
+                  alt={model.name}
+                  style={{ width: 24, height: 24, borderRadius: '4px', objectFit: 'cover' }}
+                />
+              </ListItemIcon>
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {model.name}
+                    {model.recommended && (
+                      <Chip
+                        label="Recommended"
+                        size="small"
+                        sx={{
+                          height: '18px',
+                          fontSize: '10px',
+                          bgcolor: 'var(--accent-yellow)',
+                          color: '#000',
+                          fontWeight: 600,
+                        }}
+                      />
+                    )}
+                  </Box>
+                }
+                secondary={model.description}
+                secondaryTypographyProps={{
+                  sx: { fontSize: '12px', color: 'var(--muted-text)' }
+                }}
+              />
+            </MenuItem>
+          ))}
         </Menu>
 
         {/* Error message snackbar */}

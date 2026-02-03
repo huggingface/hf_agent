@@ -112,11 +112,14 @@ async def list_sessions(
     Returns empty list if not authenticated.
     """
     if not user:
+        logger.debug("list_sessions: No authenticated user")
         return []
 
+    logger.info(f"list_sessions: Fetching sessions for user_id={user.user_id}")
     entries = await lifecycle_manager.list_user_sessions(user.user_id)
+    logger.info(f"list_sessions: Found {len(entries)} sessions for user_id={user.user_id}")
 
-    return [
+    result = [
         PersistedSessionInfo(
             session_id=e.session_id,
             title=e.title,
@@ -129,6 +132,9 @@ async def list_sessions(
         for e in entries
         if e.status != "deleted"
     ]
+
+    logger.info(f"list_sessions: Returning {len(result)} sessions (after filtering deleted)")
+    return result
 
 
 class SessionActivateResponse(BaseModel):
