@@ -60,8 +60,9 @@ export default function AppLayout() {
     toggleRightPanel
   } = useLayoutStore();
 
-  // Auth store
+  // Auth store - subscribe to user directly to track auth state changes
   const { user, isLoading: authLoading, getAuthHeaders, isAuthenticated, logout } = useAuthStore();
+  const isAuthed = isAuthenticated(); // Compute once to use in effects
 
   // Local state
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
@@ -105,12 +106,13 @@ export default function AppLayout() {
     };
   }, [handleMouseMove, stopResizing]);
 
-  // Load sessions when authenticated
+  // Load sessions when authenticated (and auth is complete)
   useEffect(() => {
-    if (isAuthenticated() && !sessionsLoaded && !sessionsLoading) {
+    if (isAuthed && !authLoading && !sessionsLoaded && !sessionsLoading) {
+      console.log('[AppLayout] Auth complete, loading sessions...');
       loadSessions();
     }
-  }, [isAuthenticated, sessionsLoaded, sessionsLoading, loadSessions]);
+  }, [isAuthed, authLoading, sessionsLoaded, sessionsLoading, loadSessions]);
 
   // Auto-create first session when:
   // - Authenticated
@@ -119,14 +121,15 @@ export default function AppLayout() {
   // - Phase is idle (not already loading/creating)
   useEffect(() => {
     if (
-      isAuthenticated() &&
+      isAuthed &&
       sessionsLoaded &&
       sessions.length === 0 &&
       phase.status === 'idle'
     ) {
+      console.log('[AppLayout] No sessions found, creating first session...');
       createSession();
     }
-  }, [isAuthenticated, sessionsLoaded, sessions.length, phase.status, createSession]);
+  }, [isAuthed, sessionsLoaded, sessions.length, phase.status, createSession]);
 
   // Send message handler
   const handleSendMessage = useCallback(
@@ -190,7 +193,7 @@ export default function AppLayout() {
   }
 
   // Render: Not authenticated
-  if (!isAuthenticated()) {
+  if (!isAuthed) {
     return <WelcomeScreen />;
   }
 

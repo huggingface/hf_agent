@@ -225,13 +225,21 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   // ============================================================
 
   loadSessions: async () => {
-    const { isAuthenticated, getAuthHeaders } = useAuthStore.getState();
+    const { isAuthenticated, getAuthHeaders, isLoading: authLoading } = useAuthStore.getState();
+
+    // Don't proceed if auth is still loading - caller should wait
+    if (authLoading) {
+      console.log('[sessionStore] loadSessions called while auth still loading, skipping');
+      return;
+    }
 
     if (!isAuthenticated()) {
+      console.log('[sessionStore] loadSessions: not authenticated, clearing sessions');
       set({ sessions: [], sessionsLoaded: true, sessionsLoading: false });
       return;
     }
 
+    console.log('[sessionStore] loadSessions: fetching sessions...');
     set({ sessionsLoading: true, sessionsError: null });
 
     try {
@@ -260,6 +268,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         new Date(a.updatedAt || a.createdAt).getTime()
       );
 
+      console.log(`[sessionStore] loadSessions: loaded ${sessions.length} sessions`);
       set({ sessions, sessionsLoading: false, sessionsLoaded: true });
     } catch (error) {
       console.error('Failed to load sessions:', error);
