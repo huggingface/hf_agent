@@ -8,6 +8,7 @@ import {
   MenuItem,
   Typography,
   CircularProgress,
+  Button,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -15,6 +16,7 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
@@ -26,7 +28,6 @@ import CodePanel from '@/components/CodePanel/CodePanel';
 import ChatInput from '@/components/Chat/ChatInput';
 import MessageList from '@/components/Chat/MessageList';
 import { WelcomeScreen } from '@/components/Welcome';
-import { SetupPrompt } from '@/components/Onboarding';
 import { SettingsModal } from '@/components/Settings';
 import type { Message } from '@/types/agent';
 
@@ -34,8 +35,22 @@ const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
-  const { activeSessionId, sessions, isLoading: sessionsLoading, isLoaded: sessionsLoaded, loadSessions, createSession } = useSessionStore();
-  const { isConnected, isProcessing, messages, addMessage, clearMessages, setPlan, setPanelContent } = useAgentStore();
+  // Session store - using new state machine
+  const {
+    sessions,
+    sessionsLoading,
+    sessionsLoaded,
+    phase,
+    loadSessions,
+    createSession,
+    selectSession,
+    getActiveSessionId,
+  } = useSessionStore();
+
+  // Agent store
+  const { isConnected, isProcessing, messages, addMessage } = useAgentStore();
+
+  // Layout store
   const {
     isLeftSidebarOpen,
     isRightPanelOpen,
@@ -44,14 +59,20 @@ export default function AppLayout() {
     toggleLeftSidebar,
     toggleRightPanel
   } = useLayoutStore();
+
+  // Auth store
   const { user, isLoading: authLoading, getAuthHeaders, isAuthenticated, logout } = useAuthStore();
 
+  // Local state
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   const isResizing = useRef(false);
 
+  // Connect SSE - hook internally manages phase checking
+  useAgentEvents();
+
+  // Panel resize handlers
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     isResizing.current = true;
@@ -84,25 +105,35 @@ export default function AppLayout() {
     };
   }, [handleMouseMove, stopResizing]);
 
-  // Load sessions when authenticated (only once)
-  // Note: user is in deps to re-run when auth state changes (isAuthenticated is a stable function ref)
+  // Load sessions when authenticated
   useEffect(() => {
-    if (isAuthenticated() && !sessionsLoading && !sessionsLoaded) {
+    if (isAuthenticated() && !sessionsLoaded && !sessionsLoading) {
       loadSessions();
     }
-  }, [user, sessionsLoading, sessionsLoaded, loadSessions, isAuthenticated]);
+  }, [isAuthenticated, sessionsLoaded, sessionsLoading, loadSessions]);
 
-  useAgentEvents({
-    sessionId: activeSessionId,
-    onReady: () => console.log('Agent ready'),
-    onError: (error) => console.error('Agent error:', error),
-  });
+  // Auto-create first session when:
+  // - Authenticated
+  // - Sessions loaded
+  // - No sessions exist
+  // - Phase is idle (not already loading/creating)
+  useEffect(() => {
+    if (
+      isAuthenticated() &&
+      sessionsLoaded &&
+      sessions.length === 0 &&
+      phase.status === 'idle'
+    ) {
+      createSession();
+    }
+  }, [isAuthenticated, sessionsLoaded, sessions.length, phase.status, createSession]);
 
+  // Send message handler
   const handleSendMessage = useCallback(
     async (text: string) => {
+      const activeSessionId = getActiveSessionId();
       if (!activeSessionId || !text.trim()) return;
 
-      // Bypass Anthropic key check as we use HF token
       const userMsg: Message = {
         id: `user_${Date.now()}`,
         role: 'user',
@@ -127,7 +158,7 @@ export default function AppLayout() {
         console.error('Send failed:', e);
       }
     },
-    [activeSessionId, addMessage, getAuthHeaders]
+    [getActiveSessionId, addMessage, getAuthHeaders]
   );
 
   const handleLogout = async () => {
@@ -140,32 +171,7 @@ export default function AppLayout() {
     setShowSettings(true);
   };
 
-  const handleStartSession = useCallback(async () => {
-    setIsCreatingSession(true);
-    try {
-      const sessionId = await createSession();
-      if (sessionId) {
-        clearMessages();
-        setPlan([]);
-        setPanelContent(null);
-      }
-    } catch (e) {
-      console.error('Failed to create session:', e);
-    } finally {
-      setIsCreatingSession(false);
-    }
-  }, [createSession, clearMessages, setPlan, setPanelContent]);
-
-  // Auto-create session when authenticated but no sessions (only after sessions have been loaded)
-  const noSessionsAtAll = sessions.length === 0 && !activeSessionId;
-
-  useEffect(() => {
-    if (isAuthenticated() && sessionsLoaded && noSessionsAtAll && !isCreatingSession) {
-      handleStartSession();
-    }
-  }, [isAuthenticated, sessionsLoaded, noSessionsAtAll, isCreatingSession, handleStartSession]);
-
-  // Show loading spinner while auth is loading
+  // Render: Auth loading
   if (authLoading) {
     return (
       <Box
@@ -183,116 +189,20 @@ export default function AppLayout() {
     );
   }
 
-  // Show welcome screen for unauthenticated users
+  // Render: Not authenticated
   if (!isAuthenticated()) {
     return <WelcomeScreen />;
   }
 
-  // Show loading while sessions are being fetched
-  if (sessionsLoading) {
-    return (
-      <Box
-        sx={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'var(--bg)',
-        }}
-      >
-        <CircularProgress />
-      </Box>
-    );
-  }
+  // Derive UI state from phase
+  const isSessionLoading = phase.status === 'loading';
+  const isSessionReady = phase.status === 'ready' || phase.status === 'active';
+  const isSessionError = phase.status === 'error';
+  const isIdle = phase.status === 'idle';
 
-  // Bypassed setup prompt logic as we use HF token
-  const needsApiKey = false;
+  // Determine if chat input should be disabled
+  const isChatDisabled = isProcessing || !isConnected || !isSessionReady;
 
-  if (needsApiKey) {
-    return (
-      <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-        {/* Minimal header for setup screens */}
-        <Box
-          sx={{
-            height: '60px',
-            px: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: 1,
-            borderColor: 'divider',
-            bgcolor: 'background.default',
-          }}
-        >
-          <img
-            src="/hf-logo-white.png"
-            alt="Hugging Face"
-            style={{ height: '32px', objectFit: 'contain' }}
-          />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <IconButton onClick={handleOpenSettings} size="small">
-              <SettingsIcon />
-            </IconButton>
-            <IconButton
-              onClick={(e) => setUserMenuAnchor(e.currentTarget)}
-              size="small"
-            >
-              {user?.picture ? (
-                <Avatar src={user.picture} sx={{ width: 32, height: 32 }} />
-              ) : (
-                <AccountCircleIcon />
-              )}
-            </IconButton>
-            <Menu
-              anchorEl={userMenuAnchor}
-              open={Boolean(userMenuAnchor)}
-              onClose={() => setUserMenuAnchor(null)}
-            >
-              <MenuItem disabled>
-                <Typography variant="body2">{user?.name || user?.username}</Typography>
-              </MenuItem>
-              <MenuItem onClick={handleOpenSettings}>
-                <SettingsIcon sx={{ mr: 1 }} fontSize="small" />
-                Settings
-              </MenuItem>
-              <MenuItem onClick={handleLogout}>
-                <LogoutIcon sx={{ mr: 1 }} fontSize="small" />
-                Logout
-              </MenuItem>
-            </Menu>
-          </Box>
-        </Box>
-
-        {/* Setup content */}
-        <Box sx={{ flex: 1 }}>
-          <SetupPrompt onOpenSettings={handleOpenSettings} />
-        </Box>
-
-        <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
-      </Box>
-    );
-  }
-
-  // Show loading while auto-creating first session
-  if (isCreatingSession) {
-    return (
-      <Box
-        sx={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'var(--bg)',
-        }}
-      >
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  // Full app layout for authenticated users with active session
   return (
     <Box sx={{ display: 'flex', width: '100%', height: '100%' }}>
       {/* Left Sidebar Drawer */}
@@ -402,7 +312,7 @@ export default function AppLayout() {
           </Box>
         </Box>
 
-        {/* Chat Area */}
+        {/* Chat Area - Content depends on phase */}
         <Box
           component="main"
           className="chat-pane"
@@ -415,8 +325,82 @@ export default function AppLayout() {
             padding: '24px',
           }}
         >
-          <MessageList messages={messages} isProcessing={isProcessing} />
-          <ChatInput onSend={handleSendMessage} disabled={isProcessing || !isConnected} />
+          {/* Idle state - no session selected */}
+          {isIdle && sessions.length > 0 && (
+            <Box sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+            }}>
+              <Typography variant="h6" sx={{ color: 'var(--muted-text)' }}>
+                Select a session to continue
+              </Typography>
+              <Typography variant="body2" sx={{ color: 'var(--muted-text)' }}>
+                Or create a new session from the sidebar
+              </Typography>
+            </Box>
+          )}
+
+          {/* Loading state */}
+          {isSessionLoading && (
+            <Box sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+            }}>
+              <CircularProgress />
+              <Typography variant="body2" sx={{ color: 'var(--muted-text)' }}>
+                Loading session...
+              </Typography>
+            </Box>
+          )}
+
+          {/* Error state */}
+          {isSessionError && (
+            <Box sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+            }}>
+              <Typography variant="h6" sx={{ color: 'var(--accent-red)' }}>
+                Failed to load session
+              </Typography>
+              <Typography variant="body2" sx={{ color: 'var(--muted-text)' }}>
+                {phase.status === 'error' ? phase.error : 'Unknown error'}
+              </Typography>
+              <Button
+                variant="outlined"
+                startIcon={<RefreshIcon />}
+                onClick={() => {
+                  if (phase.status === 'error' && phase.sessionId !== '_new_') {
+                    selectSession(phase.sessionId);
+                  } else {
+                    createSession();
+                  }
+                }}
+                sx={{ mt: 2 }}
+              >
+                Retry
+              </Button>
+            </Box>
+          )}
+
+          {/* Ready/Active state - show chat */}
+          {isSessionReady && (
+            <>
+              <MessageList messages={messages} isProcessing={isProcessing} />
+              <ChatInput onSend={handleSendMessage} disabled={isChatDisabled} />
+            </>
+          )}
         </Box>
       </Box>
 

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, KeyboardEvent } from 'react';
 import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Snackbar, Alert } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAuthStore } from '@/store/authStore';
 import { useAgentStore } from '@/store/agentStore';
@@ -14,22 +15,22 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
   const [input, setInput] = useState('');
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const { switchModel, createSession, activeSessionModelName } = useSessionStore();
+  const { switchModel, createSession, activeModelName } = useSessionStore();
   const { user } = useAuthStore();
   const { clearMessages, setPlan, setPanelContent } = useAgentStore();
   const [currentModel, setCurrentModel] = useState<'deepseek' | 'anthropic'>('deepseek');
 
   // Sync currentModel with the active session's model
   useEffect(() => {
-    if (activeSessionModelName) {
+    if (activeModelName) {
       // Determine model type from model_name string
-      if (activeSessionModelName.includes('anthropic') || activeSessionModelName.includes('claude')) {
+      if (activeModelName.includes('anthropic') || activeModelName.includes('claude')) {
         setCurrentModel('anthropic');
       } else {
         setCurrentModel('deepseek');
       }
     }
-  }, [activeSessionModelName]);
+  }, [activeModelName]);
 
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled) {
@@ -193,6 +194,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
             {currentModel === 'deepseek' ? "DeepSeek-V3.2" : "Claude Opus 4.5"}
           </Typography>
+          <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
         </Box>
 
         <Menu

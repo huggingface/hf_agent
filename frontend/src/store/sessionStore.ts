@@ -1,13 +1,65 @@
 import { create } from 'zustand';
-import type { Session, Message, MessageSegment, TraceLog } from '@/types/agent';
+import type { Message, MessageSegment, TraceLog } from '@/types/agent';
 import { useAuthStore } from './authStore';
+import { useAgentStore } from './agentStore';
 
 const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
+
+// Session metadata for list display
+export interface SessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt?: string;
+  messageCount: number;
+  lastPreview?: string;
+  modelName?: string;
+}
+
+// Phase state machine - explicit states for session lifecycle
+export type SessionPhase =
+  | { status: 'idle' }
+  | { status: 'loading'; sessionId: string }
+  | { status: 'ready'; sessionId: string }
+  | { status: 'active'; sessionId: string }
+  | { status: 'error'; sessionId: string; error: string };
+
+interface SessionStore {
+  // Session list (independent of active session)
+  sessions: SessionMeta[];
+  sessionsLoading: boolean;
+  sessionsLoaded: boolean;
+  sessionsError: string | null;
+
+  // Active session state machine
+  phase: SessionPhase;
+
+  // Model name for active session
+  activeModelName: string | null;
+
+  // Actions - List management
+  loadSessions: () => Promise<void>;
+
+  // Actions - Session lifecycle
+  selectSession: (id: string) => Promise<void>;
+  createSession: () => Promise<string | null>;
+  deleteSession: (id: string) => Promise<void>;
+  switchModel: (modelName: string) => Promise<boolean>;
+
+  // Actions - Phase transitions (called by SSE hook)
+  markActive: () => void;
+  markError: (error: string) => void;
+  reset: () => void;
+
+  // Helpers
+  getActiveSessionId: () => string | null;
+  getPhaseSessionId: () => string | null;
+  isSessionSelected: (id: string) => boolean;
+}
 
 /**
  * Transform raw LiteLLM messages into UI Message format with segments.
  * Groups ALL consecutive assistant/tool messages between user messages into ONE blob.
- * This ensures one user message → one assistant response blob in the UI.
  */
 function transformRawMessages(rawMessages: any[], sessionId: string): Message[] {
   const messages: Message[] = [];
@@ -19,10 +71,9 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
   for (const msg of rawMessages) {
     if (msg.role === 'tool' && msg.tool_call_id) {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-      // Check for error indicators in the content
       const isError = content.toLowerCase().includes('error') ||
-                      content.toLowerCase().includes('traceback') ||
-                      content.toLowerCase().includes('exception');
+        content.toLowerCase().includes('traceback') ||
+        content.toLowerCase().includes('exception');
       toolResults.set(msg.tool_call_id, { content, success: !isError });
     }
   }
@@ -40,7 +91,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
     if (!currentAssistantBlob) return;
 
     if (currentAssistantBlob.hasJobTool && currentAssistantBlob.jobToolCalls) {
-      // Create as an approved job message
       messages.push({
         id: `msg-${sessionId}-${msgIndex++}`,
         role: 'assistant',
@@ -57,7 +107,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
         toolOutput: currentAssistantBlob.jobToolOutput,
       });
     } else {
-      // Regular assistant message
       messages.push({
         id: `msg-${sessionId}-${msgIndex++}`,
         role: 'assistant',
@@ -70,11 +119,9 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
   };
 
   for (const msg of rawMessages) {
-    // Skip tool result messages - they're looked up via toolResults map
     if (msg.role === 'tool') continue;
 
     if (msg.role === 'user') {
-      // Flush any pending assistant blob before adding user message
       flushAssistantBlob();
 
       const content = extractTextContent(msg.content);
@@ -85,7 +132,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
         timestamp: new Date().toISOString(),
       });
     } else if (msg.role === 'assistant') {
-      // Initialize blob if needed
       if (!currentAssistantBlob) {
         currentAssistantBlob = {
           segments: [],
@@ -97,7 +143,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
       const textContent = extractTextContent(msg.content);
       const toolCalls = msg.tool_calls || [];
 
-      // Append text content
       if (textContent) {
         if (currentAssistantBlob.content) {
           currentAssistantBlob.content += '\n\n' + textContent;
@@ -107,7 +152,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
         currentAssistantBlob.segments.push({ type: 'text', content: textContent });
       }
 
-      // Process tool calls
       if (toolCalls.length > 0) {
         const tools: TraceLog[] = toolCalls.map((tc: any, idx: number) => {
           const toolCallId = tc.id || `tool_${msgIndex}_${idx}`;
@@ -131,7 +175,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
 
         currentAssistantBlob.segments.push({ type: 'tools', tools });
 
-        // Check for hf_jobs approval tool
         const jobTool = tools.find(t => t.tool === 'hf_jobs' && t.args?.script);
         if (jobTool) {
           currentAssistantBlob.hasJobTool = true;
@@ -148,7 +191,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
     }
   }
 
-  // Flush final assistant blob
   flushAssistantBlob();
 
   console.log('[transformRawMessages] Output:', messages.length, 'messages');
@@ -156,9 +198,6 @@ function transformRawMessages(rawMessages: any[], sessionId: string): Message[] 
   return messages;
 }
 
-/**
- * Extract text content from LiteLLM message content (string or content blocks array).
- */
 function extractTextContent(content: any): string {
   if (typeof content === 'string') {
     return content;
@@ -172,39 +211,28 @@ function extractTextContent(content: any): string {
   return '';
 }
 
-interface SessionStore {
-  sessions: Session[];
-  activeSessionId: string | null;
-  activeSessionModelName: string | null;
-  isLoading: boolean;
-  isLoaded: boolean;  // True once loadSessions has completed
-  error: string | null;
-
-  // Actions
-  loadSessions: () => Promise<void>;
-  createSession: () => Promise<string | null>;
-  selectSession: (id: string) => Promise<void>;
-  deleteSession: (id: string) => Promise<void>;
-  switchModel: (modelName: string) => Promise<boolean>;
-  clearError: () => void;
-}
-
 export const useSessionStore = create<SessionStore>()((set, get) => ({
+  // Initial state
   sessions: [],
-  activeSessionId: null,
-  activeSessionModelName: null,
-  isLoading: false,
-  isLoaded: false,
-  error: null,
+  sessionsLoading: false,
+  sessionsLoaded: false,
+  sessionsError: null,
+  phase: { status: 'idle' },
+  activeModelName: null,
+
+  // ============================================================
+  // SESSION LIST MANAGEMENT
+  // ============================================================
 
   loadSessions: async () => {
     const { isAuthenticated, getAuthHeaders } = useAuthStore.getState();
+
     if (!isAuthenticated()) {
-      set({ sessions: [], isLoading: false, isLoaded: true });
+      set({ sessions: [], sessionsLoaded: true, sessionsLoading: false });
       return;
     }
 
-    set({ isLoading: true, error: null });
+    set({ sessionsLoading: true, sessionsError: null });
 
     try {
       const response = await fetch(`${API_BASE}/api/sessions`, {
@@ -212,30 +240,121 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       });
 
       if (!response.ok) {
-        throw new Error('Failed to load sessions');
+        throw new Error(`Failed to load sessions: ${response.status}`);
       }
 
       const data = await response.json();
 
-      // Transform API response to frontend format
-      const sessions: Session[] = data.map((s: any) => ({
+      const sessions: SessionMeta[] = data.map((s: any) => ({
         id: s.session_id,
         title: s.title || `Chat ${s.session_id.slice(0, 8)}`,
         createdAt: s.created_at,
+        updatedAt: s.updated_at,
         messageCount: s.message_count || 0,
+        lastPreview: s.last_message_preview,
       }));
 
-      set({ sessions, isLoading: false, isLoaded: true });
+      // Sort by most recent
+      sessions.sort((a, b) =>
+        new Date(b.updatedAt || b.createdAt).getTime() -
+        new Date(a.updatedAt || a.createdAt).getTime()
+      );
+
+      set({ sessions, sessionsLoading: false, sessionsLoaded: true });
     } catch (error) {
       console.error('Failed to load sessions:', error);
-      set({ sessions: [], isLoading: false, isLoaded: true, error: 'Failed to load sessions' });
+      set({
+        sessionsLoading: false,
+        sessionsLoaded: true,
+        sessionsError: error instanceof Error ? error.message : 'Failed to load sessions'
+      });
+    }
+  },
+
+  // ============================================================
+  // SESSION ACTIVATION (STATE MACHINE)
+  // ============================================================
+
+  selectSession: async (id: string) => {
+    const { phase } = get();
+
+    // Already active on this session? Do nothing
+    if (phase.status === 'active' && phase.sessionId === id) {
+      return;
+    }
+
+    // Already loading this session? Do nothing
+    if (phase.status === 'loading' && phase.sessionId === id) {
+      return;
+    }
+
+    // Transition: * -> loading
+    set({ phase: { status: 'loading', sessionId: id } });
+
+    // Clear previous session state
+    const agentStore = useAgentStore.getState();
+    agentStore.clearMessages();
+    agentStore.clearTraceLogs();
+    agentStore.setPlan([]);
+    agentStore.clearPanelTabs();
+    agentStore.setCurrentTurnMessageId(null);
+
+    try {
+      const { getAuthHeaders } = useAuthStore.getState();
+
+      // Single request that guarantees session is ready
+      const response = await fetch(`${API_BASE}/api/session/${id}/activate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(error.detail || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Load messages into agent store
+      const messages = transformRawMessages(data.messages || [], id);
+      agentStore.setMessages(messages);
+
+      // Transition: loading -> ready (SSE hook will see this and connect)
+      set({
+        phase: { status: 'ready', sessionId: id },
+        activeModelName: data.model_name || null,
+      });
+
+    } catch (error) {
+      console.error('Failed to activate session:', error);
+      set({
+        phase: {
+          status: 'error',
+          sessionId: id,
+          error: error instanceof Error ? error.message : 'Failed to load session'
+        }
+      });
     }
   },
 
   createSession: async () => {
-    const { getAuthHeaders } = useAuthStore.getState();
+    // Transition: * -> loading
+    set({ phase: { status: 'loading', sessionId: '_new_' } });
+
+    // Clear previous session state
+    const agentStore = useAgentStore.getState();
+    agentStore.clearMessages();
+    agentStore.clearTraceLogs();
+    agentStore.setPlan([]);
+    agentStore.clearPanelTabs();
+    agentStore.setCurrentTurnMessageId(null);
 
     try {
+      const { getAuthHeaders } = useAuthStore.getState();
+
       const response = await fetch(`${API_BASE}/api/session`, {
         method: 'POST',
         headers: {
@@ -252,8 +371,8 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const sessionId = data.session_id;
       const modelName = data.model_name;
 
-      // Add new session to the list
-      const newSession: Session = {
+      // Add to session list
+      const newSession: SessionMeta = {
         id: sessionId,
         title: `Chat ${sessionId.slice(0, 8)}`,
         createdAt: new Date().toISOString(),
@@ -261,73 +380,30 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         modelName: modelName,
       };
 
+      // Update list and transition: loading -> ready
       set((state) => ({
         sessions: [newSession, ...state.sessions],
-        activeSessionId: sessionId,
-        activeSessionModelName: modelName,
+        phase: { status: 'ready', sessionId },
+        activeModelName: modelName || null,
       }));
 
       return sessionId;
     } catch (error) {
       console.error('Failed to create session:', error);
-      set({ error: 'Failed to create session' });
+      set({
+        phase: {
+          status: 'error',
+          sessionId: '_new_',
+          error: error instanceof Error ? error.message : 'Failed to create session'
+        }
+      });
       return null;
-    }
-  },
-
-  selectSession: async (id: string) => {
-    const { activeSessionId } = get();
-
-    // If already selected, do nothing
-    if (activeSessionId === id) {
-      return;
-    }
-
-    const { getAuthHeaders } = useAuthStore.getState();
-
-    set({ isLoading: true, error: null });
-
-    try {
-      // Fetch session info to get model_name
-      const infoResponse = await fetch(`${API_BASE}/api/session/${id}`, {
-        headers: getAuthHeaders(),
-      });
-
-      let modelName: string | null = null;
-      if (infoResponse.ok) {
-        const infoData = await infoResponse.json();
-        modelName = infoData.model_name;
-      }
-
-      // Fetch messages for this session
-      const response = await fetch(`${API_BASE}/api/session/${id}/messages`, {
-        headers: getAuthHeaders(),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to load session');
-      }
-
-      const data = await response.json();
-
-      // Load messages into agentStore
-      const { useAgentStore } = await import('./agentStore');
-      const setMessages = useAgentStore.getState().setMessages;
-
-      // Transform raw LiteLLM messages into UI format with segments, approvals, etc.
-      const messages = transformRawMessages(data.messages || [], id);
-
-      setMessages(messages);
-      set({ activeSessionId: id, activeSessionModelName: modelName, isLoading: false });
-    } catch (error) {
-      console.error('Failed to select session:', error);
-      set({ isLoading: false, error: 'Failed to load session' });
     }
   },
 
   deleteSession: async (id: string) => {
     const { getAuthHeaders } = useAuthStore.getState();
-    const wasActiveSession = get().activeSessionId === id;
+    const { phase } = get();
 
     try {
       const response = await fetch(`${API_BASE}/api/session/${id}`, {
@@ -339,37 +415,37 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         throw new Error('Failed to delete session');
       }
 
-      set((state) => {
-        const newSessions = state.sessions.filter((s) => s.id !== id);
-        const newActiveId = state.activeSessionId === id
-          ? (newSessions.length > 0 ? newSessions[0].id : null)
-          : state.activeSessionId;
+      // Remove from list
+      set((state) => ({
+        sessions: state.sessions.filter((s) => s.id !== id),
+      }));
 
-        return {
-          sessions: newSessions,
-          activeSessionId: newActiveId,
-        };
-      });
+      // If we deleted the selected/active session, reset phase
+      const isCurrentSession =
+        (phase.status === 'active' || phase.status === 'ready' || phase.status === 'loading') &&
+        phase.sessionId === id;
 
-      // If we deleted the active session, clear messages
-      if (wasActiveSession) {
-        const { useAgentStore } = await import('./agentStore');
+      if (isCurrentSession) {
         useAgentStore.getState().clearMessages();
+        set({ phase: { status: 'idle' }, activeModelName: null });
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
-      set({ error: 'Failed to delete session' });
     }
   },
 
   switchModel: async (modelName: string) => {
-    const { activeSessionId } = get();
-    if (!activeSessionId) return false;
+    const { phase } = get();
+    const sessionId = phase.status === 'active' || phase.status === 'ready'
+      ? phase.sessionId
+      : null;
+
+    if (!sessionId) return false;
 
     const { getAuthHeaders } = useAuthStore.getState();
 
     try {
-      const response = await fetch(`${API_BASE}/api/session/${activeSessionId}`, {
+      const response = await fetch(`${API_BASE}/api/session/${sessionId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -382,16 +458,63 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         throw new Error('Failed to switch model');
       }
 
-      // Update the active session model name in store
-      set({ activeSessionModelName: modelName });
-
+      set({ activeModelName: modelName });
       return true;
     } catch (error) {
       console.error('Failed to switch model:', error);
-      set({ error: 'Failed to switch model' });
       return false;
     }
   },
 
-  clearError: () => set({ error: null }),
+  // ============================================================
+  // PHASE TRANSITIONS (called by SSE hook)
+  // ============================================================
+
+  markActive: () => {
+    const { phase } = get();
+    if (phase.status === 'ready') {
+      set({ phase: { status: 'active', sessionId: phase.sessionId } });
+    }
+  },
+
+  markError: (error: string) => {
+    const { phase } = get();
+    if (phase.status === 'ready' || phase.status === 'loading') {
+      set({ phase: { status: 'error', sessionId: phase.sessionId, error } });
+    }
+  },
+
+  reset: () => {
+    set({ phase: { status: 'idle' }, activeModelName: null });
+    useAgentStore.getState().clearMessages();
+  },
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  // Returns session ID only when fully active (SSE connected)
+  getActiveSessionId: () => {
+    const { phase } = get();
+    if (phase.status === 'active') {
+      return phase.sessionId;
+    }
+    return null;
+  },
+
+  // Returns session ID for ready or active phases (for SSE connection)
+  getPhaseSessionId: () => {
+    const { phase } = get();
+    if (phase.status === 'ready' || phase.status === 'active') {
+      return phase.sessionId;
+    }
+    return null;
+  },
+
+  // For sidebar highlighting - show selected even while loading
+  isSessionSelected: (id: string) => {
+    const { phase } = get();
+    if (phase.status === 'idle') return false;
+    return phase.sessionId === id;
+  },
 }));

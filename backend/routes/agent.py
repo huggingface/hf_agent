@@ -6,20 +6,19 @@ import logging
 from typing import Optional
 
 from auth.user_context import UserContext, get_current_user, require_auth
+from event_manager import event_manager
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from lifecycle import lifecycle_manager
 from models import (
     ApprovalRequest,
     HealthResponse,
-    MessageData,
     SessionInfo,
     SessionResponse,
     SubmitRequest,
 )
 from pydantic import BaseModel
 from session_manager import session_manager
-from event_manager import event_manager
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +131,106 @@ async def list_sessions(
     ]
 
 
+class SessionActivateResponse(BaseModel):
+    """Response from session activation."""
+
+    session_id: str
+    messages: list[dict]
+    model_name: str | None = None
+    status: str  # 'ready' or 'active'
+
+
+@router.post("/session/{session_id}/activate", response_model=SessionActivateResponse)
+async def activate_session(
+    session_id: str,
+    user: UserContext = Depends(require_auth),
+) -> SessionActivateResponse:
+    """Activate a session for use.
+
+    This endpoint:
+    1. Checks if session exists in memory (already active)
+    2. If not, loads from persistence
+    3. Creates in-memory session
+    4. Returns messages and confirms session is ready
+
+    This guarantees that after this call succeeds, the session is ready for SSE connection.
+    """
+    # First, check if session is already in memory
+    info = session_manager.get_session_info(session_id, user_id=user.user_id)
+
+    if info:
+        # Session already in memory - return current messages
+        agent_session = session_manager.sessions.get(session_id)
+        if agent_session:
+            messages = [
+                item.model_dump()
+                for item in agent_session.session.context_manager.items
+                if item.role != "system"
+            ]
+            return SessionActivateResponse(
+                session_id=session_id,
+                messages=messages,
+                model_name=info.get("model_name"),
+                status="active",
+            )
+
+    # Session not in memory - load from persistence
+    try:
+        persisted = await lifecycle_manager.load_session(session_id)
+    except Exception as e:
+        logger.error(f"Failed to load session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load session: {str(e)}")
+
+    if not persisted:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if persisted.user_id != user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if persisted.status == "deleted":
+        raise HTTPException(status_code=404, detail="Session has been deleted")
+
+    # Parse messages
+    raw_messages = []
+    try:
+        raw_messages = json.loads(persisted.messages_json)
+        raw_messages = [m for m in raw_messages if m.get("role") != "system"]
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse messages for session {session_id}: {e}")
+        raw_messages = []
+    except Exception as e:
+        logger.error(
+            f"Failed to process messages for session {session_id}: {e}", exc_info=True
+        )
+        raw_messages = []
+
+    # Create in-memory session - this MUST succeed for SSE to work
+    try:
+        await session_manager.create_session_with_id(
+            session_id=session_id,
+            user_id=user.user_id,
+            hf_token=user.hf_token,
+            anthropic_key=user.anthropic_key,
+            history=raw_messages,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create in-memory session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to activate session")
+
+    # Verify session was created
+    info = session_manager.get_session_info(session_id, user_id=user.user_id)
+    if not info:
+        raise HTTPException(status_code=500, detail="Session activation failed")
+
+    return SessionActivateResponse(
+        session_id=session_id,
+        messages=raw_messages,
+        model_name=persisted.model_name,
+        status="ready",
+    )
+
+
 @router.get("/session/{session_id}/messages", response_model=SessionMessagesResponse)
 async def get_session_messages(
     session_id: str,
@@ -140,9 +239,10 @@ async def get_session_messages(
     """Get messages for a session.
 
     Loads from HF Dataset and creates in-memory session if needed.
-    """
-    import json
 
+    Note: Consider using POST /session/{id}/activate instead, which guarantees
+    the session is ready for SSE connection.
+    """
     # Load persisted session
     try:
         persisted = await lifecycle_manager.load_session(session_id)
@@ -170,7 +270,9 @@ async def get_session_messages(
         logger.error(f"Failed to parse messages for session {session_id}: {e}")
         raw_messages = []
     except Exception as e:
-        logger.error(f"Failed to process messages for session {session_id}: {e}", exc_info=True)
+        logger.error(
+            f"Failed to process messages for session {session_id}: {e}", exc_info=True
+        )
         raw_messages = []
 
     # Create in-memory session if not already active (for continuing conversation)
@@ -345,7 +447,9 @@ async def update_session(
             session_id, request.model_name, user_id=user.user_id
         )
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to update session model")
+            raise HTTPException(
+                status_code=500, detail="Failed to update session model"
+            )
 
     # For now, just return success
     return {"status": "updated", "session_id": session_id}
@@ -377,7 +481,9 @@ async def event_stream(
         logger.warning(
             f"SSE connection rejected: Session {session_id} not found or not authorized"
         )
-        raise HTTPException(status_code=404, detail="Session not found or not authorized")
+        raise HTTPException(
+            status_code=404, detail="Session not found or not authorized"
+        )
 
     async def event_generator():
         """Generate SSE events from the event queue."""

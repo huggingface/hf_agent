@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
-import { useSessionStore } from '@/store/sessionStore';
 import MessageBubble from './MessageBubble';
 import type { Message } from '@/types/agent';
 
@@ -39,7 +38,6 @@ const TechnicalIndicator = () => (
 
 export default function MessageList({ messages, isProcessing }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { activeSessionId } = useSessionStore();
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -88,11 +86,6 @@ export default function MessageList({ messages, isProcessing }: MessageListProps
           </Box>
         )}
 
-        {activeSessionId && (
-          // ApprovalFlow is now handled within messages
-          null
-        )}
-        
         <div ref={bottomRef} />
       </Box>
     </Box>

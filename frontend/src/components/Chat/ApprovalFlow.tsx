@@ -18,7 +18,7 @@ interface ApprovalFlowProps {
 export default function ApprovalFlow({ message }: ApprovalFlowProps) {
   const { setPanelContent, setPanelTab, setActivePanelTab, clearPanelTabs, updateMessage, panelTabs, editedScripts, clearEditedScripts } = useAgentStore();
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
-  const { activeSessionId } = useSessionStore();
+  const getActiveSessionId = useSessionStore((s) => s.getActiveSessionId);
   const { getAuthHeaders } = useAuthStore();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [feedback, setFeedback] = useState('');
@@ -92,6 +92,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
   }, [currentIndex, batch, status, setPanelContent]);
 
   const handleResolve = useCallback(async (approved: boolean) => {
+    const activeSessionId = getActiveSessionId();
     if (!batch || !activeSessionId) return;
 
     const currentTool = batch.tools[currentIndex];
@@ -158,7 +159,7 @@ export default function ApprovalFlow({ message }: ApprovalFlowProps) {
         console.error('Approval submission failed:', e);
       }
     }
-  }, [activeSessionId, message.id, batch, currentIndex, feedback, decisions, approvalData, updateMessage, panelTabs, editedScripts, clearEditedScripts]);
+  }, [getActiveSessionId, message.id, batch, currentIndex, feedback, decisions, approvalData, updateMessage, panelTabs, editedScripts, clearEditedScripts, getAuthHeaders]);
 
   if (!batch || currentIndex >= batch.tools.length) return null;
 

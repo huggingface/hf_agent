@@ -2,28 +2,24 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useAgentStore } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { useAuthStore } from '@/store/authStore';
+import { useSessionStore } from '@/store/sessionStore';
 import type { AgentEvent } from '@/types/events';
 import type { Message, TraceLog } from '@/types/agent';
 
 const API_BASE = import.meta.env.DEV ? 'http://127.0.0.1:7860' : '';
 
-interface UseAgentEventsOptions {
-  sessionId: string | null;
-  onReady?: () => void;
-  onError?: (error: string) => void;
-}
-
 /**
  * SSE-based hook for receiving agent events.
- * EventSource auto-reconnects on connection loss.
+ * Only connects when session phase is 'ready' - guaranteeing the backend session exists.
  */
-export function useAgentEvents({
-  sessionId,
-  onReady,
-  onError,
-}: UseAgentEventsOptions) {
+export function useAgentEvents() {
   const eventSourceRef = useRef<EventSource | null>(null);
-  const isConnectingRef = useRef(false);
+  const currentSessionIdRef = useRef<string | null>(null);
+
+  // Get phase from session store
+  const phase = useSessionStore((s) => s.phase);
+  const markActive = useSessionStore((s) => s.markActive);
+  const markError = useSessionStore((s) => s.markError);
 
   const {
     addMessage,
@@ -49,18 +45,14 @@ export function useAgentEvents({
 
   const handleEvent = useCallback(
     (event: AgentEvent) => {
-      if (!sessionId) return;
-
       switch (event.event_type) {
         case 'connected':
-          // Initial SSE connection established
           setConnected(true);
           break;
 
         case 'ready':
           setConnected(true);
           setProcessing(false);
-          onReady?.();
           break;
 
         case 'processing':
@@ -71,12 +63,11 @@ export function useAgentEvents({
 
         case 'assistant_message': {
           const content = (event.data?.content as string) || '';
-          if (!content) break; // No text content, nothing to add
+          if (!content) break;
 
           const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
 
           if (currentTurnMsgId) {
-            // Add text segment to existing message
             const messages = useAgentStore.getState().messages;
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
@@ -89,7 +80,6 @@ export function useAgentEvents({
               });
             }
           } else {
-            // Create new message with text segment
             const messageId = `msg_${Date.now()}`;
             const message: Message = {
               id: messageId,
@@ -119,15 +109,12 @@ export function useAgentEvents({
               args: toolName === 'hf_jobs' ? args : undefined,
             };
 
-            // Add tool to traceLogs for reference
             addTraceLog(log);
 
-            // Immediately add/update tools segment in current message
             const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
             const currentTrace = useAgentStore.getState().traceLogs;
 
             if (currentTurnMsgId) {
-              // Add to existing message's tools segment
               const messages = useAgentStore.getState().messages;
               const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
@@ -136,17 +123,14 @@ export function useAgentEvents({
                 const lastSegment = segments[segments.length - 1];
 
                 if (lastSegment && lastSegment.type === 'tools') {
-                  // Append to existing tools segment
                   lastSegment.tools = [...currentTrace];
                 } else {
-                  // Create new tools segment
                   segments.push({ type: 'tools', tools: [...currentTrace] });
                 }
 
                 updateMessage(currentTurnMsgId, { segments });
               }
             } else {
-              // No message yet - create one with tools segment
               const messageId = `msg_${Date.now()}`;
               const message: Message = {
                 id: messageId,
@@ -161,7 +145,6 @@ export function useAgentEvents({
           }
 
           if (toolName === 'hf_jobs' && (args.operation === 'run' || args.operation === 'scheduled run') && args.script) {
-            // Clear previous job state when starting a new job
             setActiveJob(null);
             clearPanelTabs();
             setPanelTab({
@@ -185,7 +168,7 @@ export function useAgentEvents({
             setLeftSidebarOpen(false);
           }
 
-          console.log('Tool call:', toolName, args);
+          console.log('[SSE] Tool call:', toolName, args);
           break;
         }
 
@@ -194,10 +177,8 @@ export function useAgentEvents({
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
 
-          // Update the trace log
           updateTraceLog(toolName, { completed: true, output, success });
 
-          // Update the tools segment in current message to reflect completion
           const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
           const currentTrace = useAgentStore.getState().traceLogs;
 
@@ -206,7 +187,6 @@ export function useAgentEvents({
             const existingMsg = messages.find(m => m.id === currentTurnMsgId);
 
             if (existingMsg && existingMsg.segments) {
-              // Find and update the tools segment with updated trace logs
               const segments = existingMsg.segments.map(seg => {
                 if (seg.type === 'tools') {
                   return { ...seg, tools: [...currentTrace] };
@@ -218,19 +198,16 @@ export function useAgentEvents({
           }
 
           if (toolName === 'hf_jobs') {
-            const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+            const turnMsgId = useAgentStore.getState().currentTurnMessageId;
 
-            if (currentTurnMsgId) {
-              // Update current turn message with job output
+            if (turnMsgId) {
               const messages = useAgentStore.getState().messages;
-              const currentMsg = messages.find(m => m.id === currentTurnMsgId);
+              const currentMsg = messages.find(m => m.id === turnMsgId);
               const currentOutput = currentMsg?.toolOutput || '';
               const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
 
-              updateMessage(currentTurnMsgId, { toolOutput: newOutput });
-              console.log('Updated current turn message with job output:', toolName);
+              updateMessage(turnMsgId, { toolOutput: newOutput });
             } else {
-              // Fallback: look for recent message with approval or create new one
               const messages = useAgentStore.getState().messages;
               const jobMsg = [...messages].reverse().find(m => m.approval);
 
@@ -238,12 +215,10 @@ export function useAgentEvents({
                 const currentOutput = jobMsg.toolOutput || '';
                 const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
                 updateMessage(jobMsg.id, { toolOutput: newOutput });
-                console.log('Updated approval message with job output:', toolName);
               } else {
-                // Last resort: create new message (shouldn't happen with new flow)
                 const traceLogs = useAgentStore.getState().traceLogs;
                 const jobTrace = [...traceLogs].reverse().find(t => t.tool === 'hf_jobs');
-                const args = jobTrace?.args || {};
+                const traceArgs = jobTrace?.args || {};
 
                 const messageId = `msg_${Date.now()}`;
                 const autoExecMessage: Message = {
@@ -256,7 +231,7 @@ export function useAgentEvents({
                     batch: {
                       tools: [{
                         tool: toolName,
-                        arguments: args,
+                        arguments: traceArgs,
                         tool_call_id: `auto_${Date.now()}`
                       }],
                       count: 1
@@ -266,12 +241,11 @@ export function useAgentEvents({
                 };
                 addMessage(autoExecMessage);
                 setCurrentTurnMessageId(messageId);
-                console.log('Created auto-exec message with tool output:', toolName);
               }
             }
           }
 
-          console.log('Tool output:', toolName, success);
+          console.log('[SSE] Tool output:', toolName, success);
           break;
         }
 
@@ -309,7 +283,6 @@ export function useAgentEvents({
           const hardware = (event.data?.hardware as string) || 'cpu-basic';
           const isGpu = (event.data?.is_gpu as boolean) || false;
 
-          // Set the active job - this will show the JobStatusHeader
           setActiveJob({
             jobId,
             url,
@@ -320,7 +293,6 @@ export function useAgentEvents({
             statusMessage: isGpu ? 'Waiting for GPU resources...' : 'Starting job...',
           });
 
-          // Create logs tab with initial empty content
           setPanelTab({
             id: 'logs',
             title: 'Logs',
@@ -328,7 +300,6 @@ export function useAgentEvents({
             language: 'text'
           });
 
-          // Switch to logs tab and open panel
           setActivePanelTab('logs');
           if (!useLayoutStore.getState().isRightPanelOpen) {
             setRightPanelOpen(true);
@@ -340,7 +311,6 @@ export function useAgentEvents({
           const status = (event.data?.status as string) || '';
           const message = (event.data?.message as string) || '';
 
-          // Map backend status to frontend status type
           const statusMap: Record<string, 'queued' | 'pending' | 'running' | 'completed' | 'failed' | 'canceled' | 'error'> = {
             'queued': 'queued',
             'pending': 'pending',
@@ -354,10 +324,8 @@ export function useAgentEvents({
           const mappedStatus = statusMap[status.toLowerCase()] || 'pending';
           updateJobStatus(mappedStatus, message);
 
-          // Clear active job when job completes - wait 3 seconds so user can see final status
           if (['completed', 'failed', 'canceled', 'error'].includes(mappedStatus)) {
             setTimeout(() => {
-              // Only clear if this is still the same job and still in terminal state
               const currentJob = useAgentStore.getState().activeJob;
               if (currentJob && ['completed', 'failed', 'canceled', 'error'].includes(currentJob.status)) {
                 setActiveJob(null);
@@ -391,10 +359,8 @@ export function useAgentEvents({
           };
 
           if (currentTurnMsgId) {
-            // Add approval to existing turn message
             updateMessage(currentTurnMsgId, { approval: approvalData });
           } else {
-            // No message yet - create one with approval (shouldn't happen with new flow)
             const messageId = `msg_${Date.now()}`;
             const message: Message = {
               id: messageId,
@@ -448,7 +414,6 @@ export function useAgentEvents({
             setLeftSidebarOpen(false);
           }
 
-          // Don't reset currentTurnMessageId - keep accumulating into same blob
           setPendingApprovals(null);
           setProcessing(false);
           break;
@@ -456,14 +421,12 @@ export function useAgentEvents({
 
         case 'turn_complete':
           setProcessing(false);
-          // Don't reset currentTurnMessageId here - keep accumulating into same message
-          // until user sends a new message (reset happens in 'processing' event)
           break;
 
         case 'compacted': {
           const oldTokens = event.data?.old_tokens as number;
           const newTokens = event.data?.new_tokens as number;
-          console.log(`Context compacted: ${oldTokens} -> ${newTokens} tokens`);
+          console.log(`[SSE] Context compacted: ${oldTokens} -> ${newTokens} tokens`);
           break;
         }
 
@@ -471,7 +434,6 @@ export function useAgentEvents({
           const errorMsg = (event.data?.error as string) || 'Unknown error';
           setError(errorMsg);
           setProcessing(false);
-          onError?.(errorMsg);
           break;
         }
 
@@ -489,48 +451,61 @@ export function useAgentEvents({
 
         case 'server_shutdown': {
           const message = event.data?.message as string;
-          console.warn('Server shutdown:', message);
+          console.warn('[SSE] Server shutdown:', message);
           setError(message || 'Server is shutting down');
           setConnected(false);
           break;
         }
 
         default:
-          console.log('Unknown event:', event);
+          console.log('[SSE] Unknown event:', event);
       }
     },
-    [sessionId, onReady, onError]
+    []
   );
 
-  const connect = useCallback(() => {
-    if (!sessionId) return;
-
-    // Prevent duplicate connections
-    if (isConnectingRef.current || eventSourceRef.current?.readyState === EventSource.OPEN) {
+  // Main effect: connect SSE when phase is 'ready'
+  useEffect(() => {
+    // Only connect when phase is 'ready'
+    if (phase.status !== 'ready') {
+      // If we have an existing connection and phase is no longer ready/active, close it
+      if (eventSourceRef.current && phase.status !== 'active') {
+        console.log('[SSE] Closing connection (phase changed to:', phase.status, ')');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+        currentSessionIdRef.current = null;
+        setConnected(false);
+      }
       return;
     }
 
-    isConnectingRef.current = true;
+    const sessionId = phase.sessionId;
 
-    // Close existing connection if any
+    // Don't reconnect if we're already connected to this session
+    if (currentSessionIdRef.current === sessionId && eventSourceRef.current) {
+      return;
+    }
+
+    // Close existing connection if connecting to different session
     if (eventSourceRef.current) {
+      console.log('[SSE] Closing previous connection');
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
 
-    // Build SSE URL
     const token = useAuthStore.getState().token;
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
     const sseUrl = `${API_BASE}/api/events/${sessionId}${tokenParam}`;
 
-    console.log('Connecting to SSE:', sseUrl.replace(/token=[^&]+/, 'token=***'));
+    console.log('[SSE] Connecting to session:', sessionId);
 
     const eventSource = new EventSource(sseUrl);
 
     eventSource.onopen = () => {
-      console.log('SSE connected');
-      isConnectingRef.current = false;
+      console.log('[SSE] Connected successfully');
+      currentSessionIdRef.current = sessionId;
       setConnected(true);
+      markActive(); // Transition: ready -> active
     };
 
     eventSource.onmessage = (event) => {
@@ -538,50 +513,33 @@ export function useAgentEvents({
         const data = JSON.parse(event.data) as AgentEvent;
         handleEvent(data);
       } catch (e) {
-        console.error('Failed to parse SSE message:', e);
+        console.error('[SSE] Failed to parse message:', e);
       }
     };
 
     eventSource.onerror = (error) => {
-      console.error('SSE error:', error);
-      isConnectingRef.current = false;
+      console.error('[SSE] Connection error:', error);
       setConnected(false);
-      // EventSource auto-reconnects, but we should track state
+
+      // If connection failed and we never opened, mark as error
+      if (eventSource.readyState === EventSource.CLOSED) {
+        markError('Failed to connect to session');
+        currentSessionIdRef.current = null;
+      }
     };
 
     eventSourceRef.current = eventSource;
-  }, [sessionId, handleEvent, setConnected]);
-
-  const disconnect = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-      setConnected(false);
-    }
-  }, [setConnected]);
-
-  // Connect when sessionId changes
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!sessionId) {
-      disconnect();
-      return;
-    }
-
-    // Small delay to ensure session is fully created on backend
-    const timeoutId = setTimeout(() => {
-      connect();
-    }, 100);
 
     return () => {
-      clearTimeout(timeoutId);
-      disconnect();
+      console.log('[SSE] Cleanup: closing connection');
+      eventSource.close();
+      eventSourceRef.current = null;
+      currentSessionIdRef.current = null;
+      setConnected(false);
     };
-  }, [sessionId]); // Only reconnect when sessionId changes
+  }, [phase.status, phase.status === 'ready' ? phase.sessionId : null, handleEvent, setConnected, markActive, markError]);
 
   return {
-    isConnected: eventSourceRef.current?.readyState === EventSource.OPEN,
-    connect,
-    disconnect,
+    isConnected: useAgentStore((s) => s.isConnected),
   };
 }

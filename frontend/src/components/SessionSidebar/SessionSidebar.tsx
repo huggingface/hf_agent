@@ -10,7 +10,6 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useSessionStore } from '@/store/sessionStore';
-import { useAgentStore } from '@/store/agentStore';
 
 interface SessionSidebarProps {
   onClose?: () => void;
@@ -19,32 +18,25 @@ interface SessionSidebarProps {
 export default function SessionSidebar({ onClose }: SessionSidebarProps) {
   const {
     sessions,
-    activeSessionId,
-    isLoading,
+    sessionsLoading,
+    phase,
     createSession,
     selectSession,
     deleteSession,
+    isSessionSelected,
   } = useSessionStore();
-  const { setPlan, setPanelContent, clearMessages } = useAgentStore();
 
   const handleNewSession = useCallback(async () => {
-    const sessionId = await createSession();
-    if (sessionId) {
-      clearMessages();
-      setPlan([]);
-      setPanelContent(null);
-      onClose?.();
-    }
-  }, [createSession, clearMessages, setPlan, setPanelContent, onClose]);
+    await createSession();
+    onClose?.();
+  }, [createSession, onClose]);
 
   const handleSelectSession = useCallback(
     async (sessionId: string) => {
       await selectSession(sessionId);
-      setPlan([]);
-      setPanelContent(null);
       onClose?.();
     },
-    [selectSession, setPlan, setPanelContent, onClose]
+    [selectSession, onClose]
   );
 
   const handleDeleteSession = useCallback(
@@ -63,6 +55,11 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  // Check if a session is currently loading
+  const isLoadingSession = (sessionId: string) => {
+    return phase.status === 'loading' && phase.sessionId === sessionId;
   };
 
   return (
@@ -90,6 +87,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
           fullWidth
           className="create-session"
           onClick={handleNewSession}
+          disabled={phase.status === 'loading'}
           sx={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -107,6 +105,9 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
               bgcolor: 'rgba(255,255,255,0.02)',
               border: '1px solid rgba(255,255,255,0.1)',
             },
+            '&:disabled': {
+              opacity: 0.5,
+            },
             '&::before': {
               content: '""',
               width: '4px',
@@ -121,20 +122,29 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
         {/* Session List */}
         <Box sx={{ flex: 1, overflow: 'auto', mx: -1, px: 1 }}>
-          {isLoading && (
+          {sessionsLoading && sessions.length === 0 && (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
               <CircularProgress size={20} sx={{ color: 'var(--muted-text)' }} />
             </Box>
           )}
+
+          {sessions.length === 0 && !sessionsLoading && (
+            <Typography variant="body2" sx={{ color: 'var(--muted-text)', textAlign: 'center', py: 2 }}>
+              No sessions yet
+            </Typography>
+          )}
+
           <List disablePadding sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {[...sessions].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((session) => {
-              const isSelected = session.id === activeSessionId;
+            {sessions.map((session) => {
+              const isSelected = isSessionSelected(session.id);
+              const isLoading = isLoadingSession(session.id);
+
               return (
                 <ListItem
                   key={session.id}
                   disablePadding
                   className="session-item"
-                  onClick={() => handleSelectSession(session.id)}
+                  onClick={() => !isLoading && handleSelectSession(session.id)}
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
@@ -142,18 +152,19 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                     padding: '10px',
                     borderRadius: 'var(--radius-md)',
                     bgcolor: isSelected ? 'rgba(255,255,255,0.05)' : 'transparent',
-                    cursor: 'pointer',
+                    cursor: isLoading ? 'default' : 'pointer',
+                    opacity: isLoading ? 0.7 : 1,
                     transition: 'background 0.18s ease, transform 0.08s ease',
                     '&:hover': {
-                      bgcolor: 'rgba(255,255,255,0.02)',
-                      transform: 'translateY(-1px)',
+                      bgcolor: isLoading ? undefined : 'rgba(255,255,255,0.02)',
+                      transform: isLoading ? undefined : 'translateY(-1px)',
                     },
                     '& .delete-btn': {
                       opacity: 0,
                       transition: 'opacity 0.2s',
                     },
                     '&:hover .delete-btn': {
-                      opacity: 1,
+                      opacity: isLoading ? 0 : 1,
                     }
                   }}
                 >
@@ -163,19 +174,28 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                     </Typography>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                       <Typography className="time" variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
-                        {formatTime(session.createdAt)}
+                        {formatTime(session.updatedAt || session.createdAt)}
                       </Typography>
+                      {session.messageCount > 0 && (
+                        <Typography variant="caption" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
+                          · {session.messageCount} msgs
+                        </Typography>
+                      )}
                     </Box>
                   </Box>
 
-                  <IconButton
-                    className="delete-btn"
-                    size="small"
-                    onClick={(e) => handleDeleteSession(session.id, e)}
-                    sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
+                  {isLoading ? (
+                    <CircularProgress size={16} sx={{ color: 'var(--muted-text)' }} />
+                  ) : (
+                    <IconButton
+                      className="delete-btn"
+                      size="small"
+                      onClick={(e) => handleDeleteSession(session.id, e)}
+                      sx={{ color: 'var(--muted-text)', '&:hover': { color: 'var(--accent-red)' } }}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  )}
                 </ListItem>
               );
             })}
@@ -187,7 +207,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
       <Box sx={{ p: 2, borderTop: '1px solid rgba(255,255,255,0.03)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Typography variant="caption" className="small-note" sx={{ fontSize: '12px', color: 'var(--muted-text)' }}>
-            {sessions.length} sessions
+            {sessions.length} session{sessions.length !== 1 ? 's' : ''}
           </Typography>
         </Box>
       </Box>
