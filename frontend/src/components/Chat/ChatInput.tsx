@@ -1,10 +1,12 @@
 import { useState, useCallback, useEffect, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Snackbar, Alert, Chip } from '@mui/material';
+import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Chip } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import KeyIcon from '@mui/icons-material/Key';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAuthStore } from '@/store/authStore';
 import { useAgentStore } from '@/store/agentStore';
+import { AnthropicKeyModal } from '@/components/Auth/AnthropicKeyModal';
 
 // Model configuration
 interface ModelOption {
@@ -26,16 +28,6 @@ const getHfAvatarUrl = (modelId: string) => {
 
 // Curated model list
 const MODEL_OPTIONS: ModelOption[] = [
-  {
-    id: 'claude-opus',
-    name: 'Claude Opus 4.5',
-    description: 'Requires API Key',
-    provider: 'anthropic',
-    modelPath: 'anthropic/claude-opus-4-5-20251101',
-    avatarUrl: '/claude-logo.png',
-    recommended: true,
-    requiresApiKey: true,
-  },
   {
     id: 'minimax-m2.1',
     name: 'MiniMax M2.1',
@@ -77,6 +69,16 @@ const MODEL_OPTIONS: ModelOption[] = [
     modelPath: 'huggingface/nebius/Qwen/Qwen3-Coder-480B-A35B-Instruct',
     avatarUrl: getHfAvatarUrl('Qwen/Qwen3-Coder-480B-A35B-Instruct'),
   },
+  {
+    id: 'claude-opus',
+    name: 'Claude Opus 4.5',
+    description: 'Requires API Key',
+    provider: 'anthropic',
+    modelPath: 'anthropic/claude-opus-4-5-20251101',
+    avatarUrl: '/claude-logo.png',
+    recommended: true,
+    requiresApiKey: true,
+  },
 ];
 
 // Find model by path (for syncing with backend)
@@ -92,7 +94,8 @@ interface ChatInputProps {
 export default function ChatInput({ onSend, disabled = false }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [pendingModel, setPendingModel] = useState<ModelOption | null>(null);
   const { switchModel, createSession, activeModelName } = useSessionStore();
   const { user } = useAuthStore();
   const { clearMessages, setPlan, setPanelContent } = useAgentStore();
@@ -114,10 +117,15 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
 
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled) {
+      // Check if current model requires API key and user doesn't have one
+      if (selectedModel.requiresApiKey && !user?.has_anthropic_key) {
+        setShowApiKeyModal(true);
+        return;
+      }
       onSend(input);
       setInput('');
     }
-  }, [input, disabled, onSend]);
+  }, [input, disabled, onSend, selectedModel, user?.has_anthropic_key]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -140,11 +148,17 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
   const handleSwitchModel = async (model: ModelOption) => {
     // Check if user has Anthropic API key when switching to Claude
     if (model.requiresApiKey && !user?.has_anthropic_key) {
-      setErrorMessage('Please set your Anthropic API key in Settings before using Claude models');
+      setPendingModel(model);
+      setShowApiKeyModal(true);
       handleModelClose();
       return;
     }
 
+    await completeSwitchModel(model);
+    handleModelClose();
+  };
+
+  const completeSwitchModel = async (model: ModelOption) => {
     const success = await switchModel(model.modelPath);
     if (success) {
       setSelectedModelId(model.id);
@@ -156,7 +170,15 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
         setPanelContent(null);
       }
     }
-    handleModelClose();
+  };
+
+  const handleApiKeyModalClose = async () => {
+    setShowApiKeyModal(false);
+    // If user successfully set API key and we had a pending model switch, complete it
+    if (pendingModel && user?.has_anthropic_key) {
+      await completeSwitchModel(pendingModel);
+    }
+    setPendingModel(null);
   };
 
   return (
@@ -275,6 +297,36 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
           <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
         </Box>
 
+        {/* API Key prompt - shown below model switcher when needed */}
+        {selectedModel.requiresApiKey && !user?.has_anthropic_key && (
+          <Box
+            onClick={() => setShowApiKeyModal(true)}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              mt: 1,
+              gap: 1,
+              py: 0.5,
+              px: 1.5,
+              borderRadius: '6px',
+              bgcolor: 'rgba(255, 193, 7, 0.1)',
+              border: '1px solid rgba(255, 193, 7, 0.2)',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              '&:hover': {
+                bgcolor: 'rgba(255, 193, 7, 0.15)',
+                borderColor: 'rgba(255, 193, 7, 0.4)',
+              }
+            }}
+          >
+            <KeyIcon sx={{ fontSize: '12px', color: 'var(--accent-yellow)' }} />
+            <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--accent-yellow)', fontWeight: 500 }}>
+              Add API key to use this model
+            </Typography>
+          </Box>
+        )}
+
         <Menu
           anchorEl={modelAnchorEl}
           open={Boolean(modelAnchorEl)}
@@ -298,64 +350,79 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             }
           }}
         >
-          {MODEL_OPTIONS.map((model) => (
-            <MenuItem
-              key={model.id}
-              onClick={() => handleSwitchModel(model)}
-              selected={selectedModelId === model.id}
-              sx={{
-                py: 1.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(255,255,255,0.05)',
-                }
-              }}
-            >
-              <ListItemIcon>
-                <img
-                  src={model.avatarUrl}
-                  alt={model.name}
-                  style={{ width: 24, height: 24, borderRadius: '4px', objectFit: 'cover' }}
-                />
-              </ListItemIcon>
-              <ListItemText
-                primary={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    {model.name}
-                    {model.recommended && (
-                      <Chip
-                        label="Recommended"
-                        size="small"
-                        sx={{
-                          height: '18px',
-                          fontSize: '10px',
-                          bgcolor: 'var(--accent-yellow)',
-                          color: '#000',
-                          fontWeight: 600,
-                        }}
-                      />
-                    )}
-                  </Box>
-                }
-                secondary={model.description}
-                secondaryTypographyProps={{
-                  sx: { fontSize: '12px', color: 'var(--muted-text)' }
+          {MODEL_OPTIONS.map((model) => {
+            const needsKey = model.requiresApiKey && !user?.has_anthropic_key;
+            return (
+              <MenuItem
+                key={model.id}
+                onClick={() => handleSwitchModel(model)}
+                selected={selectedModelId === model.id}
+                sx={{
+                  py: 1.5,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(255,255,255,0.05)',
+                  }
                 }}
-              />
-            </MenuItem>
-          ))}
+              >
+                <ListItemIcon>
+                  <img
+                    src={model.avatarUrl}
+                    alt={model.name}
+                    style={{ width: 24, height: 24, borderRadius: '4px', objectFit: 'cover' }}
+                  />
+                </ListItemIcon>
+                <ListItemText
+                  primary={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {model.name}
+                      {model.recommended && (
+                        <Chip
+                          label="Recommended"
+                          size="small"
+                          sx={{
+                            height: '18px',
+                            fontSize: '10px',
+                            bgcolor: 'var(--accent-yellow)',
+                            color: '#000',
+                            fontWeight: 600,
+                          }}
+                        />
+                      )}
+                      {needsKey && (
+                        <Chip
+                          icon={<KeyIcon sx={{ fontSize: '12px !important' }} />}
+                          label="API Key Required"
+                          size="small"
+                          sx={{
+                            height: '18px',
+                            fontSize: '10px',
+                            bgcolor: 'rgba(255,255,255,0.1)',
+                            color: 'var(--muted-text)',
+                            fontWeight: 500,
+                            '& .MuiChip-icon': {
+                              color: 'var(--muted-text)',
+                              marginLeft: '4px',
+                            }
+                          }}
+                        />
+                      )}
+                    </Box>
+                  }
+                  secondary={model.description}
+                  secondaryTypographyProps={{
+                    sx: { fontSize: '12px', color: 'var(--muted-text)' }
+                  }}
+                />
+              </MenuItem>
+            );
+          })}
         </Menu>
 
-        {/* Error message snackbar */}
-        <Snackbar
-          open={!!errorMessage}
-          autoHideDuration={4000}
-          onClose={() => setErrorMessage(null)}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        >
-          <Alert onClose={() => setErrorMessage(null)} severity="warning" sx={{ width: '100%' }}>
-            {errorMessage}
-          </Alert>
-        </Snackbar>
+        {/* API Key Modal */}
+        <AnthropicKeyModal
+          open={showApiKeyModal}
+          onClose={handleApiKeyModalClose}
+        />
       </Box>
     </Box>
   );
