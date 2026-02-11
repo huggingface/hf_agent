@@ -1,31 +1,89 @@
 /**
- * Authentication hook — non-blocking, lazy.
+ * Client-side OAuth using @huggingface/hub.
  *
- * On mount: checks if the user is already authenticated (cookie/dev mode).
- * Does NOT redirect to login automatically — the welcome screen handles that.
- *
- * Exports `triggerLogin()` for components that need to start the OAuth flow
- * (e.g. the "Start Session" button on the welcome screen).
+ * Works inside HF Spaces iframes (no third-party cookies needed).
+ * Token is stored in localStorage and sent via Authorization header.
  */
 
 import { useEffect } from 'react';
+import { oauthLoginUrl, oauthHandleRedirectIfPresent } from '@huggingface/hub';
 import { useAgentStore } from '@/store/agentStore';
+import { logger } from '@/utils/logger';
 
-/** Redirect to the OAuth login page. */
-export function triggerLogin() {
-  window.location.href = '/auth/login';
+const TOKEN_KEY = 'hf_oauth_token';
+
+/** Get the stored HF access token (or null). */
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
 }
 
+/** Clear the stored token (logout). */
+export function clearStoredToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
+/** Redirect to HF OAuth login. */
+export async function triggerLogin(): Promise<void> {
+  const url = await oauthLoginUrl({
+    scopes: 'openid profile read-repos write-repos manage-repos inference-api jobs',
+  });
+  window.location.href = url;
+}
+
+/**
+ * Hook: on mount, check for OAuth redirect result or existing token.
+ * Sets the user in the agent store when authenticated.
+ */
 export function useAuth() {
   const setUser = useAgentStore((s) => s.setUser);
 
   useEffect(() => {
-    async function checkAuth() {
+    let cancelled = false;
+
+    async function init() {
+      // 1. Check if we're returning from an OAuth redirect
+      const oauthResult = await oauthHandleRedirectIfPresent();
+
+      if (oauthResult) {
+        // Store the access token
+        localStorage.setItem(TOKEN_KEY, oauthResult.accessToken);
+        logger.log('OAuth login successful:', oauthResult.userInfo?.name);
+
+        if (!cancelled) {
+          setUser({
+            authenticated: true,
+            username: oauthResult.userInfo?.name || oauthResult.userInfo?.preferred_username || 'user',
+            name: oauthResult.userInfo?.name,
+            picture: oauthResult.userInfo?.picture,
+          });
+        }
+        return;
+      }
+
+      // 2. Check for existing token in localStorage
+      const token = getStoredToken();
+      if (!token) {
+        // Not logged in — welcome screen will handle login trigger
+        if (!cancelled) setUser(null);
+        return;
+      }
+
+      // 3. Validate the stored token
       try {
-        const response = await fetch('/auth/me', { credentials: 'include' });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.authenticated) {
+        const res = await fetch('/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && data.authenticated) {
             setUser({
               authenticated: true,
               username: data.username,
@@ -35,28 +93,16 @@ export function useAuth() {
             return;
           }
         }
-
-        // Not authenticated — check if auth is even enabled
-        const statusRes = await fetch('/auth/status', { credentials: 'include' });
-        const statusData = await statusRes.json();
-        if (!statusData.auth_enabled) {
-          // Dev mode — set dev user so the app is usable
-          setUser({ authenticated: true, username: 'dev' });
-          return;
-        }
-
-        // Auth is enabled but user is not logged in.
-        // Don't redirect — let the welcome screen show first.
-        // The user will be prompted to log in when they click "Start Session".
-        setUser(null);
+        // Token invalid — clear it
+        clearStoredToken();
+        if (!cancelled) setUser(null);
       } catch {
-        // Backend not ready — set dev user so the app is usable
-        setUser({ authenticated: true, username: 'dev' });
+        // Backend unreachable in dev — set dev user
+        if (!cancelled) setUser({ authenticated: true, username: 'dev' });
       }
     }
 
-    checkAuth();
+    init();
+    return () => { cancelled = true; };
   }, [setUser]);
-
-  return { triggerLogin };
 }
