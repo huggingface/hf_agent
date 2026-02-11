@@ -12,7 +12,7 @@ import { useLayoutStore } from '@/store/layoutStore';
 import { useSessionStore } from '@/store/sessionStore';
 import { apiFetch } from '@/utils/api';
 import { logger } from '@/utils/logger';
-import type { TraceLog, ApprovalStatus } from '@/types/agent';
+import type { TraceLog } from '@/types/agent';
 
 interface ToolCallGroupProps {
   tools: TraceLog[];
@@ -85,7 +85,7 @@ function InlineApproval({
           <Box component="span" sx={{ fontWeight: 500, color: 'var(--text)' }}>
             {String(log.args.hardware_flavor || 'default')}
           </Box>
-          {log.args.timeout && (
+          {!!log.args.timeout && (
             <> with timeout <Box component="span" sx={{ fontWeight: 500, color: 'var(--text)' }}>
               {String(log.args.timeout)}
             </Box></>
@@ -284,7 +284,7 @@ export default function ToolCallGroup({ tools }: ToolCallGroupProps) {
                 </Typography>
 
                 {/* Quick action links for completed jobs */}
-                {log.completed && log.tool === 'hf_jobs' && log.args?.script && (
+                {log.completed && log.tool === 'hf_jobs' && !!log.args?.script && (
                   <Box sx={{ display: 'flex', gap: 0.5 }} onClick={(e) => e.stopPropagation()}>
                     <Typography
                       component="span"
