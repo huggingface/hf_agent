@@ -119,16 +119,6 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
           </IconButton>
         </Box>
         
-        {/* Powered By Badge */}
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 1.5, gap: 0.8, opacity: 0.5 }}>
-          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
-            powered by
-          </Typography>
-          <Box component="img" src="/claude-logo.png" alt="Claude" sx={{ height: '12px', objectFit: 'contain' }} />
-          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            claude-opus-4-5-20251101
-          </Typography>
-        </Box>
       </Box>
     </Box>
   );
