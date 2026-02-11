@@ -31,23 +31,35 @@ export function clearStoredToken(): void {
 }
 
 /** Redirect to HF OAuth login.
- *  Uses window.open as fallback for iframe environments where
- *  top-level navigation is blocked by sandbox restrictions. */
+ *  Strategy:
+ *  1. Try @huggingface/hub client-side OAuth (works in HF iframe with window.huggingface)
+ *  2. Fall back to server-side /auth/login (works on direct access, handles cookies)
+ *  3. In iframe context, open in new tab to avoid cookie issues */
 export async function triggerLogin(): Promise<void> {
-  const url = await oauthLoginUrl({
-    scopes: 'openid profile read-repos write-repos manage-repos inference-api jobs',
-  });
-  // Try top-level navigation first; if we're in an iframe, open a new tab
+  let url: string;
+
   try {
-    if (window.top !== window.self) {
-      // We're in an iframe — open in parent or new tab
-      window.open(url, '_blank');
-    } else {
-      window.location.href = url;
-    }
+    // Client-side OAuth — needs window.huggingface (HF iframe only)
+    url = await oauthLoginUrl({
+      scopes: 'openid profile read-repos write-repos manage-repos inference-api jobs',
+    });
   } catch {
-    // SecurityError from cross-origin iframe — open in new tab
+    // Fallback: server-side OAuth (works on direct access)
+    url = '/auth/login';
+  }
+
+  // In an iframe, open in a new tab (cookies blocked otherwise)
+  let inIframe = false;
+  try {
+    inIframe = window.top !== window.self;
+  } catch {
+    inIframe = true; // SecurityError = cross-origin iframe
+  }
+
+  if (inIframe) {
     window.open(url, '_blank');
+  } else {
+    window.location.href = url;
   }
 }
 

@@ -25,11 +25,8 @@ export default function WelcomeScreen() {
 
     // If no token stored, trigger OAuth login first
     if (!getStoredToken()) {
-      try {
-        await triggerLogin();
-      } catch {
-        setError('Could not open login page. Please try again.');
-      }
+      await triggerLogin();
+      // If we're still here (popup opened, or redirect happening), just return
       return;
     }
 
