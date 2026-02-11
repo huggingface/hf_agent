@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography } from '@mui/material';
+import { Box, TextField, IconButton, CircularProgress } from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 
 interface ChatInputProps {
@@ -118,7 +118,6 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             {disabled ? <CircularProgress size={20} color="inherit" /> : <ArrowUpwardIcon fontSize="small" />}
           </IconButton>
         </Box>
-        
       </Box>
     </Box>
   );
