@@ -3,9 +3,12 @@ Tool system for the agent
 Provides ToolSpec and ToolRouter for managing both built-in and MCP tools
 """
 
+import logging
 import warnings
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -131,6 +134,7 @@ class ToolRouter:
         for tool in create_builtin_tools():
             self.register_tool(tool)
 
+        self.mcp_client: Client | None = None
         if mcp_servers:
             mcp_servers_payload = {}
             for name, server in mcp_servers.items():
@@ -158,7 +162,7 @@ class ToolRouter:
                     handler=None,
                 )
             )
-        print(
+        logger.info(
             f"Loaded {len(registered_names)} MCP tools: {', '.join(registered_names)} ({skipped_count} disabled)"
         )
 
@@ -179,7 +183,7 @@ class ToolRouter:
                 handler=search_openapi_handler,
             )
         )
-        print(f"Loaded OpenAPI search tool: {openapi_spec['name']}")
+        logger.info(f"Loaded OpenAPI search tool: {openapi_spec['name']}")
 
     def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
         """Get tool specifications in OpenAI format"""
@@ -208,7 +212,7 @@ class ToolRouter:
         await self.register_openapi_tool()
 
         total_tools = len(self.tools)
-        print(f"\nAgent ready with {total_tools} tools total\n")
+        logger.info(f"Agent ready with {total_tools} tools total")
 
         return self
 
@@ -328,6 +332,6 @@ def create_builtin_tools() -> list[ToolSpec]:
     ]
 
     tool_names = ", ".join([t.name for t in tools])
-    print(f"Loaded {len(tools)} built-in tools: {tool_names}")
+    logger.info(f"Loaded {len(tools)} built-in tools: {tool_names}")
 
     return tools

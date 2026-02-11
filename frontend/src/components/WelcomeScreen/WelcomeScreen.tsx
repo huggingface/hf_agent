@@ -1,0 +1,177 @@
+import { useState, useCallback } from 'react';
+import {
+  Box,
+  Typography,
+  Button,
+  CircularProgress,
+  Alert,
+} from '@mui/material';
+import { useSessionStore } from '@/store/sessionStore';
+import { useAgentStore } from '@/store/agentStore';
+import { apiFetch } from '@/utils/api';
+
+/** HF brand orange */
+const HF_ORANGE = '#FF9D00';
+
+export default function WelcomeScreen() {
+  const { createSession } = useSessionStore();
+  const { setPlan, setPanelContent } = useAgentStore();
+  const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleStart = useCallback(async () => {
+    if (isCreating) return;
+    setIsCreating(true);
+    setError(null);
+
+    try {
+      const response = await apiFetch('/api/session', { method: 'POST' });
+      if (response.status === 503) {
+        const data = await response.json();
+        setError(data.detail || 'Server is at capacity. Please try again later.');
+        return;
+      }
+      if (!response.ok) {
+        setError('Failed to create session. Please try again.');
+        return;
+      }
+      const data = await response.json();
+      createSession(data.session_id);
+      setPlan([]);
+      setPanelContent(null);
+    } catch {
+      setError('Could not reach the server. Please try again.');
+    } finally {
+      setIsCreating(false);
+    }
+  }, [isCreating, createSession, setPlan, setPanelContent]);
+
+  return (
+    <Box
+      sx={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--body-gradient)',
+        py: 8,
+      }}
+    >
+      {/* HF Logo — large, centered */}
+      <Box
+        component="img"
+        src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg"
+        alt="Hugging Face"
+        sx={{
+          width: 96,
+          height: 96,
+          mb: 3,
+          display: 'block',
+        }}
+      />
+
+      {/* Title */}
+      <Typography
+        variant="h2"
+        sx={{
+          fontWeight: 800,
+          color: 'var(--text)',
+          mb: 1.5,
+          letterSpacing: '-0.02em',
+          fontSize: { xs: '2rem', md: '2.8rem' },
+        }}
+      >
+        HF Agent
+      </Typography>
+
+      {/* Description */}
+      <Typography
+        variant="body1"
+        sx={{
+          color: 'var(--muted-text)',
+          maxWidth: 520,
+          mb: 5,
+          lineHeight: 1.8,
+          fontSize: '0.95rem',
+          textAlign: 'center',
+          px: 2,
+          '& strong': {
+            color: 'var(--text)',
+            fontWeight: 600,
+          },
+        }}
+      >
+        A general-purpose AI agent for <strong>machine learning engineering</strong>.
+        It browses <strong>Hugging Face documentation</strong>, manages{' '}
+        <strong>repositories</strong>, launches <strong>training jobs</strong>,
+        and explores <strong>datasets</strong> — all through natural conversation.
+      </Typography>
+
+      {/* Start Button */}
+      <Button
+        variant="contained"
+        size="large"
+        onClick={handleStart}
+        disabled={isCreating}
+        startIcon={
+          isCreating ? <CircularProgress size={20} color="inherit" /> : null
+        }
+        sx={{
+          px: 5,
+          py: 1.5,
+          fontSize: '1rem',
+          fontWeight: 700,
+          textTransform: 'none',
+          borderRadius: '12px',
+          bgcolor: HF_ORANGE,
+          color: '#000',
+          boxShadow: '0 4px 24px rgba(255, 157, 0, 0.3)',
+          transition: 'all 0.2s ease',
+          '&:hover': {
+            bgcolor: '#FFB340',
+            boxShadow: '0 6px 32px rgba(255, 157, 0, 0.45)',
+          },
+          '&.Mui-disabled': {
+            bgcolor: 'rgba(255, 157, 0, 0.35)',
+            color: 'rgba(0,0,0,0.45)',
+          },
+        }}
+      >
+        {isCreating ? 'Initializing...' : 'Start Session'}
+      </Button>
+
+      {/* Error */}
+      {error && (
+        <Alert
+          severity="warning"
+          variant="outlined"
+          onClose={() => setError(null)}
+          sx={{
+            mt: 3,
+            maxWidth: 400,
+            fontSize: '0.8rem',
+            borderColor: HF_ORANGE,
+            color: 'var(--text)',
+          }}
+        >
+          {error}
+        </Alert>
+      )}
+
+      {/* Footnote */}
+      <Typography
+        variant="caption"
+        sx={{
+          mt: 5,
+          color: 'var(--muted-text)',
+          opacity: 0.5,
+          fontSize: '0.7rem',
+        }}
+      >
+        Conversations are stored locally in your browser.
+      </Typography>
+    </Box>
+  );
+}
