@@ -91,7 +91,7 @@ export default function WelcomeScreen() {
           fontSize: { xs: '2rem', md: '2.8rem' },
         }}
       >
-        HF Agent
+        ML Agent
       </Typography>
 
       {/* Description */}
