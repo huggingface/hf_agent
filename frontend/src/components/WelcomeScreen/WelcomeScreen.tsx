@@ -9,18 +9,26 @@ import {
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { apiFetch } from '@/utils/api';
+import { triggerLogin } from '@/hooks/useAuth';
 
 /** HF brand orange */
 const HF_ORANGE = '#FF9D00';
 
 export default function WelcomeScreen() {
   const { createSession } = useSessionStore();
-  const { setPlan, setPanelContent } = useAgentStore();
+  const { setPlan, setPanelContent, user } = useAgentStore();
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleStart = useCallback(async () => {
     if (isCreating) return;
+
+    // If user is not authenticated, trigger OAuth login first
+    if (!user?.authenticated) {
+      triggerLogin();
+      return;
+    }
+
     setIsCreating(true);
     setError(null);
 
@@ -44,7 +52,7 @@ export default function WelcomeScreen() {
     } finally {
       setIsCreating(false);
     }
-  }, [isCreating, createSession, setPlan, setPanelContent]);
+  }, [isCreating, createSession, setPlan, setPanelContent, user]);
 
   return (
     <Box

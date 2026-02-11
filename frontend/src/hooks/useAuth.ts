@@ -1,16 +1,20 @@
 /**
- * Authentication hook — non-blocking.
+ * Authentication hook — non-blocking, lazy.
  *
- * The app renders immediately. This hook fires a background check to /auth/me
- * and updates the agent store with user info when it resolves.
- * If an API call later returns 401, apiFetch handles the redirect to /auth/login.
+ * On mount: checks if the user is already authenticated (cookie/dev mode).
+ * Does NOT redirect to login automatically — the welcome screen handles that.
  *
- * This avoids blocking the entire UI on an auth check that depends on backend
- * availability (which can be slow during session/MCP initialization).
+ * Exports `triggerLogin()` for components that need to start the OAuth flow
+ * (e.g. the "Start Session" button on the welcome screen).
  */
 
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useAgentStore } from '@/store/agentStore';
+
+/** Redirect to the OAuth login page. */
+export function triggerLogin() {
+  window.location.href = '/auth/login';
+}
 
 export function useAuth() {
   const setUser = useAgentStore((s) => s.setUser);
@@ -32,16 +36,19 @@ export function useAuth() {
           }
         }
 
-        // Not authenticated — check if auth is required
+        // Not authenticated — check if auth is even enabled
         const statusRes = await fetch('/auth/status', { credentials: 'include' });
         const statusData = await statusRes.json();
-        if (statusData.auth_enabled) {
-          window.location.href = '/auth/login';
+        if (!statusData.auth_enabled) {
+          // Dev mode — set dev user so the app is usable
+          setUser({ authenticated: true, username: 'dev' });
           return;
         }
 
-        // Dev mode — set dev user
-        setUser({ authenticated: true, username: 'dev' });
+        // Auth is enabled but user is not logged in.
+        // Don't redirect — let the welcome screen show first.
+        // The user will be prompted to log in when they click "Start Session".
+        setUser(null);
       } catch {
         // Backend not ready — set dev user so the app is usable
         setUser({ authenticated: true, username: 'dev' });
@@ -50,4 +57,6 @@ export function useAuth() {
 
     checkAuth();
   }, [setUser]);
+
+  return { triggerLogin };
 }
