@@ -9,30 +9,23 @@ import {
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { apiFetch } from '@/utils/api';
-import { triggerLogin } from '@/hooks/useAuth';
 
 /** HF brand orange */
 const HF_ORANGE = '#FF9D00';
 
 export default function WelcomeScreen() {
   const { createSession } = useSessionStore();
-  const { setPlan, setPanelContent, user } = useAgentStore();
+  const { setPlan, setPanelContent } = useAgentStore();
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleStart = useCallback(async () => {
     if (isCreating) return;
-
-    // If user is not authenticated, trigger OAuth login first
-    if (!user?.authenticated) {
-      triggerLogin();
-      return;
-    }
-
     setIsCreating(true);
     setError(null);
 
     try {
+      // apiFetch handles 401 → redirects to /auth/login automatically
       const response = await apiFetch('/api/session', { method: 'POST' });
       if (response.status === 503) {
         const data = await response.json();
@@ -48,11 +41,11 @@ export default function WelcomeScreen() {
       setPlan([]);
       setPanelContent(null);
     } catch {
-      setError('Could not reach the server. Please try again.');
+      // apiFetch throws on 401 redirect — don't show error in that case
     } finally {
       setIsCreating(false);
     }
-  }, [isCreating, createSession, setPlan, setPanelContent, user]);
+  }, [isCreating, createSession, setPlan, setPanelContent]);
 
   return (
     <Box
