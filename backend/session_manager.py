@@ -49,6 +49,7 @@ class AgentSession:
     tool_router: ToolRouter
     submission_queue: asyncio.Queue
     user_id: str = "dev"  # Owner of this session
+    hf_token: str | None = None  # User's HF OAuth token for tool execution
     task: asyncio.Task | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     is_active: bool = True
@@ -85,7 +86,7 @@ class SessionManager:
             if s.user_id == user_id and s.is_active
         )
 
-    async def create_session(self, user_id: str = "dev") -> str:
+    async def create_session(self, user_id: str = "dev", hf_token: str | None = None) -> str:
         """Create a new agent session and return its ID.
 
         Session() and ToolRouter() constructors contain blocking I/O
@@ -138,6 +139,9 @@ class SessionManager:
 
         tool_router, session = await asyncio.to_thread(_create_session_sync)
 
+        # Store user's HF token on the session so tools can use it
+        session.hf_token = hf_token
+
         # Create wrapper
         agent_session = AgentSession(
             session_id=session_id,
@@ -145,6 +149,7 @@ class SessionManager:
             tool_router=tool_router,
             submission_queue=submission_queue,
             user_id=user_id,
+            hf_token=hf_token,
         )
 
         async with self._lock:

@@ -86,6 +86,8 @@ class Session:
         self.is_running = True
         self.current_task: asyncio.Task | None = None
         self.pending_approval: Optional[dict[str, Any]] = None
+        # User's HF OAuth token — set by session_manager after construction
+        self.hf_token: Optional[str] = None
 
         # Session trajectory logging
         self.logged_events: list[dict] = []

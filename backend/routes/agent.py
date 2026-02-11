@@ -7,7 +7,7 @@ dependency. In dev mode (no OAUTH_CLIENT_ID), auth is bypassed automatically.
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 from dependencies import get_current_user, get_ws_user
 from litellm import acompletion
@@ -126,13 +126,27 @@ async def generate_title(
 
 
 @router.post("/session", response_model=SessionResponse)
-async def create_session(user: dict = Depends(get_current_user)) -> SessionResponse:
+async def create_session(
+    request: Request, user: dict = Depends(get_current_user)
+) -> SessionResponse:
     """Create a new agent session bound to the authenticated user.
+
+    The user's HF access token is extracted from the Authorization header
+    and stored in the session so that tools (e.g. hf_jobs) can act on
+    behalf of the user.
 
     Returns 503 if the server or user has reached the session limit.
     """
+    # Extract the user's HF token from the Bearer header
+    hf_token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        hf_token = auth_header[7:]
+
     try:
-        session_id = await session_manager.create_session(user_id=user["user_id"])
+        session_id = await session_manager.create_session(
+            user_id=user["user_id"], hf_token=hf_token
+        )
     except SessionCapacityError as e:
         raise HTTPException(status_code=503, detail=str(e))
     return SessionResponse(session_id=session_id, ready=True)

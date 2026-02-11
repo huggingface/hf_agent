@@ -122,8 +122,11 @@ def _filter_uv_install_output(logs: list[str]) -> list[str]:
     return logs
 
 
-def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+def _add_environment_variables(
+    params: Dict[str, Any] | None, user_token: str | None = None
+) -> Dict[str, Any]:
+    # Prefer the authenticated user's OAuth token, fall back to global env var
+    token = user_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
 
     # Start with user-provided env vars, then force-set token last
     result = dict(params or {})
@@ -502,7 +505,7 @@ class HfJobsTool:
                 image=image,
                 command=command,
                 env=args.get("env"),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
@@ -720,7 +723,7 @@ To verify, call this tool with `{{"operation": "inspect", "job_id": "{job_id}"}}
                 command=command,
                 schedule=schedule,
                 env=args.get("env"),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
@@ -1019,8 +1022,12 @@ async def hf_jobs_handler(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
 
-        # Get token and namespace from HF token
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        # Prefer the authenticated user's OAuth token, fall back to global env
+        hf_token = (
+            (getattr(session, "hf_token", None) if session else None)
+            or os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        )
         namespace = HfApi(token=hf_token).whoami().get("name") if hf_token else None
 
         tool = HfJobsTool(
