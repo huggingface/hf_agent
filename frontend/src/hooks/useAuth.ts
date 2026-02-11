@@ -8,7 +8,7 @@
  * (e.g. the "Start Session" button on the welcome screen).
  */
 
-import { useEffect, useCallback } from 'react';
+import { useEffect } from 'react';
 import { useAgentStore } from '@/store/agentStore';
 
 /** Redirect to the OAuth login page. */
