@@ -30,12 +30,25 @@ export function clearStoredToken(): void {
   }
 }
 
-/** Redirect to HF OAuth login. */
+/** Redirect to HF OAuth login.
+ *  Uses window.open as fallback for iframe environments where
+ *  top-level navigation is blocked by sandbox restrictions. */
 export async function triggerLogin(): Promise<void> {
   const url = await oauthLoginUrl({
     scopes: 'openid profile read-repos write-repos manage-repos inference-api jobs',
   });
-  window.location.href = url;
+  // Try top-level navigation first; if we're in an iframe, open a new tab
+  try {
+    if (window.top !== window.self) {
+      // We're in an iframe — open in parent or new tab
+      window.open(url, '_blank');
+    } else {
+      window.location.href = url;
+    }
+  } catch {
+    // SecurityError from cross-origin iframe — open in new tab
+    window.open(url, '_blank');
+  }
 }
 
 /**

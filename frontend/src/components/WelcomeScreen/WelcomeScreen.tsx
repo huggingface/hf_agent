@@ -9,6 +9,7 @@ import {
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { apiFetch } from '@/utils/api';
+import { getStoredToken, triggerLogin } from '@/hooks/useAuth';
 
 /** HF brand orange */
 const HF_ORANGE = '#FF9D00';
@@ -21,15 +22,30 @@ export default function WelcomeScreen() {
 
   const handleStart = useCallback(async () => {
     if (isCreating) return;
+
+    // If no token stored, trigger OAuth login first
+    if (!getStoredToken()) {
+      try {
+        await triggerLogin();
+      } catch {
+        setError('Could not open login page. Please try again.');
+      }
+      return;
+    }
+
     setIsCreating(true);
     setError(null);
 
     try {
-      // apiFetch handles 401 → redirects to /auth/login automatically
       const response = await apiFetch('/api/session', { method: 'POST' });
       if (response.status === 503) {
         const data = await response.json();
         setError(data.detail || 'Server is at capacity. Please try again later.');
+        return;
+      }
+      if (response.status === 401) {
+        // Token expired — trigger re-login
+        await triggerLogin();
         return;
       }
       if (!response.ok) {
@@ -41,7 +57,7 @@ export default function WelcomeScreen() {
       setPlan([]);
       setPanelContent(null);
     } catch {
-      // apiFetch throws on 401 redirect — don't show error in that case
+      // triggerLogin throws if redirect happens — don't show error
     } finally {
       setIsCreating(false);
     }
