@@ -1,71 +1,34 @@
 /**
- * Client-side OAuth using @huggingface/hub.
+ * Authentication hook — simple server-side OAuth.
  *
- * Works inside HF Spaces iframes (no third-party cookies needed).
- * Token is stored in localStorage and sent via Authorization header.
+ * - Hors iframe: /auth/login redirect (cookies work fine)
+ * - Dans iframe: show "Open in full page" link
+ *
+ * Token is stored via HttpOnly cookie by the backend.
+ * In dev mode (no OAUTH_CLIENT_ID), auth is bypassed.
  */
 
 import { useEffect } from 'react';
-import { oauthLoginUrl, oauthHandleRedirectIfPresent } from '@huggingface/hub';
 import { useAgentStore } from '@/store/agentStore';
 import { logger } from '@/utils/logger';
 
-const TOKEN_KEY = 'hf_oauth_token';
-
-/** Get the stored HF access token (or null). */
-export function getStoredToken(): string | null {
+/** Check if we're running inside an iframe. */
+export function isInIframe(): boolean {
   try {
-    return localStorage.getItem(TOKEN_KEY);
+    return window.top !== window.self;
   } catch {
-    return null;
+    return true; // SecurityError = cross-origin iframe
   }
 }
 
-/** Clear the stored token (logout). */
-export function clearStoredToken(): void {
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // Ignore
-  }
-}
-
-/** Redirect to HF OAuth login.
- *  Strategy:
- *  1. Try @huggingface/hub client-side OAuth (works in HF iframe with window.huggingface)
- *  2. Fall back to server-side /auth/login (works on direct access, handles cookies)
- *  3. In iframe context, open in new tab to avoid cookie issues */
-export async function triggerLogin(): Promise<void> {
-  let url: string;
-
-  try {
-    // Client-side OAuth — needs window.huggingface (HF iframe only)
-    url = await oauthLoginUrl({
-      scopes: 'openid profile read-repos write-repos manage-repos inference-api jobs',
-    });
-  } catch {
-    // Fallback: server-side OAuth (works on direct access)
-    url = '/auth/login';
-  }
-
-  // In an iframe, open in a new tab (cookies blocked otherwise)
-  let inIframe = false;
-  try {
-    inIframe = window.top !== window.self;
-  } catch {
-    inIframe = true; // SecurityError = cross-origin iframe
-  }
-
-  if (inIframe) {
-    window.open(url, '_blank');
-  } else {
-    window.location.href = url;
-  }
+/** Redirect to the server-side OAuth login. */
+export function triggerLogin(): void {
+  window.location.href = '/auth/login';
 }
 
 /**
- * Hook: on mount, check for OAuth redirect result or existing token.
- * Sets the user in the agent store when authenticated.
+ * Hook: on mount, check if user is authenticated.
+ * Sets user in the agent store.
  */
 export function useAuth() {
   const setUser = useAgentStore((s) => s.setUser);
@@ -73,41 +36,12 @@ export function useAuth() {
   useEffect(() => {
     let cancelled = false;
 
-    async function init() {
-      // 1. Check if we're returning from an OAuth redirect
-      const oauthResult = await oauthHandleRedirectIfPresent();
-
-      if (oauthResult) {
-        // Store the access token
-        localStorage.setItem(TOKEN_KEY, oauthResult.accessToken);
-        logger.log('OAuth login successful:', oauthResult.userInfo?.name);
-
-        if (!cancelled) {
-          setUser({
-            authenticated: true,
-            username: oauthResult.userInfo?.name || oauthResult.userInfo?.preferred_username || 'user',
-            name: oauthResult.userInfo?.name,
-            picture: oauthResult.userInfo?.picture,
-          });
-        }
-        return;
-      }
-
-      // 2. Check for existing token in localStorage
-      const token = getStoredToken();
-      if (!token) {
-        // Not logged in — welcome screen will handle login trigger
-        if (!cancelled) setUser(null);
-        return;
-      }
-
-      // 3. Validate the stored token
+    async function checkAuth() {
       try {
-        const res = await fetch('/auth/me', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
+        // Check if user is already authenticated (cookie-based)
+        const response = await fetch('/auth/me', { credentials: 'include' });
+        if (response.ok) {
+          const data = await response.json();
           if (!cancelled && data.authenticated) {
             setUser({
               authenticated: true,
@@ -115,19 +49,29 @@ export function useAuth() {
               name: data.name,
               picture: data.picture,
             });
+            logger.log('Authenticated as', data.username);
             return;
           }
         }
-        // Token invalid — clear it
-        clearStoredToken();
+
+        // Not authenticated — check if auth is enabled
+        const statusRes = await fetch('/auth/status', { credentials: 'include' });
+        const statusData = await statusRes.json();
+        if (!statusData.auth_enabled) {
+          // Dev mode — no OAuth configured
+          if (!cancelled) setUser({ authenticated: true, username: 'dev' });
+          return;
+        }
+
+        // Auth enabled but not logged in — welcome screen will handle it
         if (!cancelled) setUser(null);
       } catch {
-        // Backend unreachable in dev — set dev user
+        // Backend unreachable — assume dev mode
         if (!cancelled) setUser({ authenticated: true, username: 'dev' });
       }
     }
 
-    init();
+    checkAuth();
     return () => { cancelled = true; };
   }, [setUser]);
 }
