@@ -10,23 +10,26 @@ import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { apiFetch } from '@/utils/api';
 import { getStoredToken, triggerLogin } from '@/hooks/useAuth';
+import { logger } from '@/utils/logger';
 
 /** HF brand orange */
 const HF_ORANGE = '#FF9D00';
 
 export default function WelcomeScreen() {
   const { createSession } = useSessionStore();
-  const { setPlan, setPanelContent } = useAgentStore();
+  const { setPlan, setPanelContent, user } = useAgentStore();
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleStart = useCallback(async () => {
     if (isCreating) return;
 
-    // If no token stored, trigger OAuth login first
-    if (!getStoredToken()) {
+    // In production (OAuth enabled): check for stored token, trigger login if missing
+    // In dev mode (user already set by useAuth): skip login, go straight to session
+    const isDevUser = user?.username === 'dev';
+    if (!isDevUser && !getStoredToken()) {
+      logger.log('No token — triggering OAuth login');
       await triggerLogin();
-      // If we're still here (popup opened, or redirect happening), just return
       return;
     }
 
@@ -54,11 +57,11 @@ export default function WelcomeScreen() {
       setPlan([]);
       setPanelContent(null);
     } catch {
-      // triggerLogin throws if redirect happens — don't show error
+      // triggerLogin may redirect — don't show error
     } finally {
       setIsCreating(false);
     }
-  }, [isCreating, createSession, setPlan, setPanelContent]);
+  }, [isCreating, createSession, setPlan, setPanelContent, user]);
 
   return (
     <Box
