@@ -1,5 +1,6 @@
 import { useCallback, useRef, useEffect } from 'react';
 import {
+  Avatar,
   Box,
   Drawer,
   Typography,
@@ -32,7 +33,7 @@ const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
   const { sessions, activeSessionId, deleteSession, updateSessionTitle } = useSessionStore();
-  const { isConnected, isProcessing, getMessages, addMessage, setProcessing, llmHealthError, setLlmHealthError } = useAgentStore();
+  const { isConnected, isProcessing, getMessages, addMessage, setProcessing, llmHealthError, setLlmHealthError, user } = useAgentStore();
   const { 
     isLeftSidebarOpen, 
     isRightPanelOpen, 
@@ -300,16 +301,39 @@ export default function AppLayout() {
             </Typography>
           </Box>
 
-          <IconButton
-            onClick={toggleTheme}
-            size="small"
-            sx={{
-              color: 'text.secondary',
-              '&:hover': { color: 'primary.main' },
-            }}
-          >
-            {themeMode === 'dark' ? <LightModeOutlinedIcon fontSize="small" /> : <DarkModeOutlinedIcon fontSize="small" />}
-          </IconButton>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <IconButton
+              onClick={toggleTheme}
+              size="small"
+              sx={{
+                color: 'text.secondary',
+                '&:hover': { color: 'primary.main' },
+              }}
+            >
+              {themeMode === 'dark' ? <LightModeOutlinedIcon fontSize="small" /> : <DarkModeOutlinedIcon fontSize="small" />}
+            </IconButton>
+
+            {user?.picture ? (
+              <Avatar
+                src={user.picture}
+                alt={user.username || 'User'}
+                sx={{ width: 28, height: 28, ml: 0.5 }}
+              />
+            ) : user?.username ? (
+              <Avatar
+                sx={{
+                  width: 28,
+                  height: 28,
+                  ml: 0.5,
+                  bgcolor: 'primary.main',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                }}
+              >
+                {user.username[0].toUpperCase()}
+              </Avatar>
+            ) : null}
+          </Box>
         </Box>
 
         {/* ── LLM Health Error Banner ────────────────────────────── */}
