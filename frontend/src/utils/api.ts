@@ -1,14 +1,13 @@
 /**
  * Centralized API utilities.
  *
- * Reads the HF OAuth token from localStorage and injects it as
- * an Authorization: Bearer header on every request.
- * WebSocket URLs include the token as a query parameter.
+ * In production: HttpOnly cookie (hf_access_token) is sent automatically.
+ * In development: auth is bypassed on the backend.
  */
 
-import { getStoredToken, triggerLogin } from '@/hooks/useAuth';
+import { triggerLogin } from '@/hooks/useAuth';
 
-/** Wrapper around fetch that includes auth and common headers. */
+/** Wrapper around fetch with credentials and common headers. */
 export async function apiFetch(
   path: string,
   options: RequestInit = {}
@@ -18,45 +17,31 @@ export async function apiFetch(
     ...(options.headers as Record<string, string>),
   };
 
-  // Inject Bearer token if available
-  const token = getStoredToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
   const response = await fetch(path, {
     ...options,
     headers,
-    credentials: 'include', // Still send cookies for backward compat
+    credentials: 'include', // Send cookies with every request
   });
 
-  // Handle 401 — trigger login if auth is required
+  // Handle 401 — redirect to login
   if (response.status === 401) {
     try {
-      const authStatus = await fetch('/auth/status');
+      const authStatus = await fetch('/auth/status', { credentials: 'include' });
       const data = await authStatus.json();
       if (data.auth_enabled) {
-        await triggerLogin();
+        triggerLogin();
         throw new Error('Authentication required — redirecting to login.');
       }
     } catch (e) {
       if (e instanceof Error && e.message.includes('redirecting')) throw e;
-      // auth/status failed — ignore
     }
   }
 
   return response;
 }
 
-/** Build the WebSocket URL for a session, including auth token. */
+/** Build the WebSocket URL for a session. */
 export function getWebSocketUrl(sessionId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const base = `${protocol}//${window.location.host}/api/ws/${sessionId}`;
-
-  // Pass token as query param (WebSocket can't set custom headers from browser)
-  const token = getStoredToken();
-  if (token) {
-    return `${base}?token=${encodeURIComponent(token)}`;
-  }
-  return base;
+  return `${protocol}//${window.location.host}/api/ws/${sessionId}`;
 }
