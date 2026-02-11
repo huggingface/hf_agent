@@ -297,7 +297,7 @@ export default function AppLayout() {
                 fontSize: { xs: '0.88rem', md: '0.95rem' },
               }}
             >
-              HF Agent
+              ML Agent
             </Typography>
           </Box>
 
