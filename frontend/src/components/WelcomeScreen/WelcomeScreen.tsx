@@ -5,7 +5,6 @@ import {
   Button,
   CircularProgress,
   Alert,
-  Link,
 } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useSessionStore } from '@/store/sessionStore';
