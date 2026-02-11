@@ -6,6 +6,8 @@ export type EventType =
   | 'ready'
   | 'processing'
   | 'assistant_message'
+  | 'assistant_chunk'
+  | 'assistant_stream_end'
   | 'tool_call'
   | 'tool_output'
   | 'tool_log'

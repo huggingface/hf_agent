@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { SessionMeta } from '@/types/agent';
+import { useAgentStore } from './agentStore';
 
 interface SessionStore {
   sessions: SessionMeta[];
@@ -10,8 +11,8 @@ interface SessionStore {
   createSession: (id: string) => void;
   deleteSession: (id: string) => void;
   switchSession: (id: string) => void;
-  updateSessionTitle: (id: string, title: string) => void;
   setSessionActive: (id: string, isActive: boolean) => void;
+  updateSessionTitle: (id: string, title: string) => void;
 }
 
 export const useSessionStore = create<SessionStore>()(
@@ -34,6 +35,9 @@ export const useSessionStore = create<SessionStore>()(
       },
 
       deleteSession: (id: string) => {
+        // Clean up persisted messages for this session
+        useAgentStore.getState().deleteSessionMessages(id);
+
         set((state) => {
           const newSessions = state.sessions.filter((s) => s.id !== id);
           const newActiveId =
@@ -51,18 +55,18 @@ export const useSessionStore = create<SessionStore>()(
         set({ activeSessionId: id });
       },
 
-      updateSessionTitle: (id: string, title: string) => {
-        set((state) => ({
-          sessions: state.sessions.map((s) =>
-            s.id === id ? { ...s, title } : s
-          ),
-        }));
-      },
-
       setSessionActive: (id: string, isActive: boolean) => {
         set((state) => ({
           sessions: state.sessions.map((s) =>
             s.id === id ? { ...s, isActive } : s
+          ),
+        }));
+      },
+
+      updateSessionTitle: (id: string, title: string) => {
+        set((state) => ({
+          sessions: state.sessions.map((s) =>
+            s.id === id ? { ...s, title } : s
           ),
         }));
       },
