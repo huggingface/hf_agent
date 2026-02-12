@@ -96,8 +96,8 @@ AVAILABLE_MODELS = [
 
 
 @router.get("/config/model")
-async def get_model(user: dict = Depends(get_current_user)) -> dict:
-    """Get current model and available models."""
+async def get_model() -> dict:
+    """Get current model and available models. No auth required."""
     return {
         "current": session_manager.config.model_name,
         "available": AVAILABLE_MODELS,
