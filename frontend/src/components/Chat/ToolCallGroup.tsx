@@ -18,6 +18,14 @@ interface ToolCallGroupProps {
   tools: TraceLog[];
 }
 
+/** Check if a running tool has been stuck for too long (5 minutes). */
+const TOOL_TIMEOUT_MS = 5 * 60 * 1000;
+function isTimedOut(log: TraceLog): boolean {
+  if (log.completed || log.approvalStatus === 'pending') return false;
+  const elapsed = Date.now() - new Date(log.timestamp).getTime();
+  return elapsed > TOOL_TIMEOUT_MS;
+}
+
 // ── Status icon based on tool state ─────────────────────────────────
 function StatusIcon({ log }: { log: TraceLog }) {
   // Awaiting approval
@@ -27,6 +35,10 @@ function StatusIcon({ log }: { log: TraceLog }) {
   // Rejected
   if (log.approvalStatus === 'rejected') {
     return <ErrorOutlineIcon sx={{ fontSize: 16, color: 'error.main' }} />;
+  }
+  // Timed out
+  if (isTimedOut(log)) {
+    return <ErrorOutlineIcon sx={{ fontSize: 16, color: 'var(--muted-text)' }} />;
   }
   // Running (not completed yet)
   if (!log.completed) {
@@ -56,6 +68,7 @@ function StatusIcon({ log }: { log: TraceLog }) {
 function statusLabel(log: TraceLog): string | null {
   if (log.approvalStatus === 'pending') return 'awaiting approval';
   if (log.approvalStatus === 'rejected') return 'rejected';
+  if (isTimedOut(log)) return 'timed out';
   if (!log.completed) return 'running';
   return null;
 }
@@ -63,6 +76,7 @@ function statusLabel(log: TraceLog): string | null {
 function statusColor(log: TraceLog): string {
   if (log.approvalStatus === 'pending') return 'var(--accent-yellow)';
   if (log.approvalStatus === 'rejected') return 'var(--accent-red)';
+  if (isTimedOut(log)) return 'var(--muted-text)';
   return 'var(--accent-yellow)';
 }
 
@@ -213,7 +227,7 @@ export default function ToolCallGroup({ tools }: ToolCallGroupProps) {
     async (toolCallId: string, approved: boolean, feedback?: string) => {
       if (!activeSessionId) return;
       try {
-        await apiFetch('/api/approve', {
+        const res = await apiFetch('/api/approve', {
           method: 'POST',
           body: JSON.stringify({
             session_id: activeSessionId,
@@ -224,7 +238,17 @@ export default function ToolCallGroup({ tools }: ToolCallGroupProps) {
             }],
           }),
         });
-        // The WebSocket will send back tool_output events which will update the trace
+
+        if (res.ok) {
+          // Optimistic update: immediately reflect approval status in the UI
+          const { updateTraceLog, updateCurrentTurnTrace, setProcessing } = useAgentStore.getState();
+          updateTraceLog(toolCallId, '', {
+            approvalStatus: approved ? 'approved' : 'rejected',
+            completed: !approved, // Rejected tools are done; approved ones will run
+          });
+          updateCurrentTurnTrace(activeSessionId);
+          if (approved) setProcessing(true);
+        }
       } catch (e) {
         logger.error('Approval failed:', e);
       }

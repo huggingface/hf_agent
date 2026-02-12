@@ -88,6 +88,38 @@ async def llm_health_check() -> LLMHealthResponse:
         )
 
 
+AVAILABLE_MODELS = [
+    {"id": "anthropic/claude-opus-4-5-20251101", "label": "Claude Opus 4.5", "provider": "anthropic"},
+    {"id": "huggingface/novita/deepseek-ai/DeepSeek-V3.1", "label": "DeepSeek V3.1", "provider": "huggingface"},
+    {"id": "huggingface/novita/MiniMaxAI/MiniMax-M2.1", "label": "MiniMax M2.1", "provider": "huggingface"},
+]
+
+
+@router.get("/config/model")
+async def get_model(user: dict = Depends(get_current_user)) -> dict:
+    """Get current model and available models."""
+    return {
+        "current": session_manager.config.model_name,
+        "available": AVAILABLE_MODELS,
+    }
+
+
+@router.post("/config/model")
+async def set_model(
+    body: dict, user: dict = Depends(get_current_user)
+) -> dict:
+    """Set the LLM model. Applies to new conversations."""
+    model_id = body.get("model")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="Missing 'model' field")
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model_id not in valid_ids:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
+    session_manager.config.model_name = model_id
+    logger.info(f"Model changed to {model_id} by {user.get('username', 'unknown')}")
+    return {"model": model_id}
+
+
 @router.post("/title")
 async def generate_title(
     request: SubmitRequest, user: dict = Depends(get_current_user)

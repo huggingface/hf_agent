@@ -67,7 +67,7 @@ class SessionCapacityError(Exception):
 # Estimated for HF Spaces cpu-basic (2 vCPU, 16 GB RAM).
 # Each session uses ~10-20 MB (context, tools, queues, task).
 MAX_SESSIONS: int = 50
-MAX_SESSIONS_PER_USER: int = 3
+MAX_SESSIONS_PER_USER: int = 10
 
 
 class SessionManager:
