@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect, useState } from 'react';
 import {
   Avatar,
   Box,
@@ -7,6 +7,8 @@ import {
   IconButton,
   Alert,
   AlertTitle,
+  Select,
+  MenuItem,
   useMediaQuery,
   useTheme,
 } from '@mui/material';
@@ -47,6 +49,36 @@ export default function AppLayout() {
 
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+
+  // ── Model selector state ──────────────────────────────────────────
+  const [currentModel, setCurrentModel] = useState('');
+  const [availableModels, setAvailableModels] = useState<Array<{ id: string; label: string }>>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiFetch('/api/config/model');
+        if (res.ok) {
+          const data = await res.json();
+          setCurrentModel(data.current);
+          setAvailableModels(data.available);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleModelChange = useCallback(async (modelId: string) => {
+    try {
+      const res = await apiFetch('/api/config/model', {
+        method: 'POST',
+        body: JSON.stringify({ model: modelId }),
+      });
+      if (res.ok) {
+        setCurrentModel(modelId);
+        logger.log('Model changed to', modelId);
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   const isResizing = useRef(false);
 
@@ -302,6 +334,36 @@ export default function AppLayout() {
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {/* Model selector */}
+            {availableModels.length > 0 && (
+              <Select
+                value={currentModel}
+                onChange={(e) => handleModelChange(e.target.value)}
+                size="small"
+                variant="outlined"
+                sx={{
+                  fontSize: '0.72rem',
+                  height: 30,
+                  color: 'var(--muted-text)',
+                  '& .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'var(--border)',
+                  },
+                  '&:hover .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'var(--border-hover)',
+                  },
+                  '& .MuiSelect-select': {
+                    py: 0.5,
+                    px: 1,
+                  },
+                }}
+              >
+                {availableModels.map((m) => (
+                  <MenuItem key={m.id} value={m.id} sx={{ fontSize: '0.75rem' }}>
+                    {m.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            )}
             <IconButton
               onClick={toggleTheme}
               size="small"
