@@ -55,17 +55,18 @@ export default function AppLayout() {
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; label: string }>>([]);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await apiFetch('/api/config/model');
-        if (res.ok) {
-          const data = await res.json();
+    // Use plain fetch (not apiFetch) — this is a public endpoint,
+    // no auth needed, and we don't want 401 handling to trigger redirects.
+    fetch('/api/config/model')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) {
           setCurrentModel(data.current);
           setAvailableModels(data.available);
         }
-      } catch { /* ignore */ }
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      })
+      .catch(() => { /* ignore */ });
+  }, []);
 
   const handleModelChange = useCallback(async (modelId: string) => {
     try {
