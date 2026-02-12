@@ -36,7 +36,11 @@ def _get_max_tokens_safe(model_name: str) -> int:
     # Fallback: try litellm but with a short timeout via threading
     try:
         from litellm import get_max_tokens
-        return get_max_tokens(model_name)
+        result = get_max_tokens(model_name)
+        if result and isinstance(result, int):
+            return result
+        logger.warning(f"get_max_tokens returned {result} for {model_name}, using default")
+        return _DEFAULT_MAX_TOKENS
     except Exception as e:
         logger.warning(f"get_max_tokens failed for {model_name}, using default: {e}")
         return _DEFAULT_MAX_TOKENS

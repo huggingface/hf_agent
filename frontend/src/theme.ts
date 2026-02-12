@@ -24,7 +24,7 @@ const sharedComponents: ThemeOptions['components'] = {
   },
   MuiPaper: {
     styleOverrides: {
-      root: { backgroundImage: 'none', backgroundColor: 'transparent' },
+      root: { backgroundImage: 'none' },
     },
   },
 };
