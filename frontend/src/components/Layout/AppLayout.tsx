@@ -335,15 +335,20 @@ export default function AppLayout() {
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             {/* Model selector */}
-            {availableModels.length > 0 && (
+            {availableModels.length > 0 && currentModel && (
               <Select
                 value={currentModel}
                 onChange={(e) => handleModelChange(e.target.value)}
                 size="small"
                 variant="outlined"
+                renderValue={(val) => {
+                  const m = availableModels.find((x) => x.id === val);
+                  return m?.label || val;
+                }}
                 sx={{
                   fontSize: '0.72rem',
                   height: 30,
+                  minWidth: 120,
                   color: 'var(--muted-text)',
                   '& .MuiOutlinedInput-notchedOutline': {
                     borderColor: 'var(--border)',
