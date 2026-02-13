@@ -49,6 +49,11 @@ def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = Non
     if not args_valid:
         return False
 
+    # Sandbox tools: only sandbox_create requires approval
+    SANDBOX_TOOLS = {"sandbox_create", "bash", "read", "write", "edit", "glob", "grep"}
+    if tool_name in SANDBOX_TOOLS:
+        return tool_name == "sandbox_create"
+
     if tool_name == "hf_jobs":
         operation = tool_args.get("operation", "")
         if operation not in ["run", "uv", "scheduled run", "scheduled uv"]:
