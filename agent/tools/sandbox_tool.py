@@ -2,9 +2,10 @@
 Sandbox tools — expose the Sandbox client as agent tools.
 
 7 tools total:
-  bash, read, write, edit, glob, grep, upload — operations on the sandbox
+  sandbox_create — explicit sandbox creation (requires approval)
+  bash, read, write, edit, glob, grep — operations on the sandbox
 
-Auto-creation: if any operation tool is called without an active sandbox,
+If any operation tool is called without an active sandbox,
 a cpu-basic sandbox is auto-created (no approval needed).
 """
 
@@ -14,7 +15,7 @@ import asyncio
 import os
 from typing import Any
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, SpaceHardware
 
 from agent.core.session import Event
 from agent.tools.sandbox_client import Sandbox
@@ -71,6 +72,80 @@ async def _ensure_sandbox(
     return sb, None
 
 
+# ── sandbox_create tool ──────────────────────────────────────────────
+
+SANDBOX_CREATE_TOOL_SPEC = {
+    "name": "sandbox_create",
+    "description": (
+        "Create a persistent remote Linux sandbox on HF Spaces for interactive development.\n"
+        "YOU MUST DO THIS BEFORE USING bash/read/write/edit/glob/grep tools.\n"
+        "\n"
+        "Spins up a new sandbox environment where you can run commands, read/write/edit files, "
+        "install packages, and debug iteratively. The sandbox persists across tool calls within "
+        "the session.\n"
+        "You can choose from the following hardware tiers: " + ", ".join([e.value for e in SpaceHardware]) + ".\n"
+        "Use sandbox for: iterative development, debugging, multi-step workflows, testing code.\n"
+        "Use hf_jobs instead for: one-shot batch runs, scheduled tasks, fire-and-forget training.\n"
+    ),
+    "parameters": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": False,
+        "properties": {
+            "hardware": {
+                "type": "string",
+                "enum": [e.value for e in SpaceHardware],
+                "description": "Hardware tier for the sandbox (default: cpu-basic)",
+            },
+            "private": {
+                "type": "boolean",
+                "description": "If true, create a private Space",
+            },
+            "sleep_time": {
+                "type": "integer",
+                "description": "Auto-sleep after N seconds of inactivity",
+            },
+        },
+    },
+}
+
+
+async def sandbox_create_handler(
+    args: dict[str, Any], session: Any = None
+) -> tuple[str, bool]:
+    """Handle sandbox_create tool calls."""
+    # If sandbox already exists, return its info
+    if session and getattr(session, "sandbox", None):
+        sb = session.sandbox
+        return (
+            f"Sandbox already active: {sb.space_id}\n"
+            f"URL: {sb.url}\n"
+            f"Use bash/read/write/edit/glob/grep to interact with it."
+        ), True
+
+    hardware = args.get("hardware", "cpu-basic")
+    create_kwargs = {}
+    if "private" in args:
+        create_kwargs["private"] = args["private"]
+    if "sleep_time" in args:
+        create_kwargs["sleep_time"] = args["sleep_time"]
+
+    try:
+        sb, error = await _ensure_sandbox(session, hardware=hardware, **create_kwargs)
+    except Exception as e:
+        return f"Failed to create sandbox: {e}", False
+
+    if error:
+        return error, False
+
+    return (
+        f"Sandbox created: {sb.space_id}\n"
+        f"URL: {sb.url}\n"
+        f"Hardware: {hardware}\n"
+        f"Use bash/read/write/edit/glob/grep to interact with it."
+    ), True
+
+
 def _make_tool_handler(sandbox_tool_name: str):
     """Factory: create a handler for a sandbox operation tool."""
 
@@ -101,11 +176,22 @@ def _make_tool_handler(sandbox_tool_name: str):
 
 
 def get_sandbox_tools():
-    """Return all 8 sandbox ToolSpecs."""
+    """Return all 7 sandbox ToolSpecs (sandbox_create + 6 operation tools)."""
     from agent.core.tools import ToolSpec
 
     tools = []
 
+    # sandbox_create (explicit creation, requires approval)
+    tools.append(
+        ToolSpec(
+            name=SANDBOX_CREATE_TOOL_SPEC["name"],
+            description=SANDBOX_CREATE_TOOL_SPEC["description"],
+            parameters=SANDBOX_CREATE_TOOL_SPEC["parameters"],
+            handler=sandbox_create_handler,
+        )
+    )
+
+    # Operation tools (auto-execute, no approval needed)
     for name in Sandbox.TOOLS.keys():
         spec = Sandbox.TOOLS[name]
         tools.append(
