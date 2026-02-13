@@ -52,8 +52,11 @@ export interface ApprovalBatch {
   count: number;
 }
 
+export type ApprovalStatus = 'none' | 'pending' | 'approved' | 'rejected';
+
 export interface TraceLog {
   id: string;
+  toolCallId?: string; // Backend tool_call_id for reliable matching
   type: 'call' | 'output';
   text: string;
   tool: string;
@@ -62,6 +65,12 @@ export interface TraceLog {
   args?: Record<string, unknown>; // Store args for auto-exec jobs
   output?: string; // Store tool output for display
   success?: boolean; // Whether the tool call succeeded
+  /** Approval state for tools that need user confirmation */
+  approvalStatus?: ApprovalStatus;
+  /** Parsed job info (URL, status, logs) for hf_jobs */
+  jobUrl?: string;
+  jobStatus?: string;
+  jobLogs?: string;
 }
 
 export interface User {

@@ -1,12 +1,19 @@
-"""Authentication routes for HF OAuth."""
+"""Authentication routes for HF OAuth.
+
+Handles the OAuth 2.0 authorization code flow with HF as provider.
+After successful auth, sets an HttpOnly cookie with the access token.
+"""
 
 import os
 import secrets
+import time
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+
+from dependencies import AUTH_ENABLED, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -15,8 +22,17 @@ OAUTH_CLIENT_ID = os.environ.get("OAUTH_CLIENT_ID", "")
 OAUTH_CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
 OPENID_PROVIDER_URL = os.environ.get("OPENID_PROVIDER_URL", "https://huggingface.co")
 
-# In-memory session store (replace with proper session management in production)
+# In-memory OAuth state store with expiry (5 min TTL)
+_OAUTH_STATE_TTL = 300
 oauth_states: dict[str, dict] = {}
+
+
+def _cleanup_expired_states() -> None:
+    """Remove expired OAuth states to prevent memory growth."""
+    now = time.time()
+    expired = [k for k, v in oauth_states.items() if now > v.get("expires_at", 0)]
+    for k in expired:
+        del oauth_states[k]
 
 
 def get_redirect_uri(request: Request) -> str:
@@ -38,9 +54,15 @@ async def oauth_login(request: Request) -> RedirectResponse:
             detail="OAuth not configured. Set OAUTH_CLIENT_ID environment variable.",
         )
 
+    # Clean up expired states to prevent memory growth
+    _cleanup_expired_states()
+
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
-    oauth_states[state] = {"redirect_uri": get_redirect_uri(request)}
+    oauth_states[state] = {
+        "redirect_uri": get_redirect_uri(request),
+        "expires_at": time.time() + _OAUTH_STATE_TTL,
+    }
 
     # Build authorization URL
     params = {
@@ -91,58 +113,57 @@ async def oauth_callback(
 
     # Get user info
     access_token = token_data.get("access_token")
-    if access_token:
-        async with httpx.AsyncClient() as client:
-            try:
-                userinfo_response = await client.get(
-                    f"{OPENID_PROVIDER_URL}/oauth/userinfo",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
-                userinfo_response.raise_for_status()
-                user_info = userinfo_response.json()
-            except httpx.HTTPError:
-                user_info = {}
-    else:
-        user_info = {}
+    if not access_token:
+        raise HTTPException(
+            status_code=500,
+            detail="Token exchange succeeded but no access_token was returned.",
+        )
 
-    # For now, redirect to home with token in query params
-    # In production, use secure cookies or session storage
-    redirect_params = {
-        "access_token": access_token,
-        "username": user_info.get("preferred_username", ""),
-    }
+    # Fetch user info (optional — failure is not fatal)
+    async with httpx.AsyncClient() as client:
+        try:
+            userinfo_response = await client.get(
+                f"{OPENID_PROVIDER_URL}/oauth/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            userinfo_response.raise_for_status()
+        except httpx.HTTPError:
+            pass  # user_info not required for auth flow
 
-    return RedirectResponse(url=f"/?{urlencode(redirect_params)}")
+    # Set access token as HttpOnly cookie (not in URL — avoids leaks via
+    # Referrer headers, browser history, and server logs)
+    is_production = bool(os.environ.get("SPACE_HOST"))
+    response = RedirectResponse(url="/", status_code=302)
+    response.set_cookie(
+        key="hf_access_token",
+        value=access_token,
+        httponly=True,
+        secure=is_production,  # Secure flag only in production (HTTPS)
+        samesite="lax",
+        max_age=3600 * 24,  # 24 hours
+        path="/",
+    )
+    return response
 
 
 @router.get("/logout")
 async def logout() -> RedirectResponse:
-    """Log out the user."""
-    return RedirectResponse(url="/")
+    """Log out the user by clearing the auth cookie."""
+    response = RedirectResponse(url="/")
+    response.delete_cookie(key="hf_access_token", path="/")
+    return response
+
+
+@router.get("/status")
+async def auth_status() -> dict:
+    """Check if OAuth is enabled on this instance."""
+    return {"auth_enabled": AUTH_ENABLED}
 
 
 @router.get("/me")
-async def get_current_user(request: Request) -> dict:
-    """Get current user info from Authorization header."""
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return {"authenticated": False}
+async def get_me(user: dict = Depends(get_current_user)) -> dict:
+    """Get current user info. Returns the authenticated user or dev user.
 
-    token = auth_header.split(" ")[1]
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"{OPENID_PROVIDER_URL}/oauth/userinfo",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            response.raise_for_status()
-            user_info = response.json()
-            return {
-                "authenticated": True,
-                "username": user_info.get("preferred_username"),
-                "name": user_info.get("name"),
-                "picture": user_info.get("picture"),
-            }
-        except httpx.HTTPError:
-            return {"authenticated": False}
+    Uses the shared auth dependency which handles cookie + Bearer token.
+    """
+    return user

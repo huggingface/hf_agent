@@ -11,12 +11,16 @@ import os
 import re
 from typing import Any, Dict, Literal, Optional, Callable, Awaitable
 
+import logging
+
 import httpx
 from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
 
 from agent.core.session import Event
 from agent.tools.types import ToolResult
+
+logger = logging.getLogger(__name__)
 from agent.tools.utilities import (
     format_job_details,
     format_jobs_table,
@@ -118,8 +122,11 @@ def _filter_uv_install_output(logs: list[str]) -> list[str]:
     return logs
 
 
-def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+def _add_environment_variables(
+    params: Dict[str, Any] | None, user_token: str | None = None
+) -> Dict[str, Any]:
+    # Prefer the authenticated user's OAuth token, fall back to global env var
+    token = user_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
 
     # Start with user-provided env vars, then force-set token last
     result = dict(params or {})
@@ -401,7 +408,7 @@ class HfJobsTool:
 
                     # Process log line
                     log_line = item
-                    print("\t" + log_line)
+                    logger.debug(log_line)
                     if self.log_callback:
                         await self.log_callback(log_line)
                     all_logs.append(log_line)
@@ -429,19 +436,19 @@ class HfJobsTool:
 
                     if current_status in terminal_states:
                         # Job finished, no need to retry
-                        print(f"\tJob reached terminal state: {current_status}")
+                        logger.info(f"Job reached terminal state: {current_status}")
                         break
 
                     # Job still running, retry connection
-                    print(
-                        f"\tConnection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
+                    logger.warning(
+                        f"Connection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
                     )
                     await asyncio.sleep(retry_delay)
                     continue
 
                 except (ConnectionError, TimeoutError, OSError):
                     # Can't even check job status, wait and retry
-                    print(f"\tConnection error, retrying in {retry_delay}s...")
+                    logger.warning(f"Connection error, retrying in {retry_delay}s...")
                     await asyncio.sleep(retry_delay)
                     continue
 
@@ -498,15 +505,15 @@ class HfJobsTool:
                 image=image,
                 command=command,
                 env=args.get("env"),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
             )
 
             # Wait for completion and stream logs
-            print(f"{job_type} job started: {job.url}")
-            print("Streaming logs...\n---\n")
+            logger.info(f"{job_type} job started: {job.url}")
+            logger.info("Streaming logs...")
 
             final_status, all_logs = await self._wait_for_job_completion(
                 job_id=job.id,
@@ -716,7 +723,7 @@ To verify, call this tool with `{{"operation": "inspect", "job_id": "{job_id}"}}
                 command=command,
                 schedule=schedule,
                 env=args.get("env"),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
@@ -1015,8 +1022,12 @@ async def hf_jobs_handler(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
 
-        # Get token and namespace from HF token
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        # Prefer the authenticated user's OAuth token, fall back to global env
+        hf_token = (
+            (getattr(session, "hf_token", None) if session else None)
+            or os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        )
         namespace = HfApi(token=hf_token).whoami().get("name") if hf_token else None
 
         tool = HfJobsTool(

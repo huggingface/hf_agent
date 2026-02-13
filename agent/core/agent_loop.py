@@ -4,6 +4,7 @@ Main agent implementation with integrated tool system and MCP support
 
 import asyncio
 import json
+import logging
 
 from litellm import ChatCompletionMessageToolCall, Message, ModelResponse, acompletion
 from lmnr import observe
@@ -12,6 +13,8 @@ from agent.config import Config
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
 from agent.tools.jobs_tool import CPU_FLAVORS
+
+logger = logging.getLogger(__name__)
 
 ToolCall = ChatCompletionMessageToolCall
 
@@ -129,35 +132,100 @@ class Handlers:
             tools = session.tool_router.get_tool_specs_for_llm()
 
             try:
-                response: ModelResponse = await acompletion(
+                # ── Stream the LLM response ──────────────────────────
+                response = await acompletion(
                     model=session.config.model_name,
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
+                    stream=True,
+                    stream_options={"include_usage": True},
                 )
 
-                # Extract text response, token usage, and tool calls
-                message = response.choices[0].message
-                content = message.content
-                token_count = response.usage.total_tokens
-                tool_calls: list[ToolCall] = message.get("tool_calls", [])
+                full_content = ""
+                tool_calls_acc: dict[int, dict] = {}
+                token_count = 0
+
+                async for chunk in response:
+                    choice = chunk.choices[0] if chunk.choices else None
+                    if not choice:
+                        # Last chunk may carry only usage info
+                        if hasattr(chunk, "usage") and chunk.usage:
+                            token_count = chunk.usage.total_tokens
+                        continue
+
+                    delta = choice.delta
+
+                    # Stream text deltas to the frontend
+                    if delta.content:
+                        full_content += delta.content
+                        await session.send_event(
+                            Event(
+                                event_type="assistant_chunk",
+                                data={"content": delta.content},
+                            )
+                        )
+
+                    # Accumulate tool-call deltas (name + args arrive in pieces)
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            if tc_delta.id:
+                                tool_calls_acc[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_acc[idx]["function"][
+                                        "name"
+                                    ] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    tool_calls_acc[idx]["function"][
+                                        "arguments"
+                                    ] += tc_delta.function.arguments
+
+                    # Capture usage from the final chunk
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        token_count = chunk.usage.total_tokens
+
+                # ── Stream finished — reconstruct full message ───────
+                content = full_content or None
+
+                # Build tool_calls list from accumulated deltas
+                tool_calls: list[ToolCall] = []
+                for idx in sorted(tool_calls_acc.keys()):
+                    tc_data = tool_calls_acc[idx]
+                    tool_calls.append(
+                        ToolCall(
+                            id=tc_data["id"],
+                            type="function",
+                            function={
+                                "name": tc_data["function"]["name"],
+                                "arguments": tc_data["function"]["arguments"],
+                            },
+                        )
+                    )
+
+                # Signal end of streaming to the frontend
+                await session.send_event(
+                    Event(event_type="assistant_stream_end", data={})
+                )
 
                 # If no tool calls, add assistant message and we're done
                 if not tool_calls:
                     if content:
                         assistant_msg = Message(role="assistant", content=content)
-                        session.context_manager.add_message(assistant_msg, token_count)
-                        await session.send_event(
-                            Event(
-                                event_type="assistant_message",
-                                data={"content": content},
-                            )
+                        session.context_manager.add_message(
+                            assistant_msg, token_count
                         )
                         final_response = content
                     break
 
                 # Add assistant message with tool calls to history
-                # LiteLLM will format this correctly for the provider
                 assistant_msg = Message(
                     role="assistant",
                     content=content,
@@ -165,66 +233,98 @@ class Handlers:
                 )
                 session.context_manager.add_message(assistant_msg, token_count)
 
-                if content:
-                    await session.send_event(
-                        Event(event_type="assistant_message", data={"content": content})
-                    )
-
                 # Separate tools into those requiring approval and those that don't
                 approval_required_tools = []
                 non_approval_tools = []
 
                 for tc in tool_calls:
                     tool_name = tc.function.name
-                    tool_args = json.loads(tc.function.arguments)
+                    try:
+                        tool_args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"Malformed tool arguments for {tool_name}: {e}")
+                        tool_args = {}
 
                     if _needs_approval(tool_name, tool_args, session.config):
                         approval_required_tools.append(tc)
                     else:
                         non_approval_tools.append(tc)
 
-                # Execute non-approval tools first
-                for tc in non_approval_tools:
-                    tool_name = tc.function.name
-                    tool_args = json.loads(tc.function.arguments)
+                # Execute non-approval tools (in parallel when possible)
+                if non_approval_tools:
+                    # 1. Parse args and validate upfront
+                    parsed_tools: list[
+                        tuple[ChatCompletionMessageToolCall, str, dict, bool, str]
+                    ] = []
+                    for tc in non_approval_tools:
+                        tool_name = tc.function.name
+                        try:
+                            tool_args = json.loads(tc.function.arguments)
+                        except (json.JSONDecodeError, TypeError):
+                            tool_args = {}
 
-                    # Validate tool arguments before calling
-                    args_valid, error_msg = _validate_tool_args(tool_args)
-                    if not args_valid:
-                        # Return error to agent instead of calling tool
-                        output = error_msg
-                        success = False
-                    else:
+                        args_valid, error_msg = _validate_tool_args(tool_args)
+                        parsed_tools.append(
+                            (tc, tool_name, tool_args, args_valid, error_msg)
+                        )
+
+                    # 2. Send all tool_call events upfront (so frontend shows them all)
+                    for tc, tool_name, tool_args, args_valid, _ in parsed_tools:
+                        if args_valid:
+                            await session.send_event(
+                                Event(
+                                    event_type="tool_call",
+                                    data={
+                                        "tool": tool_name,
+                                        "arguments": tool_args,
+                                        "tool_call_id": tc.id,
+                                    },
+                                )
+                            )
+
+                    # 3. Execute all valid tools in parallel
+                    async def _exec_tool(
+                        tc: ChatCompletionMessageToolCall,
+                        name: str,
+                        args: dict,
+                        valid: bool,
+                        err: str,
+                    ) -> tuple[ChatCompletionMessageToolCall, str, dict, str, bool]:
+                        if not valid:
+                            return (tc, name, args, err, False)
+                        out, ok = await session.tool_router.call_tool(
+                            name, args, session=session
+                        )
+                        return (tc, name, args, out, ok)
+
+                    results = await asyncio.gather(
+                        *[
+                            _exec_tool(tc, name, args, valid, err)
+                            for tc, name, args, valid, err in parsed_tools
+                        ]
+                    )
+
+                    # 4. Record results and send outputs (order preserved)
+                    for tc, tool_name, tool_args, output, success in results:
+                        tool_msg = Message(
+                            role="tool",
+                            content=output,
+                            tool_call_id=tc.id,
+                            name=tool_name,
+                        )
+                        session.context_manager.add_message(tool_msg)
+
                         await session.send_event(
                             Event(
-                                event_type="tool_call",
-                                data={"tool": tool_name, "arguments": tool_args},
+                                event_type="tool_output",
+                                data={
+                                    "tool": tool_name,
+                                    "tool_call_id": tc.id,
+                                    "output": output,
+                                    "success": success,
+                                },
                             )
                         )
-
-                        output, success = await session.tool_router.call_tool(
-                            tool_name, tool_args, session=session
-                        )
-
-                    # Add tool result to history
-                    tool_msg = Message(
-                        role="tool",
-                        content=output,
-                        tool_call_id=tc.id,
-                        name=tool_name,
-                    )
-                    session.context_manager.add_message(tool_msg)
-
-                    await session.send_event(
-                        Event(
-                            event_type="tool_output",
-                            data={
-                                "tool": tool_name,
-                                "output": output,
-                                "success": success,
-                            },
-                        )
-                    )
 
                 # If there are tools requiring approval, ask for batch approval
                 if approval_required_tools:
@@ -232,7 +332,10 @@ class Handlers:
                     tools_data = []
                     for tc in approval_required_tools:
                         tool_name = tc.function.name
-                        tool_args = json.loads(tc.function.arguments)
+                        try:
+                            tool_args = json.loads(tc.function.arguments)
+                        except (json.JSONDecodeError, TypeError):
+                            tool_args = {}
                         tools_data.append(
                             {
                                 "tool": tool_name,
@@ -319,11 +422,27 @@ class Handlers:
 
     @staticmethod
     async def undo(session: Session) -> None:
-        """Handle undo (like undo in codex.rs:1314)"""
-        # Remove last user turn and all following items
-        # Simplified: just remove last 2 items
-        for _ in range(min(2, len(session.context_manager.items))):
-            session.context_manager.items.pop()
+        """Remove the last complete turn (user msg + all assistant/tool msgs that follow).
+
+        Anthropic requires every tool_use to have a matching tool_result,
+        so we can't just pop 2 items — we must pop everything back to
+        (and including) the last user message to keep the history valid.
+        """
+        items = session.context_manager.items
+        if not items:
+            await session.send_event(Event(event_type="undo_complete"))
+            return
+
+        # Pop from the end until we've removed the last user message
+        removed_user = False
+        while items:
+            msg = items.pop()
+            if getattr(msg, "role", None) == "user":
+                removed_user = True
+                break
+
+        if not removed_user:
+            logger.warning("Undo: no user message found to remove")
 
         await session.send_event(Event(event_type="undo_complete"))
 
@@ -372,7 +491,11 @@ class Handlers:
             await session.send_event(
                 Event(
                     event_type="tool_call",
-                    data={"tool": tool_name, "arguments": tool_args},
+                    data={
+                        "tool": tool_name,
+                        "arguments": tool_args,
+                        "tool_call_id": tc.id,
+                    },
                 )
             )
 
@@ -396,7 +519,7 @@ class Handlers:
             for result in results:
                 if isinstance(result, Exception):
                     # Handle execution error
-                    print(f"Tool execution error: {result}")
+                    logger.error(f"Tool execution error: {result}")
                     continue
 
                 tc, tool_name, output, success = result
@@ -415,6 +538,7 @@ class Handlers:
                         event_type="tool_output",
                         data={
                             "tool": tool_name,
+                            "tool_call_id": tc.id,
                             "output": output,
                             "success": success,
                         },
@@ -441,6 +565,7 @@ class Handlers:
                     event_type="tool_output",
                     data={
                         "tool": tool_name,
+                        "tool_call_id": tc.id,
                         "output": rejection_msg,
                         "success": False,
                     },
@@ -458,11 +583,9 @@ class Handlers:
         """Handle shutdown (like shutdown in codex.rs:1329)"""
         # Save session trajectory if enabled (fire-and-forget, returns immediately)
         if session.config.save_sessions:
-            print("💾 Saving session...")
+            logger.info("Saving session...")
             repo_id = session.config.session_dataset_repo
             _ = session.save_and_upload_detached(repo_id)
-            # if local_path:
-            # print("✅ Session saved locally, upload in progress")
 
         session.is_running = False
         await session.send_event(Event(event_type="shutdown"))
@@ -477,7 +600,7 @@ async def process_submission(session: Session, submission) -> bool:
         bool: True to continue, False to shutdown
     """
     op = submission.operation
-    # print(f"📨 Received: {op.op_type.value}")
+    logger.debug("Received operation: %s", op.op_type.value)
 
     if op.op_type == OpType.USER_INPUT:
         text = op.data.get("text", "") if op.data else ""
@@ -504,7 +627,7 @@ async def process_submission(session: Session, submission) -> bool:
     if op.op_type == OpType.SHUTDOWN:
         return not await Handlers.shutdown(session)
 
-    print(f"⚠️  Unknown operation: {op.op_type}")
+    logger.warning(f"Unknown operation: {op.op_type}")
     return True
 
 
@@ -522,7 +645,7 @@ async def submission_loop(
 
     # Create session with tool router
     session = Session(event_queue, config=config, tool_router=tool_router)
-    print("Agent loop started")
+    logger.info("Agent loop started")
 
     # Retry any failed uploads from previous sessions (fire-and-forget)
     if config and config.save_sessions:
@@ -546,25 +669,25 @@ async def submission_loop(
                     if not should_continue:
                         break
                 except asyncio.CancelledError:
-                    print("\n⚠️  Agent loop cancelled")
+                    logger.warning("Agent loop cancelled")
                     break
                 except Exception as e:
-                    print(f"❌ Error in agent loop: {e}")
+                    logger.error(f"Error in agent loop: {e}")
                     await session.send_event(
                         Event(event_type="error", data={"error": str(e)})
                     )
 
-        print("🛑 Agent loop exited")
+        logger.info("Agent loop exited")
 
     finally:
         # Emergency save if session saving is enabled and shutdown wasn't called properly
         if session.config.save_sessions and session.is_running:
-            print("\n💾 Emergency save: preserving session before exit...")
+            logger.info("Emergency save: preserving session before exit...")
             try:
                 local_path = session.save_and_upload_detached(
                     session.config.session_dataset_repo
                 )
                 if local_path:
-                    print("✅ Emergency save successful, upload in progress")
+                    logger.info("Emergency save successful, upload in progress")
             except Exception as e:
-                print(f"❌ Emergency save failed: {e}")
+                logger.error(f"Emergency save failed: {e}")

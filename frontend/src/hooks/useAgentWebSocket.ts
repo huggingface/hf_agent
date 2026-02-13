@@ -1,34 +1,40 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { useAgentStore } from '@/store/agentStore';
+import { useAgentStore, type PlanItem } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
 import { useLayoutStore } from '@/store/layoutStore';
+import { getWebSocketUrl } from '@/utils/api';
+import { logger } from '@/utils/logger';
 import type { AgentEvent } from '@/types/events';
 import type { Message, TraceLog } from '@/types/agent';
 
 const WS_RECONNECT_DELAY = 1000;
 const WS_MAX_RECONNECT_DELAY = 30000;
+const WS_MAX_RETRIES = 5;
 
 interface UseAgentWebSocketOptions {
   sessionId: string | null;
   onReady?: () => void;
   onError?: (error: string) => void;
+  onSessionDead?: (sessionId: string) => void;
 }
 
 export function useAgentWebSocket({
   sessionId,
   onReady,
   onError,
+  onSessionDead,
 }: UseAgentWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectDelayRef = useRef(WS_RECONNECT_DELAY);
+  const retriesRef = useRef(0);
 
   const {
     addMessage,
     updateMessage,
+    appendToMessage,
     setProcessing,
     setConnected,
-    setPendingApprovals,
     setError,
     addTraceLog,
     updateTraceLog,
@@ -40,6 +46,7 @@ export function useAgentWebSocket({
     setPlan,
     setCurrentTurnMessageId,
     updateCurrentTurnTrace,
+    removeLastTurn,
   } = useAgentStore();
 
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
@@ -66,6 +73,48 @@ export function useAgentWebSocket({
           setCurrentTurnMessageId(null); // Start a new turn
           break;
 
+        // ── Streaming: individual token chunks ──────────────────
+        case 'assistant_chunk': {
+          const delta = (event.data?.content as string) || '';
+          if (!delta) break;
+
+          const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+
+          if (currentTurnMsgId) {
+            // Append delta to the existing streaming message
+            appendToMessage(sessionId, currentTurnMsgId, delta);
+          } else {
+            // First chunk — create the message (with pending traces if any)
+            const currentTrace = useAgentStore.getState().traceLogs;
+            const messageId = `msg_${Date.now()}`;
+            const segments: Array<{ type: 'text' | 'tools'; content?: string; tools?: typeof currentTrace }> = [];
+
+            if (currentTrace.length > 0) {
+              segments.push({ type: 'tools', tools: [...currentTrace] });
+              clearTraceLogs();
+            }
+            segments.push({ type: 'text', content: delta });
+
+            const message: Message = {
+              id: messageId,
+              role: 'assistant',
+              content: delta,
+              timestamp: new Date().toISOString(),
+              segments,
+            };
+            addMessage(sessionId, message);
+            setCurrentTurnMessageId(messageId);
+          }
+          break;
+        }
+
+        // ── Streaming ended (text is already rendered via chunks) ─
+        case 'assistant_stream_end':
+          // Nothing to do — chunks already built the message.
+          // This event is just a signal that the stream is complete.
+          break;
+
+        // ── Legacy non-streaming full message (kept for backwards compat)
         case 'assistant_message': {
           const content = (event.data?.content as string) || '';
           const currentTrace = useAgentStore.getState().traceLogs;
@@ -126,23 +175,41 @@ export function useAgentWebSocket({
 
         case 'tool_call': {
           const toolName = (event.data?.tool as string) || 'unknown';
-          const args = (event.data?.arguments as Record<string, any>) || {};
+          const toolCallId = (event.data?.tool_call_id as string) || '';
+          const args = (event.data?.arguments as Record<string, string | undefined>) || {};
 
           // Don't display plan_tool in trace logs (it shows up elsewhere in the UI)
           if (toolName !== 'plan_tool') {
             const log: TraceLog = {
-              id: `tool_${Date.now()}`,
+              id: `tool_${Date.now()}_${toolCallId}`,
+              toolCallId,
               type: 'call',
               text: `Agent is executing ${toolName}...`,
               tool: toolName,
               timestamp: new Date().toISOString(),
               completed: false,
-              // Store args for auto-exec message creation later
-              args: toolName === 'hf_jobs' ? args : undefined,
+              args,
             };
             addTraceLog(log);
-            // Update the current turn message's trace in real-time
-            updateCurrentTurnTrace(sessionId);
+
+            // If no assistant message exists for this turn, create one now
+            // so the ToolCallGroup renders immediately in the chat flow.
+            const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+            if (!currentTurnMsgId) {
+              const messageId = `msg_${Date.now()}`;
+              const currentTrace = useAgentStore.getState().traceLogs;
+              addMessage(sessionId, {
+                id: messageId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString(),
+                segments: [{ type: 'tools', tools: [...currentTrace] }],
+              });
+              setCurrentTurnMessageId(messageId);
+              clearTraceLogs();
+            } else {
+              updateCurrentTurnTrace(sessionId);
+            }
           }
 
           // Auto-expand Right Panel for specific tools
@@ -171,68 +238,57 @@ export function useAgentWebSocket({
             setLeftSidebarOpen(false);
           }
 
-          console.log('Tool call:', toolName, args);
+          logger.log('Tool call:', toolName, args);
           break;
         }
 
         case 'tool_output': {
           const toolName = (event.data?.tool as string) || 'unknown';
+          const toolCallId = (event.data?.tool_call_id as string) || '';
           const output = (event.data?.output as string) || '';
           const success = event.data?.success as boolean;
 
-          // Mark the corresponding trace log as completed and store the output
-          updateTraceLog(toolName, { completed: true, output, success });
-          // Update the current turn message's trace in real-time
+          // Mark the corresponding trace log as completed and store the output.
+          // If it had a pending approval, mark it as approved (tool_output means it ran).
+          const prevLog = useAgentStore.getState().traceLogs.find(
+            (l) => l.toolCallId === toolCallId
+          );
+          const wasApproval = prevLog?.approvalStatus === 'pending';
+          updateTraceLog(toolCallId, toolName, {
+            completed: true,
+            output,
+            success,
+            ...(wasApproval ? { approvalStatus: 'approved' as const } : {}),
+          });
           updateCurrentTurnTrace(sessionId);
 
-          // Special handling for hf_jobs - update or create job message with output
-          if (toolName === 'hf_jobs') {
-            const messages = useAgentStore.getState().getMessages(sessionId);
-            const traceLogs = useAgentStore.getState().traceLogs;
+          // For hf_jobs: parse job output and enrich the TraceLog with job info
+          if (toolName === 'hf_jobs' && output) {
+            const updates: Partial<TraceLog> = { approvalStatus: 'approved' as const };
 
-            // Find existing approval message for this job
-            let jobMsg = [...messages].reverse().find(m => m.approval);
+            // Parse job URL
+            const urlMatch = output.match(/\*\*View at:\*\*\s*(https:\/\/[^\s\n]+)/);
+            if (urlMatch) updates.jobUrl = urlMatch[1];
 
-            if (!jobMsg) {
-              // No approval message exists - this was an auto-executed job
-              // Create a job execution message so user can see results
-              const jobTrace = [...traceLogs].reverse().find(t => t.tool === 'hf_jobs');
-              const args = jobTrace?.args || {};
+            // Parse job status
+            const statusMatch = output.match(/\*\*Final Status:\*\*\s*([^\n]+)/);
+            if (statusMatch) updates.jobStatus = statusMatch[1].trim();
 
-              const autoExecMessage: Message = {
-                id: `msg_auto_${Date.now()}`,
-                role: 'assistant',
-                content: '',
-                timestamp: new Date().toISOString(),
-                approval: {
-                  status: 'approved', // Auto-approved (no user action needed)
-                  batch: {
-                    tools: [{
-                      tool: toolName,
-                      arguments: args,
-                      tool_call_id: `auto_${Date.now()}`
-                    }],
-                    count: 1
-                  }
-                },
-                toolOutput: output
-              };
-              addMessage(sessionId, autoExecMessage);
-              console.log('Created auto-exec message with tool output:', toolName);
-            } else {
-              // Update existing approval message
-              const currentOutput = jobMsg.toolOutput || '';
-              const newOutput = currentOutput ? currentOutput + '\n\n' + output : output;
-
-              useAgentStore.getState().updateMessage(sessionId, jobMsg.id, {
-                toolOutput: newOutput
-              });
-              console.log('Updated job message with tool output:', toolName);
+            // Parse logs
+            if (output.includes('**Logs:**')) {
+              const parts = output.split('**Logs:**');
+              if (parts.length > 1) {
+                const codeBlockMatch = parts[1].trim().match(/```([\s\S]*?)```/);
+                if (codeBlockMatch) updates.jobLogs = codeBlockMatch[1].trim();
+              }
             }
+
+            updateTraceLog(toolCallId, toolName, updates);
+            updateCurrentTurnTrace(sessionId);
           }
 
           // Don't create message bubbles for tool outputs - they only show in trace logs
-          console.log('Tool output:', toolName, success);
+          logger.log('Tool output:', toolName, success);
           break;
         }
 
@@ -267,7 +323,7 @@ export function useAgentWebSocket({
         }
 
         case 'plan_update': {
-          const plan = (event.data?.plan as any[]) || [];
+          const plan = (event.data?.plan as PlanItem[]) || [];
           setPlan(plan);
           if (!useLayoutStore.getState().isRightPanelOpen) {
             setRightPanelOpen(true);
@@ -281,25 +337,59 @@ export function useAgentWebSocket({
             arguments: Record<string, unknown>;
             tool_call_id: string;
           }>;
-          const count = (event.data?.count as number) || 0;
 
-          // Create a persistent message for the approval request
-          const message: Message = {
-            id: `msg_approval_${Date.now()}`,
-            role: 'assistant',
-            content: '', // Content is handled by the approval UI
-            timestamp: new Date().toISOString(),
-            approval: {
-                status: 'pending',
-                batch: { tools, count }
+          // Create or update trace logs for approval tools.
+          // The backend only sends tool_call events for non-approval tools,
+          // so we must create TraceLogs here for approval-requiring tools.
+          if (tools) {
+            for (const t of tools) {
+              // Check if a TraceLog already exists (shouldn't, but be safe)
+              const existing = useAgentStore.getState().traceLogs.find(
+                (log) => log.toolCallId === t.tool_call_id
+              );
+              if (!existing) {
+                addTraceLog({
+                  id: `tool_${Date.now()}_${t.tool_call_id}`,
+                  toolCallId: t.tool_call_id,
+                  type: 'call',
+                  text: `Approval required for ${t.tool}`,
+                  tool: t.tool,
+                  timestamp: new Date().toISOString(),
+                  completed: false,
+                  args: t.arguments as Record<string, unknown>,
+                  approvalStatus: 'pending',
+                });
+              } else {
+                updateTraceLog(t.tool_call_id, t.tool, {
+                  approvalStatus: 'pending',
+                  args: t.arguments as Record<string, unknown>,
+                });
+              }
             }
-          };
-          addMessage(sessionId, message);
 
-          // Show the first tool's content in the panel so users see what they're approving
+            // Ensure there's a message to render the approval UI in
+            const currentTurnMsgId = useAgentStore.getState().currentTurnMessageId;
+            if (!currentTurnMsgId) {
+              const messageId = `msg_${Date.now()}`;
+              const currentTrace = useAgentStore.getState().traceLogs;
+              addMessage(sessionId, {
+                id: messageId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString(),
+                segments: [{ type: 'tools', tools: [...currentTrace] }],
+              });
+              setCurrentTurnMessageId(messageId);
+              clearTraceLogs();
+            } else {
+              updateCurrentTurnTrace(sessionId);
+            }
+          }
+
+          // Show the first tool's content in the panel
           if (tools && tools.length > 0) {
             const firstTool = tools[0];
-            const args = firstTool.arguments as Record<string, any>;
+            const args = firstTool.arguments as Record<string, string | undefined>;
 
             clearPanelTabs();
 
@@ -324,7 +414,6 @@ export function useAgentWebSocket({
               });
               setActivePanelTab('content');
             } else {
-              // For other tools, show args as JSON
               setPanelTab({
                 id: 'args',
                 title: firstTool.tool,
@@ -339,11 +428,6 @@ export function useAgentWebSocket({
             setLeftSidebarOpen(false);
           }
 
-          // Clear currentTurnMessageId so subsequent assistant_message events create a new message below the approval
-          setCurrentTurnMessageId(null);
-
-          // We don't set pendingApprovals in the global store anymore as the message handles the UI
-          setPendingApprovals(null);
           setProcessing(false);
           break;
         }
@@ -356,7 +440,7 @@ export function useAgentWebSocket({
         case 'compacted': {
           const oldTokens = event.data?.old_tokens as number;
           const newTokens = event.data?.new_tokens as number;
-          console.log(`Context compacted: ${oldTokens} -> ${newTokens} tokens`);
+          logger.log(`Context compacted: ${oldTokens} -> ${newTokens} tokens`);
           break;
         }
 
@@ -378,16 +462,19 @@ export function useAgentWebSocket({
           break;
 
         case 'undo_complete':
-          // Could remove last messages from store
+          if (sessionId) {
+            removeLastTurn(sessionId);
+          }
+          setProcessing(false);
           break;
 
         default:
-          console.log('Unknown event:', event);
+          logger.log('Unknown event:', event);
       }
     },
     // Zustand setters are stable, so we don't need them in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId, onReady, onError]
+    [sessionId, onReady, onError, onSessionDead]
   );
 
   const connect = useCallback(() => {
@@ -399,21 +486,17 @@ export function useAgentWebSocket({
       return;
     }
 
-    // Connect directly to backend (Vite doesn't proxy WebSockets)
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // In development, connect directly to backend port 7860
-    // In production, use the same host
-    const isDev = import.meta.env.DEV;
-    const host = isDev ? '127.0.0.1:7860' : window.location.host;
-    const wsUrl = `${protocol}//${host}/api/ws/${sessionId}`;
+    // Build WebSocket URL (centralized in utils/api.ts)
+    const wsUrl = getWebSocketUrl(sessionId);
 
-    console.log('Connecting to WebSocket:', wsUrl);
+    logger.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
+      logger.log('WebSocket connected');
       setConnected(true);
       reconnectDelayRef.current = WS_RECONNECT_DELAY;
+      retriesRef.current = 0; // Reset retry counter on successful connect
     };
 
     ws.onmessage = (event) => {
@@ -421,20 +504,31 @@ export function useAgentWebSocket({
         const data = JSON.parse(event.data) as AgentEvent;
         handleEvent(data);
       } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
+        logger.error('Failed to parse WebSocket message:', e);
       }
     };
 
     ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+      logger.error('WebSocket error:', error);
     };
 
     ws.onclose = (event) => {
-      console.log('WebSocket closed', event.code, event.reason);
+      logger.log('WebSocket closed', event.code, event.reason);
       setConnected(false);
 
-      // Only reconnect if it wasn't a normal closure and session still exists
-      if (event.code !== 1000 && sessionId) {
+      // Don't reconnect if:
+      // - Normal closure (1000)
+      // - Session not found (4004) — session was deleted or backend restarted
+      // - Auth failed (4001) or access denied (4003) — won't succeed on retry
+      // - No session ID
+      const noRetryCodes = [1000, 4001, 4003, 4004];
+      if (!noRetryCodes.includes(event.code) && sessionId) {
+        retriesRef.current += 1;
+        if (retriesRef.current > WS_MAX_RETRIES) {
+          logger.warn(`WebSocket: max retries (${WS_MAX_RETRIES}) reached, giving up.`);
+          onSessionDead?.(sessionId);
+          return;
+        }
         // Attempt to reconnect with exponential backoff
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
@@ -446,6 +540,12 @@ export function useAgentWebSocket({
           );
           connect();
         }, reconnectDelayRef.current);
+      } else if (event.code === 4004 && sessionId) {
+        // Session not found — remove it from the store (lazy cleanup)
+        logger.warn(`Session ${sessionId} no longer exists on backend, removing.`);
+        onSessionDead?.(sessionId);
+      } else if (noRetryCodes.includes(event.code) && event.code !== 1000) {
+        logger.warn(`WebSocket permanently closed: ${event.code} ${event.reason}`);
       }
     };
 
@@ -476,6 +576,10 @@ export function useAgentWebSocket({
       disconnect();
       return;
     }
+
+    // Reset retry state for new session
+    retriesRef.current = 0;
+    reconnectDelayRef.current = WS_RECONNECT_DELAY;
 
     // Small delay to ensure session is fully created on backend
     const timeoutId = setTimeout(() => {

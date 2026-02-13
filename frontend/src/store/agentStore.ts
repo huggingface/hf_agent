@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { Message, ApprovalBatch, User, TraceLog } from '@/types/agent';
+import { persist } from 'zustand/middleware';
+import type { Message, User, TraceLog } from '@/types/agent';
 
 export interface PlanItem {
   id: string;
@@ -12,7 +13,13 @@ interface PanelTab {
   title: string;
   content: string;
   language?: string;
-  parameters?: any;
+  parameters?: Record<string, unknown>;
+}
+
+export interface LLMHealthError {
+  error: string;
+  errorType: 'auth' | 'credits' | 'rate_limit' | 'network' | 'unknown';
+  model: string;
 }
 
 interface AgentStore {
@@ -20,11 +27,11 @@ interface AgentStore {
   messagesBySession: Record<string, Message[]>;
   isProcessing: boolean;
   isConnected: boolean;
-  pendingApprovals: ApprovalBatch | null;
   user: User | null;
   error: string | null;
+  llmHealthError: LLMHealthError | null;
   traceLogs: TraceLog[];
-  panelContent: { title: string; content: string; language?: string; parameters?: any } | null;
+  panelContent: { title: string; content: string; language?: string; parameters?: Record<string, unknown> } | null;
   panelTabs: PanelTab[];
   activePanelTab: string | null;
   plan: PlanItem[];
@@ -36,14 +43,13 @@ interface AgentStore {
   clearMessages: (sessionId: string) => void;
   setProcessing: (isProcessing: boolean) => void;
   setConnected: (isConnected: boolean) => void;
-  setPendingApprovals: (approvals: ApprovalBatch | null) => void;
   setUser: (user: User | null) => void;
   setError: (error: string | null) => void;
   getMessages: (sessionId: string) => Message[];
   addTraceLog: (log: TraceLog) => void;
-  updateTraceLog: (toolName: string, updates: Partial<TraceLog>) => void;
+  updateTraceLog: (toolCallId: string, toolName: string, updates: Partial<TraceLog>) => void;
   clearTraceLogs: () => void;
-  setPanelContent: (content: { title: string; content: string; language?: string; parameters?: any } | null) => void;
+  setPanelContent: (content: { title: string; content: string; language?: string; parameters?: Record<string, unknown> } | null) => void;
   setPanelTab: (tab: PanelTab) => void;
   setActivePanelTab: (tabId: string) => void;
   clearPanelTabs: () => void;
@@ -52,15 +58,24 @@ interface AgentStore {
   setCurrentTurnMessageId: (id: string | null) => void;
   updateCurrentTurnTrace: (sessionId: string) => void;
   showToolOutput: (log: TraceLog) => void;
+  /** Append a streaming delta to an existing message. */
+  appendToMessage: (sessionId: string, messageId: string, delta: string) => void;
+  /** Remove all messages for a session (also clears from localStorage). */
+  deleteSessionMessages: (sessionId: string) => void;
+  /** Remove the last turn (last user msg + all following assistant/tool msgs). */
+  removeLastTurn: (sessionId: string) => void;
+  setLlmHealthError: (error: LLMHealthError | null) => void;
 }
 
-export const useAgentStore = create<AgentStore>((set, get) => ({
+export const useAgentStore = create<AgentStore>()(
+  persist(
+  (set, get) => ({
   messagesBySession: {},
   isProcessing: false,
   isConnected: false,
-  pendingApprovals: null,
   user: null,
   error: null,
+  llmHealthError: null,
   traceLogs: [],
   panelContent: null,
   panelTabs: [],
@@ -112,10 +127,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set({ isConnected });
   },
 
-  setPendingApprovals: (approvals: ApprovalBatch | null) => {
-    set({ pendingApprovals: approvals });
-  },
-
   setUser: (user: User | null) => {
     set({ user });
   },
@@ -134,14 +145,27 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }));
   },
 
-  updateTraceLog: (toolName: string, updates: Partial<TraceLog>) => {
+  updateTraceLog: (toolCallId: string, toolName: string, updates: Partial<TraceLog>) => {
     set((state) => {
-      // Find the last trace log with this tool name and update it
       const traceLogs = [...state.traceLogs];
-      for (let i = traceLogs.length - 1; i >= 0; i--) {
-        if (traceLogs[i].tool === toolName && traceLogs[i].type === 'call') {
-          traceLogs[i] = { ...traceLogs[i], ...updates };
-          break;
+      // Prefer matching by tool_call_id (reliable), fall back to tool name (legacy)
+      let matched = false;
+      if (toolCallId) {
+        for (let i = traceLogs.length - 1; i >= 0; i--) {
+          if (traceLogs[i].toolCallId === toolCallId) {
+            traceLogs[i] = { ...traceLogs[i], ...updates };
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        // Fallback: match by tool name (last uncompleted call)
+        for (let i = traceLogs.length - 1; i >= 0; i--) {
+          if (traceLogs[i].tool === toolName && traceLogs[i].type === 'call' && !traceLogs[i].completed) {
+            traceLogs[i] = { ...traceLogs[i], ...updates };
+            break;
+          }
         }
       }
       return { traceLogs };
@@ -208,20 +232,39 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   updateCurrentTurnTrace: (sessionId: string) => {
     const state = get();
-    if (state.currentTurnMessageId) {
-      const currentMessages = state.messagesBySession[sessionId] || [];
-      const updatedMessages = currentMessages.map((msg) =>
-        msg.id === state.currentTurnMessageId
-          ? { ...msg, trace: state.traceLogs.length > 0 ? [...state.traceLogs] : undefined }
-          : msg
-      );
-      set({
-        messagesBySession: {
-          ...state.messagesBySession,
-          [sessionId]: updatedMessages,
-        },
-      });
-    }
+    if (!state.currentTurnMessageId) return;
+
+    const currentMessages = state.messagesBySession[sessionId] || [];
+    const latestTools = state.traceLogs.length > 0 ? [...state.traceLogs] : undefined;
+    if (!latestTools) return;
+
+    const updatedMessages = currentMessages.map((msg) => {
+      if (msg.id !== state.currentTurnMessageId) return msg;
+
+      const segments = msg.segments ? [...msg.segments] : [];
+      const lastToolsIdx = segments.map((s) => s.type).lastIndexOf('tools');
+
+      if (lastToolsIdx >= 0 && lastToolsIdx === segments.length - 1) {
+        // Last segment IS a tools segment — update it in place
+        segments[lastToolsIdx] = { type: 'tools', tools: latestTools };
+      } else if (lastToolsIdx >= 0) {
+        // A tools segment exists but is NOT last (text came after it).
+        // Append a NEW tools segment at the end.
+        segments.push({ type: 'tools', tools: latestTools });
+      } else {
+        // No tools segment at all — create one at the end.
+        segments.push({ type: 'tools', tools: latestTools });
+      }
+
+      return { ...msg, segments };
+    });
+
+    set({
+      messagesBySession: {
+        ...state.messagesBySession,
+        [sessionId]: updatedMessages,
+      },
+    });
   },
 
   showToolOutput: (log: TraceLog) => {
@@ -257,4 +300,80 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       activePanelTab: 'tool_output',
     });
   },
-}));
+
+  appendToMessage: (sessionId: string, messageId: string, delta: string) => {
+    set((state) => {
+      const messages = state.messagesBySession[sessionId] || [];
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: messages.map((msg) => {
+            if (msg.id !== messageId) return msg;
+            const newContent = msg.content + delta;
+            const segments = msg.segments ? [...msg.segments] : [];
+            const lastSeg = segments[segments.length - 1];
+
+            if (lastSeg && lastSeg.type === 'text') {
+              // Append to the existing text segment
+              segments[segments.length - 1] = {
+                ...lastSeg,
+                content: (lastSeg.content || '') + delta,
+              };
+            } else {
+              // Last segment is 'tools' (or empty) — start a NEW text segment
+              // so that tools and text remain visually separated.
+              segments.push({ type: 'text', content: delta });
+            }
+
+            return { ...msg, content: newContent, segments };
+          }),
+        },
+      };
+    });
+  },
+
+  deleteSessionMessages: (sessionId: string) => {
+    set((state) => {
+      const { [sessionId]: _, ...rest } = state.messagesBySession;
+      return { messagesBySession: rest };
+    });
+  },
+
+  removeLastTurn: (sessionId: string) => {
+    set((state) => {
+      const msgs = state.messagesBySession[sessionId];
+      if (!msgs || msgs.length === 0) return state;
+
+      // Find the index of the last user message
+      let lastUserIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      if (lastUserIdx === -1) return state; // no user message to remove
+
+      // Remove everything from that user message onward
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: msgs.slice(0, lastUserIdx),
+        },
+      };
+    });
+  },
+
+  setLlmHealthError: (error: LLMHealthError | null) => {
+    set({ llmHealthError: error });
+  },
+}),
+    {
+      name: 'hf-agent-messages',
+      // Only persist messages — all transient UI state stays in-memory
+      partialize: (state) => ({
+        messagesBySession: state.messagesBySession,
+      }),
+    }
+  )
+);

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 import uuid
@@ -9,10 +10,40 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
-from litellm import get_max_tokens
-
 from agent.config import Config
 from agent.context_manager.manager import ContextManager
+
+logger = logging.getLogger(__name__)
+
+# Local max-token lookup — avoids litellm.get_max_tokens() which can hang
+# on network calls for certain providers (known litellm issue).
+_MAX_TOKENS_MAP: dict[str, int] = {
+    "anthropic/claude-opus-4-5-20251101": 200_000,
+    "anthropic/claude-sonnet-4-5-20250929": 200_000,
+    "anthropic/claude-sonnet-4-20250514": 200_000,
+    "anthropic/claude-haiku-3-5-20241022": 200_000,
+    "anthropic/claude-3-5-sonnet-20241022": 200_000,
+    "anthropic/claude-3-opus-20240229": 200_000,
+}
+_DEFAULT_MAX_TOKENS = 200_000
+
+
+def _get_max_tokens_safe(model_name: str) -> int:
+    """Return the max context window for a model without network calls."""
+    tokens = _MAX_TOKENS_MAP.get(model_name)
+    if tokens:
+        return tokens
+    # Fallback: try litellm but with a short timeout via threading
+    try:
+        from litellm import get_max_tokens
+        result = get_max_tokens(model_name)
+        if result and isinstance(result, int):
+            return result
+        logger.warning(f"get_max_tokens returned {result} for {model_name}, using default")
+        return _DEFAULT_MAX_TOKENS
+    except Exception as e:
+        logger.warning(f"get_max_tokens failed for {model_name}, using default: {e}")
+        return _DEFAULT_MAX_TOKENS
 
 
 class OpType(Enum):
@@ -46,7 +77,7 @@ class Session:
         self.tool_router = tool_router
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
         self.context_manager = context_manager or ContextManager(
-            max_context=get_max_tokens(config.model_name),
+            max_context=_get_max_tokens_safe(config.model_name),
             compact_size=0.1,
             untouched_messages=5,
             tool_specs=tool_specs,
@@ -59,6 +90,8 @@ class Session:
         self.is_running = True
         self.current_task: asyncio.Task | None = None
         self.pending_approval: Optional[dict[str, Any]] = None
+        # User's HF OAuth token — set by session_manager after construction
+        self.hf_token: Optional[str] = None
 
         # Session trajectory logging
         self.logged_events: list[dict] = []
@@ -99,7 +132,7 @@ class Session:
 
         turns_since_last_save = self.turn_count - self.last_auto_save_turn
         if turns_since_last_save >= interval:
-            print(f"\n💾 Auto-saving session (turn {self.turn_count})...")
+            logger.info(f"Auto-saving session (turn {self.turn_count})...")
             # Fire-and-forget save - returns immediately
             self.save_and_upload_detached(self.config.session_dataset_repo)
             self.last_auto_save_turn = self.turn_count
@@ -151,28 +184,8 @@ class Session:
 
             return str(filepath)
         except Exception as e:
-            print(f"Failed to save session locally: {e}")
+            logger.error(f"Failed to save session locally: {e}")
             return None
-
-    def update_local_save_status(
-        self, filepath: str, upload_status: str, dataset_url: Optional[str] = None
-    ) -> bool:
-        """Update the upload status of an existing local save file"""
-        try:
-            with open(filepath, "r") as f:
-                data = json.load(f)
-
-            data["upload_status"] = upload_status
-            data["upload_url"] = dataset_url
-            data["last_save_time"] = datetime.now().isoformat()
-
-            with open(filepath, "w") as f:
-                json.dump(data, f, indent=2)
-
-            return True
-        except Exception as e:
-            print(f"Failed to update local save status: {e}")
-            return False
 
     def save_and_upload_detached(self, repo_id: str) -> Optional[str]:
         """
@@ -202,7 +215,7 @@ class Session:
                 start_new_session=True,  # Detach from parent
             )
         except Exception as e:
-            print(f"⚠️  Failed to spawn upload subprocess: {e}")
+            logger.warning(f"Failed to spawn upload subprocess: {e}")
 
         return local_path
 
@@ -232,4 +245,4 @@ class Session:
                 start_new_session=True,  # Detach from parent
             )
         except Exception as e:
-            print(f"⚠️  Failed to spawn retry subprocess: {e}")
+            logger.warning(f"Failed to spawn retry subprocess: {e}")
