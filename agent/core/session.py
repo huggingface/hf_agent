@@ -59,6 +59,7 @@ class Session:
         self.is_running = True
         self.current_task: asyncio.Task | None = None
         self.pending_approval: Optional[dict[str, Any]] = None
+        self.sandbox = None
 
         # Session trajectory logging
         self.logged_events: list[dict] = []

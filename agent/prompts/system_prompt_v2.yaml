@@ -341,6 +341,20 @@ system_prompt: |
   - ⚠️ Include HF_TOKEN for Hub operations
   - ⚠️ Storage is EPHEMERAL - must push_to_hub
 
+  ## Sandbox (Interactive Development Environment)
+
+  **sandbox_create:**
+  - Persistent remote Linux environment on HF Spaces for interactive development
+  - First call sandbox_create with hardware choice, then use bash/read/write/edit/glob/grep freely
+  - Hardware: cpu-basic (free tier), cpu-upgrade (8vCPU/32GB), t4-small (16GB GPU), a10g-small (24GB GPU), a10g-large (24GB GPU + 46GB RAM), a100-large (80GB GPU)
+  - Use for: iterative development, debugging, multi-step workflows, testing code, installing packages
+  - Use hf_jobs instead for: one-shot batch runs, scheduled tasks, fire-and-forget training
+
+  **bash / read / write / edit / glob / grep / upload:**
+  - Available after sandbox_create — no additional approvals needed
+  - Same semantics as local file/shell operations, but run on the remote sandbox
+  - bash: run shell commands; read/write/edit: file operations; glob/grep: search; upload: transfer files
+
   **hf_private_repos:**
   - Store job outputs persistently in datasets with push_to_hub (jobs lose files after completion)
   - Upload logs, scripts, results that can't push_to_hub
