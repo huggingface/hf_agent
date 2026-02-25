@@ -1015,6 +1015,27 @@ async def hf_jobs_handler(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
 
+        # If script is a sandbox file path, read it from the sandbox
+        script = arguments.get("script", "")
+        sandbox = getattr(session, "sandbox", None) if session else None
+        is_path = (
+            sandbox
+            and isinstance(script, str)
+            and script.strip() == script
+            and not any(c in script for c in "\r\n\0")
+            and (
+                script.startswith("/")
+                or script.startswith("./")
+                or script.startswith("../")
+            )
+        )
+        if is_path:
+            import shlex
+            result = await asyncio.to_thread(sandbox.bash, f"cat {shlex.quote(script)}")
+            if not result.success:
+                return f"Failed to read {script} from sandbox: {result.error}", False
+            arguments = {**arguments, "script": result.output}
+
         # Get token and namespace from HF token
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
         namespace = HfApi(token=hf_token).whoami().get("name") if hf_token else None
