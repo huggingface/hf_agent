@@ -77,17 +77,16 @@ async def _ensure_sandbox(
 SANDBOX_CREATE_TOOL_SPEC = {
     "name": "sandbox_create",
     "description": (
-        "Create a persistent remote Linux sandbox on HF Spaces for interactive development.\n"
-        "YOU MUST DO THIS BEFORE USING bash/read/write/edit tools.\n"
-        "\n"
-        "Spins up a new sandbox with a given hardware tier where you can run commands, read/write/edit files, "
-        "install packages, and debug iteratively. The sandbox persists across tool calls within the session."
-        "\n"
-        "You can choose from the following hardware tiers (GPU is required for model development or other tasks that benefit from and utilize the GPU): "
-        + ", ".join([e.value for e in SpaceHardware])
-        + ".\n"
-        "Use sandbox for: iterative development, debugging, multi-step workflows, testing code.\n"
-        "Use hf_jobs instead for: one-shot batch runs, scheduled tasks, fire-and-forget training.\n"
+        "Create a persistent remote Linux environment for developing and testing scripts.\n\n"
+        "Workflow: sandbox_create → write script → pip install → test with small run → fix errors → hf_jobs at scale.\n"
+        "The sandbox persists across tool calls within the session. pip install works out of the box.\n\n"
+        "Use this when: you need to develop, test, and iterate on scripts before launching via hf_jobs. "
+        "Especially for training scripts where you need to verify imports, test on a small subset, and fix errors interactively.\n\n"
+        "Skip this when: the task is a simple one-shot operation (status check, resource search, quick data query), "
+        "or the script is copied from a verified working example with minimal changes.\n\n"
+        "For ML code that uses CUDA, bf16, or model loading: use GPU hardware (t4-small minimum). "
+        "CPU sandboxes cannot run GPU code paths — your test will not catch GPU-related errors.\n\n"
+        "Hardware: " + ", ".join([e.value for e in SpaceHardware]) + ".\n"
     ),
     "parameters": {
         "type": "object",

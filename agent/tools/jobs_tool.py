@@ -118,6 +118,21 @@ def _filter_uv_install_output(logs: list[str]) -> list[str]:
     return logs
 
 
+_DEFAULT_ENV = {
+    "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+    "TQDM_DISABLE": "1",
+    "TRANSFORMERS_VERBOSITY": "warning",
+    "HF_HUB_ENABLE_HF_TRANSFER": "1",
+}
+
+
+def _add_default_env(params: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Inject default env vars for clean, agent-friendly output."""
+    result = dict(_DEFAULT_ENV)
+    result.update(params or {})  # user-provided values override defaults
+    return result
+
+
 def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
 
@@ -497,7 +512,7 @@ class HfJobsTool:
                 self.api.run_job,
                 image=image,
                 command=command,
-                env=args.get("env"),
+                env=_add_default_env(args.get("env")),
                 secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
@@ -715,7 +730,7 @@ To verify, call this tool with `{{"operation": "inspect", "job_id": "{job_id}"}}
                 image=image,
                 command=command,
                 schedule=schedule,
-                env=args.get("env"),
+                env=_add_default_env(args.get("env")),
                 secrets=_add_environment_variables(args.get("secrets")),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
@@ -875,56 +890,33 @@ To inspect, call this tool with `{{"operation": "scheduled inspect", "scheduled_
 HF_JOBS_TOOL_SPEC = {
     "name": "hf_jobs",
     "description": (
-        "Execute Python scripts or Docker containers on HF cloud infrastructure (CPUs/GPUs) in one of two modes. "
-        "\n\n"
-        "**Two Modes (mutually exclusive):**\n"
-        "1. Python mode: using 'script' arg (REQUIRED) + 'dependencies'\n"
-        "2. Docker mode: using 'command' arg (REQUIRED) + 'image'\n\n"
-        "🚨 **REQUIRED:** You MUST provide exactly ONE of: 'script' (Python code as string) OR 'command' (Docker command as array). "
-        "They are mutually exclusive - provide one or the other, never both, never neither. "
-        "Do NOT call with just {'operation': 'run'} - always include your code. Example: {'operation': 'run', 'script': 'import torch; print(torch.cuda.is_available())', 'dependencies': ['torch']} or {'operation': 'run', 'command': ['duckdb', '-c', 'select 1 + 2']', 'image': 'duckdb/duckdb'}\n\n"
-        "⚠️ CRITICAL for reliability: (1) Jobs run ASYNC - provide monitoring URL immediately, don't poll; "
-        "(2) Set timeout >30min (default too short - training needs 2-8h); "
-        "(3) HF_TOKEN auto-loaded to secrets for Hub ops (push_to_hub, private repos); "
-        "(4) Job storage EPHEMERAL - MUST push_to_hub() or ALL work is LOST. "
-        "**Use when:** User wants cloud compute, training models, data processing, batch inference, GPU workloads, scheduled tasks. "
-        "ALWAYS use this tool (✓), never bash 'hf jobs' commands (✗). Pass script content inline (✓), don't save to files unless requested (✗). "
-        "\n\n"
-        "**Operations:** run, ps, logs, inspect, cancel, scheduled run, scheduled ps, scheduled inspect, scheduled delete, scheduled suspend, scheduled resume. "
-        "**Available Hardware (vCPU/RAM/GPU):**\n"
-        f"• CPU: {CPU_FLAVORS_DESC}\n"
-        f"• GPU: {GPU_FLAVORS_DESC}\n"
-        "  ◦ Common: t4-small ($0.60/hr, demos/1-3B models), a10g-small ($1/hr), a10g-large ($2/hr, production 7-13B), a100-large ($4/hr, 30B+), h100 ($6/hr, 70B+)\n\n"
-        "**After Submission Ground Rules:**\n"
-        "✓ Return immediately with job ID and monitoring URL\n"
-        "✓ Provide expected completion time and cost estimate\n"
-        "✓ For training: Include Trackio dashboard URL\n"
-        "✓ Note user can check status later\n"
-        "✗ DON'T poll logs automatically\n"
-        "✗ DON'T wait for completion\n"
-        "✗ DON'T check status unless user asks\n\n"
-        "**For Training Tasks:**\n"
-        "• ALWAYS research TRL docs first: explore_hf_docs('trl') → fetch_hf_docs(<trainer_url>)\n"
-        "• ALWAYS validate dataset format with hub_repo_details (SFT needs messages/text, DPO needs chosen/rejected)\n"
-        "• ALWAYS include Trackio monitoring in script (explore_hf_docs('trackio'))\n"
-        "• ALWAYS enable push_to_hub=True in training config\n"
-        "• Set timeout 2-8h for training (NOT default 30m)\n"
-        "• Confirm model/dataset choices with user before submitting\n\n"
-        "**Examples:**\n\n"
-        "**Training - Fine-tune LLM:**\n"
-        "{'operation': 'run', 'script': '# Training script with TRL\\nfrom trl import SFTConfig, SFTTrainer\\nfrom transformers import AutoModelForCausalLM\\nmodel = AutoModelForCausalLM.from_pretrained(\"Qwen/Qwen3-4B\")\\n# ... researched implementation from docs ...\\ntrainer.train()\\ntrainer.push_to_hub(\"user-name/my-model\")', 'dependencies': ['transformers', 'trl', 'torch', 'datasets', 'trackio'], 'hardware_flavor': 'a10g-large', 'timeout': '4h'}\n\n"
-        "**Data Processing:**\n"
-        "{'operation': 'run', 'script': 'from datasets import load_dataset\\nds = load_dataset(\"data\")\\n# process...\\nds.push_to_hub(\"user/processed\")', 'dependencies': ['datasets', 'pandas'], 'hardware_flavor': 'cpu-upgrade', 'timeout': '2h'}\n\n"
-        "**Scheduled Daily Job:**\n"
-        "{'operation': 'scheduled run', 'schedule': '@daily', 'script': 'from datasets import Dataset\\nimport pandas as pd\\n# scrape/generate data\\ndf = pd.DataFrame(data)\\nds = Dataset.from_pandas(df)\\nds.push_to_hub(\"user-name/daily-dataset\")', 'dependencies': ['datasets', 'pandas'], 'hardware_flavor': 'cpu-basic'}\n\n"
-        "**Docker Mode:**\n"
-        "{'operation': 'run', 'image': 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime', 'command': ['python', 'train.py', '--epochs', '10'], 'hardware_flavor': 'a100-large'}\n\n"
-        "**Monitor Operations:**\n"
-        "{'operation': 'ps'} - List all jobs\n"
-        "{'operation': 'logs', 'job_id': 'xxx'} - Stream logs (only when user requests)\n"
-        "{'operation': 'inspect', 'job_id': 'xxx'} - Get job details\n"
-        "{'operation': 'cancel', 'job_id': 'xxx'} - Stop job\n\n"
-        "⚠️ CRITICAL: Files created during execution are DELETED when job finishes. MUST push_to_hub() all outputs (models, datasets, artifacts) in script. For logs/scripts, use hf_private_repos after completion."
+        "Execute Python scripts or Docker containers on HF cloud infrastructure.\n\n"
+        "Two modes (mutually exclusive): Python mode (script + dependencies) or Docker mode (command + image). "
+        "Provide exactly ONE of 'script' or 'command'.\n\n"
+        "BEFORE submitting training/fine-tuning jobs:\n"
+        "- You MUST have called github_find_examples + github_read_file to find a working reference implementation. "
+        "Scripts based on your internal knowledge WILL use outdated APIs and fail.\n"
+        "- You MUST have validated dataset format via hf_inspect_dataset or hub_repo_details.\n"
+        "- Training config MUST include push_to_hub=True and hub_model_id. "
+        "Job storage is EPHEMERAL — all files are deleted when the job ends. Without push_to_hub, trained models are lost permanently.\n"
+        "- Include trackio monitoring and provide the dashboard URL to the user.\n\n"
+        "BATCH/ABLATION JOBS: Submit ONE job first. Check logs to confirm it starts training successfully. "
+        "Only then submit the remaining jobs. Never submit all at once — if there's a bug, all jobs fail.\n\n"
+        "Operations: run, ps, logs, inspect, cancel, scheduled run/ps/inspect/delete/suspend/resume.\n\n"
+        f"Hardware: CPU: {CPU_FLAVORS_DESC}. GPU: {GPU_FLAVORS_DESC}.\n"
+        "Common picks: t4-small ($0.60/hr, 1-3B), a10g-large ($2/hr, 7-13B), a100-large ($4/hr, 30B+), h100 ($6/hr, 70B+). "
+        "Note: a10g-small and a10g-large have the SAME 24GB GPU — the difference is CPU/RAM only.\n\n"
+        "OOM RECOVERY: When a training job fails with CUDA OOM:\n"
+        "1. Reduce per_device_train_batch_size and increase gradient_accumulation_steps proportionally (keeps effective batch size identical)\n"
+        "2. Enable gradient_checkpointing=True\n"
+        "3. Upgrade to larger GPU (a10g→a100→h100)\n"
+        "Do NOT switch training methods (e.g. full SFT to LoRA) or reduce max_length — those change what the user gets and require explicit approval.\n\n"
+        "After submission: return immediately with job ID, monitoring URL, expected duration and cost. "
+        "Do not poll logs unless the user asks.\n\n"
+        "Examples:\n"
+        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['transformers', 'trl', 'torch', 'datasets', 'trackio'], 'hardware_flavor': 'a10g-large', 'timeout': '4h'}\n"
+        "Data processing: {'operation': 'run', 'script': '<inline>', 'dependencies': ['datasets'], 'hardware_flavor': 'cpu-upgrade', 'timeout': '2h'}\n"
+        "Monitor: {'operation': 'ps'}, {'operation': 'logs', 'job_id': 'xxx'}, {'operation': 'cancel', 'job_id': 'xxx'}"
     ),
     "parameters": {
         "type": "object",
@@ -944,58 +936,65 @@ HF_JOBS_TOOL_SPEC = {
                     "scheduled suspend",
                     "scheduled resume",
                 ],
-                "description": (
-                    "Operation to execute. Valid values: [run, ps, logs, inspect, cancel, "
-                    "scheduled run, scheduled ps, scheduled inspect, scheduled delete, "
-                    "scheduled suspend, scheduled resume]"
-                ),
+                "description": "Operation to execute.",
             },
-            # Python/UV specific parameters
             "script": {
                 "type": "string",
-                "description": "Python code to execute. Triggers Python mode (auto pip install). Use with 'run'/'scheduled run'. Mutually exclusive with 'command'.",
+                "description": (
+                    "Python code or sandbox file path (e.g. '/app/train.py') or URL. "
+                    "Triggers Python mode. For ML training: base this on a working example found via github_find_examples, not on internal knowledge. "
+                    "Mutually exclusive with 'command'."
+                ),
             },
             "dependencies": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Pip packages to install. Example: ['trl', 'torch', 'datasets', 'transformers']. Only used with 'script'.",
+                "description": (
+                    "Pip packages to install. Include ALL required packages. "
+                    "Common training set: ['transformers', 'trl', 'torch', 'datasets', 'trackio', 'accelerate']. "
+                    "Only used with 'script'."
+                ),
             },
-            # Docker specific parameters
             "image": {
                 "type": "string",
-                "description": "Docker image. Example: 'pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime'. Use with 'run'/'scheduled run'. Optional (auto-selected if not provided).",
+                "description": "Docker image. Optional — auto-selected if not provided. Use with 'command'.",
             },
             "command": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Command to execute as list. Example: ['python', 'train.py', '--epochs', '10']. Triggers Docker mode. Use with 'run'/'scheduled run'. Mutually exclusive with 'script'.",
+                "description": "Command to execute as list. Triggers Docker mode. Mutually exclusive with 'script'.",
             },
-            # Hardware and environment
             "hardware_flavor": {
                 "type": "string",
-                "description": f"Hardware type. Available CPU flavors: {CPU_FLAVORS}. Available GPU flavors: {GPU_FLAVORS}. Use with 'run'/'scheduled run'.",
+                "description": (
+                    "Hardware type. Sizing guide: 1-3B params → t4-small/a10g-small, "
+                    "7-13B → a10g-large, 30B+ → a100-large, 70B+ → h100/h100x8. "
+                    f"All options: CPU: {CPU_FLAVORS}. GPU: {GPU_FLAVORS}."
+                ),
             },
             "timeout": {
                 "type": "string",
-                "description": "Max runtime. Examples: '30m', '2h', '4h'. Default: '30m'. Important for long training jobs. Use with 'run'/'scheduled run'.",
+                "description": (
+                    "Maximum job runtime. MUST be >2h for any training job — default 30m kills training mid-run. "
+                    "Guidelines: 1-3B models: 3-4h, 7-13B: 6-8h, 30B+: 12-24h. "
+                    "Use 30m-1h only for quick data processing or inference tasks. Default: '30m'."
+                ),
             },
             "env": {
                 "type": "object",
-                "description": "Environment variables. Format: {'KEY': 'VALUE'}. HF_TOKEN is automatically included from your auth. Use with 'run'/'scheduled run'.",
+                "description": "Environment variables {'KEY': 'VALUE'}. HF_TOKEN is auto-included.",
             },
-            # Job management parameters
             "job_id": {
                 "type": "string",
-                "description": "Job ID to operate on. Required for: 'logs', 'inspect', 'cancel'.",
+                "description": "Job ID. Required for: logs, inspect, cancel.",
             },
-            # Scheduled job parameters
             "scheduled_job_id": {
                 "type": "string",
-                "description": "Scheduled job ID. Required for: 'scheduled inspect', 'scheduled delete', 'scheduled suspend', 'scheduled resume'.",
+                "description": "Scheduled job ID. Required for: scheduled inspect/delete/suspend/resume.",
             },
             "schedule": {
                 "type": "string",
-                "description": "Schedule for recurring job. Presets: '@hourly', '@daily', '@weekly', '@monthly'. Cron: '0 9 * * 1' (Mon 9am). Required for: 'scheduled run'.",
+                "description": "Cron schedule or preset (@hourly, @daily, @weekly, @monthly). Required for: scheduled run.",
             },
         },
         "required": ["operation"],

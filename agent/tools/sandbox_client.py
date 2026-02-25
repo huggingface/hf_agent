@@ -83,7 +83,11 @@ USER user
 
 ENV HOME=/home/user \\
     PATH=/home/user/.local/bin:$PATH \\
-    PIP_USER=1
+    PIP_USER=1 \\
+    HF_HUB_DISABLE_PROGRESS_BARS=1 \\
+    TQDM_DISABLE=1 \\
+    TRANSFORMERS_VERBOSITY=warning \\
+    HF_HUB_ENABLE_HF_TRANSFER=1
 
 WORKDIR /app
 COPY --chown=user . /app
