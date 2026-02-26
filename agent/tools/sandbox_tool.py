@@ -38,9 +38,13 @@ async def _ensure_sandbox(
     if not session:
         return None, "No session available."
 
-    token = os.environ.get("HF_TOKEN")
+    token = (
+        getattr(session, "hf_token", None)
+        or os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    )
     if not token:
-        return None, "HF_TOKEN environment variable not set. Cannot create sandbox."
+        return None, "No HF token available. Cannot create sandbox."
 
     api = HfApi(token=token)
     user_info = api.whoami()
