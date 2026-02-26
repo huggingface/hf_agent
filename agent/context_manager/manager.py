@@ -90,11 +90,11 @@ class ContextManager:
         compact_size: float = 0.1,
         untouched_messages: int = 5,
         tool_specs: list[dict[str, Any]] | None = None,
-        prompt_file_suffix: str = "system_prompt_v2.yaml",
+        prompt_file_suffix: str = "system_prompt_v3.yaml",
     ):
         self.system_prompt = self._load_system_prompt(
             tool_specs or [],
-            prompt_file_suffix="system_prompt_v2.yaml",
+            prompt_file_suffix="system_prompt_v3.yaml",
         )
         self.max_context = max_context
         self.compact_size = int(max_context * compact_size)
@@ -144,7 +144,9 @@ class ContextManager:
         """Get all messages for sending to LLM"""
         return self.items
 
-    async def compact(self, model_name: str) -> None:
+    async def compact(
+        self, model_name: str, tool_specs: list[dict] | None = None
+    ) -> None:
         """Remove old messages to keep history under target size"""
         if (self.context_length <= self.max_context) or not self.items:
             return
@@ -179,6 +181,7 @@ class ContextManager:
             model=model_name,
             messages=messages_to_summarize,
             max_completion_tokens=self.compact_size,
+            tools=tool_specs,
             api_key=hf_key
             if hf_key and model_name.startswith("huggingface/")
             else None,

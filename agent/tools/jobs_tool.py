@@ -979,7 +979,11 @@ HF_JOBS_TOOL_SPEC = {
             # Python/UV specific parameters
             "script": {
                 "type": "string",
-                "description": "Python code to execute. Triggers Python mode (auto pip install). Use with 'run'/'scheduled run'. Mutually exclusive with 'command'.",
+                "description": (
+                    "Python code or sandbox file path (e.g. '/app/train.py') or URL. "
+                    "Triggers Python mode. For ML training: base this on a working example found via github_find_examples, not on internal knowledge. "
+                    "Mutually exclusive with 'command'."
+                ),
             },
             "dependencies": {
                 "type": "array",
@@ -1040,6 +1044,28 @@ async def hf_jobs_handler(
                 await session.send_event(
                     Event(event_type="tool_log", data={"tool": "hf_jobs", "log": log})
                 )
+
+        # If script is a sandbox file path, read it from the sandbox
+        script = arguments.get("script", "")
+        sandbox = getattr(session, "sandbox", None) if session else None
+        is_path = (
+            sandbox
+            and isinstance(script, str)
+            and script.strip() == script
+            and not any(c in script for c in "\r\n\0")
+            and (
+                script.startswith("/")
+                or script.startswith("./")
+                or script.startswith("../")
+            )
+        )
+        if is_path:
+            import shlex
+
+            result = await asyncio.to_thread(sandbox.bash, f"cat {shlex.quote(script)}")
+            if not result.success:
+                return f"Failed to read {script} from sandbox: {result.error}", False
+            arguments = {**arguments, "script": result.output}
 
         # Prefer the authenticated user's OAuth token, fall back to global env
         hf_token = (
