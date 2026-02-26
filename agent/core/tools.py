@@ -45,6 +45,7 @@ from agent.tools.hf_repo_git_tool import (
 )
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
+from agent.tools.sandbox_tool import get_sandbox_tools
 
 # NOTE: Private HF repo tool disabled - replaced by hf_repo_files and hf_repo_git
 # from agent.tools.private_hf_repo_tools import (
@@ -326,6 +327,9 @@ def create_builtin_tools() -> list[ToolSpec]:
             handler=github_read_file_handler,
         ),
     ]
+
+    # Sandbox tools
+    tools = get_sandbox_tools() + tools
 
     tool_names = ", ".join([t.name for t in tools])
     print(f"Loaded {len(tools)} built-in tools: {tool_names}")

@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from litellm import ChatCompletionMessageToolCall, Message, ModelResponse, acompletion
+from litellm.exceptions import ContextWindowExceededError
 from lmnr import observe
 
 from agent.config import Config
@@ -38,7 +39,9 @@ def _validate_tool_args(tool_args: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = None) -> bool:
+def _needs_approval(
+    tool_name: str, tool_args: dict, config: Config | None = None
+) -> bool:
     """Check if a tool call requires user approval before execution."""
     # Yolo mode: skip all approvals
     if config and config.yolo_mode:
@@ -49,23 +52,31 @@ def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = Non
     if not args_valid:
         return False
 
+    if tool_name == "sandbox_create":
+        return True
+
     if tool_name == "hf_jobs":
         operation = tool_args.get("operation", "")
         if operation not in ["run", "uv", "scheduled run", "scheduled uv"]:
             return False
-        
+
         # Check if this is a CPU-only job
         # hardware_flavor is at top level of tool_args, not nested in args
-        hardware_flavor = tool_args.get("hardware_flavor") or tool_args.get("flavor") or tool_args.get("hardware") or "cpu-basic"
+        hardware_flavor = (
+            tool_args.get("hardware_flavor")
+            or tool_args.get("flavor")
+            or tool_args.get("hardware")
+            or "cpu-basic"
+        )
         is_cpu_job = hardware_flavor in CPU_FLAVORS
-        
+
         if is_cpu_job:
             if config and not config.confirm_cpu_jobs:
                 return False
             return True
-        
+
         return True
-    
+
     # Check for file upload operations (hf_private_repos or other tools)
     if tool_name == "hf_private_repos":
         operation = tool_args.get("operation", "")
@@ -86,10 +97,34 @@ def _needs_approval(tool_name: str, tool_args: dict, config: Config | None = Non
     # hf_repo_git: destructive operations require approval
     if tool_name == "hf_repo_git":
         operation = tool_args.get("operation", "")
-        if operation in ["delete_branch", "delete_tag", "merge_pr", "create_repo", "update_repo"]:
+        if operation in [
+            "delete_branch",
+            "delete_tag",
+            "merge_pr",
+            "create_repo",
+            "update_repo",
+        ]:
             return True
 
     return False
+
+
+async def _compact_and_notify(session: Session) -> None:
+    """Run compaction and send event if context was reduced."""
+    old_length = session.context_manager.context_length
+    tool_specs = session.tool_router.get_tool_specs_for_llm()
+    await session.context_manager.compact(
+        model_name=session.config.model_name,
+        tool_specs=tool_specs,
+    )
+    new_length = session.context_manager.context_length
+    if new_length != old_length:
+        await session.send_event(
+            Event(
+                event_type="compacted",
+                data={"old_tokens": old_length, "new_tokens": new_length},
+            )
+        )
 
 
 class Handlers:
@@ -98,7 +133,7 @@ class Handlers:
     @staticmethod
     @observe(name="run_agent")
     async def run_agent(
-        session: Session, text: str, max_iterations: int = 10
+        session: Session, text: str, max_iterations: int = 300
     ) -> str | None:
         """
         Handle user input (like user_input_or_turn in codex.rs:1291)
@@ -125,6 +160,9 @@ class Handlers:
         final_response = None
 
         while iteration < max_iterations:
+            # Compact before calling the LLM if context is near the limit
+            await _compact_and_notify(session)
+
             messages = session.context_manager.get_messages()
             tools = session.tool_router.get_tool_specs_for_llm()
 
@@ -261,6 +299,14 @@ class Handlers:
 
                 iteration += 1
 
+            except ContextWindowExceededError:
+                # Force compact and retry this iteration
+                session.context_manager.context_length = (
+                    session.context_manager.max_context + 1
+                )
+                await _compact_and_notify(session)
+                continue
+
             except Exception as e:
                 import traceback
 
@@ -271,18 +317,6 @@ class Handlers:
                     )
                 )
                 break
-
-        old_length = session.context_manager.context_length
-        await session.context_manager.compact(model_name=session.config.model_name)
-        new_length = session.context_manager.context_length
-
-        if new_length != old_length:
-            await session.send_event(
-                Event(
-                    event_type="compacted",
-                    data={"old_tokens": old_length, "new_tokens": new_length},
-                )
-            )
 
         await session.send_event(
             Event(
@@ -302,20 +336,6 @@ class Handlers:
         """Handle interrupt (like interrupt in codex.rs:1266)"""
         session.interrupt()
         await session.send_event(Event(event_type="interrupted"))
-
-    @staticmethod
-    async def compact(session: Session) -> None:
-        """Handle compact (like compact in codex.rs:1317)"""
-        old_length = session.context_manager.context_length
-        await session.context_manager.compact(model_name=session.config.model_name)
-        new_length = session.context_manager.context_length
-
-        await session.send_event(
-            Event(
-                event_type="compacted",
-                data={"removed": old_length, "remaining": new_length},
-            )
-        )
 
     @staticmethod
     async def undo(session: Session) -> None:
@@ -489,7 +509,8 @@ async def process_submission(session: Session, submission) -> bool:
         return True
 
     if op.op_type == OpType.COMPACT:
-        await Handlers.compact(session)
+        # compact from the frontend
+        await _compact_and_notify(session)
         return True
 
     if op.op_type == OpType.UNDO:
