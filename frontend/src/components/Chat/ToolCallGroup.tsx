@@ -111,8 +111,8 @@ function InlineApproval({
             <Box component="span" sx={{ fontWeight: 500, color: 'var(--text)' }}>
               {String(args.hardware || 'cpu-basic')}
             </Box>
-            {args.private && (
-              <Box component="span" sx={{ color: 'var(--muted-text)' }}> (private)</Box>
+            {!!args.private && (
+              <Box component="span" sx={{ color: 'var(--muted-text)' }}>{' (private)'}</Box>
             )}
           </Typography>
         </Box>
