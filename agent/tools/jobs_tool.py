@@ -9,7 +9,9 @@ import base64
 import http.client
 import os
 import re
-from typing import Any, Awaitable, Callable, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Callable, Awaitable
+
+import logging
 
 import httpx
 from huggingface_hub import HfApi
@@ -17,6 +19,8 @@ from huggingface_hub.utils import HfHubHTTPError
 
 from agent.core.session import Event
 from agent.tools.types import ToolResult
+
+logger = logging.getLogger(__name__)
 from agent.tools.utilities import (
     format_job_details,
     format_jobs_table,
@@ -128,8 +132,11 @@ def _add_default_env(params: Dict[str, Any] | None) -> Dict[str, Any]:
     return result
 
 
-def _add_environment_variables(params: Dict[str, Any] | None) -> Dict[str, Any]:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+def _add_environment_variables(
+    params: Dict[str, Any] | None, user_token: str | None = None
+) -> Dict[str, Any]:
+    # Prefer the authenticated user's OAuth token, fall back to global env var
+    token = user_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
 
     # Start with user-provided env vars, then force-set token last
     result = dict(params or {})
@@ -285,10 +292,15 @@ class HfJobsTool:
         hf_token: Optional[str] = None,
         namespace: Optional[str] = None,
         log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        session: Any = None,
+        tool_call_id: Optional[str] = None,
     ):
+        self.hf_token = hf_token
         self.api = HfApi(token=hf_token)
         self.namespace = namespace
         self.log_callback = log_callback
+        self.session = session
+        self.tool_call_id = tool_call_id
 
     async def execute(self, params: Dict[str, Any]) -> ToolResult:
         """Execute the specified operation"""
@@ -384,9 +396,7 @@ class HfJobsTool:
                 def log_producer():
                     try:
                         # fetch_job_logs is a blocking sync generator
-                        logs_gen = self.api.fetch_job_logs(
-                            job_id=job_id, namespace=namespace
-                        )
+                        logs_gen = self.api.fetch_job_logs(job_id=job_id, namespace=namespace)
                         for line in logs_gen:
                             # Push line to queue thread-safely
                             loop.call_soon_threadsafe(queue.put_nowait, line)
@@ -413,7 +423,7 @@ class HfJobsTool:
 
                     # Process log line
                     log_line = item
-                    print("\t" + log_line)
+                    logger.debug(log_line)
                     if self.log_callback:
                         await self.log_callback(log_line)
                     all_logs.append(log_line)
@@ -441,19 +451,19 @@ class HfJobsTool:
 
                     if current_status in terminal_states:
                         # Job finished, no need to retry
-                        print(f"\tJob reached terminal state: {current_status}")
+                        logger.info(f"Job reached terminal state: {current_status}")
                         break
 
                     # Job still running, retry connection
-                    print(
-                        f"\tConnection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
+                    logger.warning(
+                        f"Connection interrupted ({str(e)[:50]}...), reconnecting in {retry_delay}s..."
                     )
                     await asyncio.sleep(retry_delay)
                     continue
 
                 except (ConnectionError, TimeoutError, OSError):
                     # Can't even check job status, wait and retry
-                    print(f"\tConnection error, retrying in {retry_delay}s...")
+                    logger.warning(f"Connection error, retrying in {retry_delay}s...")
                     await asyncio.sleep(retry_delay)
                     continue
 
@@ -510,15 +520,29 @@ class HfJobsTool:
                 image=image,
                 command=command,
                 env=_add_default_env(args.get("env")),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
             )
 
+            # Send job URL immediately after job creation (before waiting for completion)
+            if self.session and self.tool_call_id:
+                await self.session.send_event(
+                    Event(
+                        event_type="tool_state_change",
+                        data={
+                            "tool_call_id": self.tool_call_id,
+                            "tool": "hf_jobs",
+                            "state": "running",
+                            "jobUrl": job.url,
+                        },
+                    )
+                )
+
             # Wait for completion and stream logs
-            print(f"{job_type} job started: {job.url}")
-            print("Streaming logs...\n---\n")
+            logger.info(f"{job_type} job started: {job.url}")
+            logger.info("Streaming logs...")
 
             final_status, all_logs = await self._wait_for_job_completion(
                 job_id=job.id,
@@ -728,7 +752,7 @@ To verify, call this tool with `{{"operation": "inspect", "job_id": "{job_id}"}}
                 command=command,
                 schedule=schedule,
                 env=_add_default_env(args.get("env")),
-                secrets=_add_environment_variables(args.get("secrets")),
+                secrets=_add_environment_variables(args.get("secrets"), self.hf_token),
                 flavor=args.get("hardware_flavor", "cpu-basic"),
                 timeout=args.get("timeout", "30m"),
                 namespace=self.namespace,
@@ -998,7 +1022,7 @@ HF_JOBS_TOOL_SPEC = {
 
 
 async def hf_jobs_handler(
-    arguments: Dict[str, Any], session: Any = None
+    arguments: Dict[str, Any], session: Any = None, tool_call_id: str | None = None
 ) -> tuple[str, bool]:
     """Handler for agent tool router"""
     try:
@@ -1031,14 +1055,20 @@ async def hf_jobs_handler(
                 return f"Failed to read {script} from sandbox: {result.error}", False
             arguments = {**arguments, "script": result.output}
 
-        # Get token and namespace from HF token
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
-        namespace = HfApi(token=hf_token).whoami().get("name") if hf_token else None
+        # Prefer the authenticated user's OAuth token, fall back to global env
+        hf_token = (
+            (getattr(session, "hf_token", None) if session else None)
+            or os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        )
+        namespace = os.environ.get("HF_NAMESPACE") or (HfApi(token=hf_token).whoami().get("name") if hf_token else None)
 
         tool = HfJobsTool(
             namespace=namespace,
             hf_token=hf_token,
             log_callback=log_callback if session else None,
+            session=session,
+            tool_call_id=tool_call_id,
         )
         result = await tool.execute(arguments)
         return result["formatted"], not result.get("isError", False)
