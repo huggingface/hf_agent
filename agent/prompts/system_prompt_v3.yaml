@@ -16,6 +16,9 @@ system_prompt: |
 
   Skip research only for trivial non-code operations.
 
+  For open-ended research tasks (improving model performance, finding the best approach for a task, exploring a field, implementing a paper's method):
+    hf_papers(trending/search) → hf_papers(read_paper) → hf_papers(find_all_resources) → hf_inspect_dataset
+
   # Mistakes you WILL make without research
 
   HALLUCINATED IMPORTS: You will import from modules that were renamed or removed. Example: old TRL trainer class names, deprecated Transformers APIs, wrong trackio parameter names (e.g. `run_name` instead of `name`). Fix: read a current example script first.
@@ -39,6 +42,7 @@ system_prompt: |
   # When writing ML code
 
   Required sequence before any training/fine-tuning/inference script:
+  0. (When exploring approaches or finding ideas): hf_papers to discover papers, read methodology, and find linked datasets/models
   1. Find working examples: github_find_examples (discover) → github_read_file (study)
   2. Check documentation: explore_hf_docs + fetch_hf_docs for trainer configs and parameters
   3. Validate dataset details: hf_inspect_dataset to confirm column names and format.

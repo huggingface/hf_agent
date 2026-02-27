@@ -47,6 +47,7 @@ from agent.tools.hf_repo_git_tool import (
     hf_repo_git_handler,
 )
 from agent.tools.jobs_tool import HF_JOBS_TOOL_SPEC, hf_jobs_handler
+from agent.tools.papers_tool import HF_PAPERS_TOOL_SPEC, hf_papers_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
 from agent.tools.sandbox_tool import get_sandbox_tools
 
@@ -224,7 +225,11 @@ class ToolRouter:
 
     @observe(name="call_tool")
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any], session: Any = None, tool_call_id: str | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        session: Any = None,
+        tool_call_id: str | None = None,
     ) -> tuple[str, bool]:
         """
         Call a tool and return (output_string, success_bool).
@@ -242,7 +247,9 @@ class ToolRouter:
             if "session" in sig.parameters:
                 # Check if handler also accepts tool_call_id parameter
                 if "tool_call_id" in sig.parameters:
-                    return await tool.handler(arguments, session=session, tool_call_id=tool_call_id)
+                    return await tool.handler(
+                        arguments, session=session, tool_call_id=tool_call_id
+                    )
                 return await tool.handler(arguments, session=session)
             return await tool.handler(arguments)
 
@@ -281,6 +288,13 @@ def create_builtin_tools() -> list[ToolSpec]:
             description=HF_DOCS_FETCH_TOOL_SPEC["description"],
             parameters=HF_DOCS_FETCH_TOOL_SPEC["parameters"],
             handler=hf_docs_fetch_handler,
+        ),
+        # Paper discovery and reading
+        ToolSpec(
+            name=HF_PAPERS_TOOL_SPEC["name"],
+            description=HF_PAPERS_TOOL_SPEC["description"],
+            parameters=HF_PAPERS_TOOL_SPEC["parameters"],
+            handler=hf_papers_handler,
         ),
         # Dataset inspection tool (unified)
         ToolSpec(
