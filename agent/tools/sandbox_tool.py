@@ -149,14 +149,11 @@ def _make_tool_handler(sandbox_tool_name: str):
     """Factory: create a handler for a sandbox operation tool."""
 
     async def handler(args: dict[str, Any], session: Any = None) -> tuple[str, bool]:
-        # Auto-create sandbox if not present
-        try:
-            sb, error = await _ensure_sandbox(session)
-        except Exception as e:
-            return f"Failed to auto-create sandbox: {e}", False
+        # Require sandbox to exist — user must approve sandbox_create first
+        if not session or not getattr(session, "sandbox", None):
+            return "No sandbox running. Call sandbox_create first to start one.", False
 
-        if error:
-            return error, False
+        sb = session.sandbox
 
         try:
             result = await asyncio.to_thread(sb.call_tool, sandbox_tool_name, args)

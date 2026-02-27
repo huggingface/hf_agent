@@ -104,6 +104,20 @@ function InlineApproval({
 
   return (
     <Box sx={{ px: 1.5, py: 1.5, borderTop: '1px solid var(--tool-border)' }}>
+      {toolName === 'sandbox_create' && args && (
+        <Box sx={{ mb: 1.5 }}>
+          <Typography variant="body2" sx={{ color: 'var(--muted-text)', fontSize: '0.75rem', mb: 1 }}>
+            Create sandbox on{' '}
+            <Box component="span" sx={{ fontWeight: 500, color: 'var(--text)' }}>
+              {String(args.hardware || 'cpu-basic')}
+            </Box>
+            {args.private && (
+              <Box component="span" sx={{ color: 'var(--muted-text)' }}> (private)</Box>
+            )}
+          </Typography>
+        </Box>
+      )}
+
       {toolName === 'hf_jobs' && args && (
         <Box sx={{ mb: 1.5 }}>
           <Typography variant="body2" sx={{ color: 'var(--muted-text)', fontSize: '0.75rem', mb: 1 }}>
