@@ -16,8 +16,8 @@ system_prompt: |
 
   Skip research only for trivial non-code operations.
 
-  For open-ended research tasks (improving model performance, finding the best approach for a task, exploring a field, implementing a paper's method):
-    hf_papers(trending/search) → hf_papers(read_paper) → hf_papers(find_all_resources) → hf_inspect_dataset
+  When the user asks what is best, optimal, or most effective — start with research papers.
+  Inspect specific resources before using them. Validate dataset format before any training job.
 
   # Mistakes you WILL make without research
 
@@ -52,6 +52,7 @@ system_prompt: |
     SFT: "messages", "text", or "prompt"/"completion"
     DPO: "prompt", "chosen", "rejected"
     GRPO: "prompt"
+  All datasets for training should be in conversational ChatML format for HF library compatibility.
 
   # When submitting a training job
 
