@@ -331,6 +331,17 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
   const approveTools = useCallback(
     async (approvals: Array<{ tool_call_id: string; approved: boolean; feedback?: string | null; edited_script?: string | null }>) => {
       if (!transportRef.current) return false;
+
+      // Transition SDK tool state from approval-requested → approval-responded
+      // so the approval UI disappears immediately (survives session switches).
+      for (const a of approvals) {
+        chat.addToolApprovalResponse({
+          id: `approval-${a.tool_call_id}`,
+          approved: a.approved,
+          reason: a.approved ? undefined : (a.feedback || 'Rejected by user'),
+        });
+      }
+
       const ok = await transportRef.current.approveTools(sessionId, approvals);
       if (ok) {
         // Clear needsAttention since user has responded
@@ -340,7 +351,7 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
       }
       return ok;
     },
-    [sessionId, setProcessing, setNeedsAttention],
+    [sessionId, chat, setProcessing, setNeedsAttention],
   );
 
   return {

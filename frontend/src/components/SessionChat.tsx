@@ -49,6 +49,9 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
       const hasPendingApproval = lastAssistant?.parts.some(
         (p) => p.type === 'dynamic-tool' && p.state === 'approval-requested'
       ) ?? false;
+      const hasApprovedRunning = lastAssistant?.parts.some(
+        (p) => p.type === 'dynamic-tool' && p.state === 'approval-responded'
+      ) ?? false;
 
       if (hasPendingApproval) {
         store.setActivityStatus({ type: 'waiting-approval' });
@@ -81,6 +84,10 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
           }
           useLayoutStore.getState().setRightPanelOpen(true);
         }
+      } else if (hasApprovedRunning) {
+        // Tools were approved but still executing — show processing state
+        store.setActivityStatus({ type: 'tool', toolName: 'running' });
+        store.setProcessing(true);
       } else {
         // No pending approval — reset to idle
         store.setActivityStatus({ type: 'idle' });

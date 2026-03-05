@@ -32,6 +32,8 @@ function StatusIcon({ state }: { state: ToolPartState }) {
   switch (state) {
     case 'approval-requested':
       return <HourglassEmptyIcon sx={{ fontSize: 16, color: 'var(--accent-yellow)' }} />;
+    case 'approval-responded':
+      return <CircularProgress size={14} thickness={5} sx={{ color: 'var(--accent-green)' }} />;
     case 'output-available':
       return <CheckCircleOutlineIcon sx={{ fontSize: 16, color: 'success.main' }} />;
     case 'output-error':
@@ -48,6 +50,7 @@ function StatusIcon({ state }: { state: ToolPartState }) {
 function statusLabel(state: ToolPartState): string | null {
   switch (state) {
     case 'approval-requested': return 'awaiting approval';
+    case 'approval-responded': return 'approved';
     case 'input-streaming':
     case 'input-available': return 'running';
     case 'output-denied': return 'denied';
@@ -59,6 +62,7 @@ function statusLabel(state: ToolPartState): string | null {
 function statusColor(state: ToolPartState): string {
   switch (state) {
     case 'approval-requested': return 'var(--accent-yellow)';
+    case 'approval-responded': return 'var(--accent-green)';
     case 'output-available': return 'var(--accent-green)';
     case 'output-error': return 'var(--accent-red)';
     case 'output-denied': return 'var(--muted-text)';
