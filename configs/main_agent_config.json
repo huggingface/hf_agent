@@ -9,10 +9,7 @@
   "_mcpServers_disabled": {
     "hf-mcp-server": {
       "transport": "http",
-      "url": "https://huggingface.co/mcp?login",
-      "headers": {
-        "Authorization": "Bearer ${HF_TOKEN:-}"
-      }
+      "url": "https://huggingface.co/mcp?login"
     }
   }
 }

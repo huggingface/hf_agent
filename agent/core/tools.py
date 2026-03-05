@@ -135,7 +135,7 @@ class ToolRouter:
     Based on codex-rs/core/src/tools/router.rs
     """
 
-    def __init__(self, mcp_servers: dict[str, MCPServerConfig]):
+    def __init__(self, mcp_servers: dict[str, MCPServerConfig], hf_token: str | None = None):
         self.tools: dict[str, ToolSpec] = {}
         self.mcp_servers: dict[str, dict[str, Any]] = {}
 
@@ -146,7 +146,10 @@ class ToolRouter:
         if mcp_servers:
             mcp_servers_payload = {}
             for name, server in mcp_servers.items():
-                mcp_servers_payload[name] = server.model_dump()
+                data = server.model_dump()
+                if hf_token:
+                    data.setdefault("headers", {})["Authorization"] = f"Bearer {hf_token}"
+                mcp_servers_payload[name] = data
             self.mcp_client = Client({"mcpServers": mcp_servers_payload})
         self._mcp_initialized = False
 

@@ -131,7 +131,7 @@ class SessionManager:
 
         def _create_session_sync():
             t0 = _time.monotonic()
-            tool_router = ToolRouter(self.config.mcpServers)
+            tool_router = ToolRouter(self.config.mcpServers, hf_token=hf_token)
             session = Session(
                 event_queue, config=self.config, tool_router=tool_router,
                 hf_token=hf_token,
