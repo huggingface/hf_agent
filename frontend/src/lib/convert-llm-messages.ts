@@ -101,11 +101,20 @@ export function llmMessagesToUIMessages(
         }
       }
 
-      uiMessages.push({
-        id: nextId(),
-        role: 'assistant',
-        parts,
-      });
+      // During live streaming the SDK groups all text + tool parts between
+      // user messages into one assistant UIMessage (one start/finish pair per
+      // turn).  The backend stores multiple assistant messages per turn (one
+      // per LLM API call), so merge consecutive assistant messages to match.
+      const prev = uiMessages[uiMessages.length - 1];
+      if (prev && prev.role === 'assistant') {
+        prev.parts.push(...parts);
+      } else {
+        uiMessages.push({
+          id: nextId(),
+          role: 'assistant',
+          parts,
+        });
+      }
     }
   }
 
