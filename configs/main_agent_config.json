@@ -5,8 +5,7 @@
   "yolo_mode": false,
   "confirm_cpu_jobs": true,
   "auto_file_upload": true,
-  "mcpServers": {},
-  "_mcpServers_disabled": {
+  "mcpServers": {
     "hf-mcp-server": {
       "transport": "http",
       "url": "https://huggingface.co/mcp?login"
