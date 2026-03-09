@@ -89,7 +89,7 @@ async def _ensure_sandbox(
         )
     )
 
-    kwargs = {"owner": owner, "hardware": hardware, "token": token, **create_kwargs}
+    kwargs = {"owner": owner, "hardware": hardware, "token": token, "sleep_time": 1500, **create_kwargs}
     sb = await asyncio.to_thread(Sandbox.create, **kwargs)
     session.sandbox = sb
 
