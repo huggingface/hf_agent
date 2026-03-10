@@ -232,6 +232,7 @@ class Handlers:
         # Agentic loop - continue until model doesn't call tools or max iterations is reached
         iteration = 0
         final_response = None
+        errored = False
 
         while iteration < max_iterations:
             # ── Cancellation check: before LLM call ──
@@ -509,11 +510,12 @@ class Handlers:
                         data={"error": str(e) + "\n" + traceback.format_exc()},
                     )
                 )
+                errored = True
                 break
 
         if session.is_cancelled:
             await session.send_event(Event(event_type="interrupted"))
-        else:
+        elif not errored:
             await session.send_event(
                 Event(
                     event_type="turn_complete",

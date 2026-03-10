@@ -94,6 +94,9 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
           break;
 
         case 'shutdown':
+          endTextPart(controller);
+          controller.enqueue({ type: 'finish-step' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
           sideChannel.onShutdown();
           break;
 
@@ -243,8 +246,10 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
 
         case 'error': {
           const errorMsg = (event.data?.error as string) || 'Unknown error';
+          endTextPart(controller);
+          controller.enqueue({ type: 'finish-step' });
+          controller.enqueue({ type: 'finish', finishReason: 'error' });
           sideChannel.onError(errorMsg);
-          controller.enqueue({ type: 'error', errorText: errorMsg });
           sideChannel.onProcessingDone();
           break;
         }

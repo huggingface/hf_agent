@@ -371,13 +371,14 @@ export default function ToolCallGroup({ tools, approveTools }: ToolCallGroupProp
       const displayName = toolDisplayMap[tool.toolCallId] || tool.toolName;
 
       if (tool.toolName === 'hf_jobs' && args?.script) {
-        const hasOutput = (tool.state === 'output-available' || tool.state === 'output-error') && tool.output;
+        const jobOutput = tool.output ?? (tool.state === 'output-error' ? (tool as Record<string, unknown>).errorText : undefined);
+        const hasOutput = (tool.state === 'output-available' || tool.state === 'output-error') && jobOutput;
         const scriptContent = getEditedScript(tool.toolCallId) || String(args.script);
         setPanel(
           {
             title: displayName,
             script: { content: scriptContent, language: 'python' },
-            ...(hasOutput ? { output: { content: String(tool.output), language: 'markdown' } } : {}),
+            ...(hasOutput ? { output: { content: String(jobOutput), language: 'markdown' } } : {}),
             parameters: { tool_call_id: tool.toolCallId },
           },
           hasOutput ? 'output' : 'script',
@@ -389,9 +390,10 @@ export default function ToolCallGroup({ tools, approveTools }: ToolCallGroupProp
 
       const inputSection = args ? { content: JSON.stringify(args, null, 2), language: 'json' } : undefined;
 
-      if ((tool.state === 'output-available' || tool.state === 'output-error') && tool.output) {
+      const outputText = tool.output ?? (tool.state === 'output-error' ? (tool as Record<string, unknown>).errorText : undefined);
+      if ((tool.state === 'output-available' || tool.state === 'output-error') && outputText) {
         let language = 'text';
-        const content = String(tool.output);
+        const content = String(outputText);
         if (content.trim().startsWith('{') || content.trim().startsWith('[')) language = 'json';
         else if (content.includes('```')) language = 'markdown';
 
