@@ -29,7 +29,7 @@ class AgentResponseGenerator:
     returns the assistant's final message.
     """
 
-    def __init__(self, config_path: str | Path, max_iterations: int = 10) -> None:
+    def __init__(self, config_path: str | Path, max_iterations: int = 300) -> None:
         self.config_path = _resolve_project_path(config_path)
         self.config: Config = load_config(str(self.config_path))
         self.max_iterations = max_iterations
