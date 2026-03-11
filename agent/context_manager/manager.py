@@ -167,11 +167,11 @@ class ContextManager:
     def recover_malformed_tool_calls(self) -> set[str]:
         """Sanitize malformed tool_call arguments and inject error results.
 
-        For every tool_call whose arguments are not valid JSON:
-        1. Replaces the arguments with ``"{}"`` so the context stays
-           valid for the LLM API.
-        2. Injects a ``tool`` result message explaining the error and
-           asking the agent to retry with smaller content.
+        Handles two classes of corruption:
+        - **Empty/missing IDs**: Stripped from the assistant message entirely
+          (common when streaming is interrupted mid-tool-call).
+        - **Malformed JSON arguments**: Replaced with ``"{}"`` and an error
+          tool-result is injected asking the agent to retry.
 
         This method is idempotent — safe to call from both the agent loop
         (before tool execution) and from :meth:`get_messages` (safety net).
@@ -183,7 +183,6 @@ class ContextManager:
 
         malformed_ids: set[str] = set()
 
-        # 1. Find and sanitize malformed arguments
         for msg in self.items:
             if getattr(msg, "role", None) != "assistant":
                 continue
@@ -191,6 +190,24 @@ class ContextManager:
             if not tool_calls:
                 continue
             self._normalize_tool_calls(msg)
+
+            # 1. Strip tool_calls with empty/missing IDs (cannot be repaired)
+            valid_tcs = []
+            for tc in msg.tool_calls:
+                if not getattr(tc, "id", None):
+                    logger.warning(
+                        "Stripping tool_call with empty ID (name=%s) — likely interrupted stream",
+                        getattr(tc.function, "name", "?"),
+                    )
+                    continue
+                valid_tcs.append(tc)
+            if len(valid_tcs) != len(msg.tool_calls):
+                msg.tool_calls = valid_tcs or None
+
+            if not msg.tool_calls:
+                continue
+
+            # 2. Fix malformed JSON arguments
             for tc in msg.tool_calls:
                 try:
                     json.loads(tc.function.arguments)
@@ -205,7 +222,7 @@ class ContextManager:
         if not malformed_ids:
             return malformed_ids
 
-        # 2. Inject error results for malformed calls that don't have one yet
+        # 3. Inject error results for malformed calls that don't have one yet
         answered_ids = {
             getattr(m, "tool_call_id", None)
             for m in self.items

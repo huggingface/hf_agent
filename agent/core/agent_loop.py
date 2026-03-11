@@ -261,6 +261,11 @@ class Handlers:
                 token_count = 0
 
                 async for chunk in response:
+                    # ── Check cancellation during streaming ──
+                    if session.is_cancelled:
+                        tool_calls_acc.clear()
+                        break
+
                     choice = chunk.choices[0] if chunk.choices else None
                     if not choice:
                         # Last chunk may carry only usage info
@@ -309,10 +314,17 @@ class Handlers:
                 # ── Stream finished — reconstruct full message ───────
                 content = full_content or None
 
-                # Build tool_calls list from accumulated deltas
+                # Build tool_calls list from accumulated deltas,
+                # dropping any with empty IDs (from interrupted streams)
                 tool_calls: list[ToolCall] = []
                 for idx in sorted(tool_calls_acc.keys()):
                     tc_data = tool_calls_acc[idx]
+                    if not tc_data["id"]:
+                        logger.warning(
+                            "Dropping tool_call with empty ID (name=%s) — likely interrupted stream",
+                            tc_data["function"]["name"],
+                        )
+                        continue
                     tool_calls.append(
                         ToolCall(
                             id=tc_data["id"],
