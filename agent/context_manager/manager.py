@@ -133,13 +133,61 @@ class ContextManager:
     def get_messages(self) -> list[Message]:
         """Get all messages for sending to LLM.
 
-        Automatically patches any dangling tool_calls (assistant messages
-        with tool_calls that have no matching tool-result message).  This
-        can happen after errors or cancellations and would cause the LLM
-        API to reject the request.
+        Defensive gateway — fixes context corruption before every LLM call:
+        1. Sanitizes malformed tool_call arguments (truncated JSON)
+        2. Adds stub results for dangling tool_calls (missing tool results)
         """
+        self._sanitize_tool_calls()
         self._patch_dangling_tool_calls()
         return self.items
+
+    @staticmethod
+    def _normalize_tool_calls(msg: Message) -> None:
+        """Ensure msg.tool_calls contains proper ToolCall objects, not dicts.
+
+        litellm's Message has validate_assignment=False (Pydantic v2 default),
+        so direct attribute assignment (e.g. inside litellm's streaming handler)
+        can leave raw dicts.  Re-assigning via the constructor fixes this.
+        """
+        from litellm import ChatCompletionMessageToolCall as ToolCall
+
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            return
+        needs_fix = any(isinstance(tc, dict) for tc in tool_calls)
+        if not needs_fix:
+            return
+        msg.tool_calls = [
+            tc if not isinstance(tc, dict) else ToolCall(**tc)
+            for tc in tool_calls
+        ]
+
+    def _sanitize_tool_calls(self) -> None:
+        """Fix malformed tool_call arguments across all assistant messages.
+
+        When output is truncated (finish_reason=length), tool call arguments
+        can be incomplete JSON.  LLM APIs reject messages with invalid JSON
+        in function.arguments, breaking all subsequent calls.
+        """
+        import json
+
+        for msg in self.items:
+            if getattr(msg, "role", None) != "assistant":
+                continue
+            tool_calls = getattr(msg, "tool_calls", None)
+            if not tool_calls:
+                continue
+            # Ensure proper ToolCall objects (litellm streaming can leave dicts)
+            self._normalize_tool_calls(msg)
+            for tc in msg.tool_calls:
+                try:
+                    json.loads(tc.function.arguments)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    logger.warning(
+                        "Sanitizing malformed arguments for tool_call %s (%s)",
+                        tc.id, tc.function.name,
+                    )
+                    tc.function.arguments = "{}"
 
     def _patch_dangling_tool_calls(self) -> None:
         """Add stub tool results for any tool_calls that lack a matching result.
@@ -165,6 +213,7 @@ class ContextManager:
         if not assistant_msg:
             return
 
+        self._normalize_tool_calls(assistant_msg)
         answered_ids = {
             getattr(m, "tool_call_id", None)
             for m in self.items

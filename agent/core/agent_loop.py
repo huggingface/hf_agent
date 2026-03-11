@@ -9,7 +9,6 @@ import os
 
 from litellm import ChatCompletionMessageToolCall, Message, acompletion
 from litellm.exceptions import ContextWindowExceededError
-from lmnr import observe
 
 from agent.config import Config
 from agent.core.session import Event, OpType, Session
@@ -205,7 +204,6 @@ class Handlers:
         logger.info("Abandoned %d pending approval tool(s)", len(tool_calls))
 
     @staticmethod
-    @observe(name="run_agent")
     async def run_agent(
         session: Session, text: str, max_iterations: int = 300
     ) -> str | None:
@@ -213,12 +211,6 @@ class Handlers:
         Handle user input (like user_input_or_turn in codex.rs:1291)
         Returns the final assistant response content, if any.
         """
-        # Set session ID for this trace
-        if hasattr(session, "session_id"):
-            from lmnr import Laminar
-
-            Laminar.set_trace_session_id(session_id=session.session_id)
-
         # Clear any stale cancellation flag from a previous run
         session.reset_cancel()
 
@@ -261,12 +253,14 @@ class Handlers:
                     tool_choice="auto",
                     stream=True,
                     stream_options={"include_usage": True},
+                    max_completion_tokens=16384,
                     **llm_params,
                 )
 
                 full_content = ""
                 tool_calls_acc: dict[int, dict] = {}
                 token_count = 0
+                finish_reason = None
 
                 async for chunk in response:
                     choice = chunk.choices[0] if chunk.choices else None
@@ -277,6 +271,8 @@ class Handlers:
                         continue
 
                     delta = choice.delta
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
 
                     # Stream text deltas to the frontend
                     if delta.content:
@@ -316,6 +312,28 @@ class Handlers:
 
                 # ── Stream finished — reconstruct full message ───────
                 content = full_content or None
+
+                # Detect output truncation — tool call args will be
+                # incomplete JSON, which would poison the context.
+                if finish_reason == "length" and tool_calls_acc:
+                    logger.warning(
+                        "Output truncated (finish_reason=length) with pending "
+                        "tool calls — dropping truncated tool calls"
+                    )
+                    truncation_notice = (
+                        "\n\n[Output was truncated due to length. "
+                        "Tool calls were dropped. Break large writes "
+                        "into smaller pieces or write to sandbox in parts.]"
+                    )
+                    full_content += truncation_notice
+                    content = full_content
+                    await session.send_event(
+                        Event(
+                            event_type="assistant_chunk",
+                            data={"content": truncation_notice},
+                        )
+                    )
+                    tool_calls_acc.clear()
 
                 # Build tool_calls list from accumulated deltas
                 tool_calls: list[ToolCall] = []
@@ -798,12 +816,13 @@ async def process_submission(session: Session, submission) -> bool:
     return True
 
 
-@observe(name="submission_loop")
 async def submission_loop(
     submission_queue: asyncio.Queue,
     event_queue: asyncio.Queue,
     config: Config | None = None,
     tool_router: ToolRouter | None = None,
+    session_holder: list | None = None,
+    hf_token: str | None = None,
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.
@@ -811,7 +830,9 @@ async def submission_loop(
     """
 
     # Create session with tool router
-    session = Session(event_queue, config=config, tool_router=tool_router)
+    session = Session(event_queue, config=config, tool_router=tool_router, hf_token=hf_token)
+    if session_holder is not None:
+        session_holder[0] = session
     logger.info("Agent loop started")
 
     # Retry any failed uploads from previous sessions (fire-and-forget)
