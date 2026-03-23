@@ -51,7 +51,7 @@ def _safe_get_args(arguments: dict) -> dict:
 
 
 def _get_hf_token() -> str | None:
-    """Get HF token from environment or huggingface_hub login."""
+    """Get HF token from environment or huggingface_hub cached login."""
     token = os.environ.get("HF_TOKEN")
     if token:
         return token
@@ -64,6 +64,48 @@ def _get_hf_token() -> str | None:
     except Exception:
         pass
     return None
+
+
+async def _prompt_and_save_hf_token(prompt_session: PromptSession) -> str:
+    """Prompt user for HF token, validate it, save via huggingface_hub.login(). Loops until valid."""
+    from prompt_toolkit.formatted_text import HTML
+    from huggingface_hub import HfApi, login
+
+    print("\nA Hugging Face token is required.")
+    print("Get one at: https://huggingface.co/settings/tokens\n")
+
+    while True:
+        try:
+            token = await prompt_session.prompt_async(
+                HTML("<b>Paste your HF token: </b>")
+            )
+        except (EOFError, KeyboardInterrupt):
+            print("\nToken is required to continue.")
+            continue
+
+        token = token.strip()
+        if not token:
+            print("Token cannot be empty.")
+            continue
+
+        # Validate token against the API
+        try:
+            api = HfApi(token=token)
+            user_info = api.whoami()
+            username = user_info.get("name", "unknown")
+            print(f"Token valid (user: {username})")
+        except Exception:
+            print("Invalid token. Please try again.")
+            continue
+
+        # Save for future sessions
+        try:
+            login(token=token, add_to_git_credential=False)
+            print("Token saved to ~/.cache/huggingface/token")
+        except Exception as e:
+            print(f"Warning: could not persist token ({e}), using for this session only.")
+
+        return token
 
 @dataclass
 class Operation:
@@ -584,12 +626,15 @@ async def main():
     # Wait for agent to initialize
     print("Initializing agent...")
 
-    # HF token
+    # Create prompt session for input (needed early for token prompt)
+    prompt_session = PromptSession()
+
+    # HF token — required, prompt if missing
     hf_token = _get_hf_token()
     if hf_token:
         print("HF token loaded")
     else:
-        print("Warning: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.")
+        hf_token = await _prompt_and_save_hf_token(prompt_session)
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
@@ -607,9 +652,6 @@ async def main():
     # Create tool router with local mode
     print(f"Loading MCP servers: {', '.join(config.mcpServers.keys())}")
     tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
-
-    # Create prompt session for input
-    prompt_session = PromptSession()
 
     # Session holder for interrupt/model/status access
     session_holder = [None]
