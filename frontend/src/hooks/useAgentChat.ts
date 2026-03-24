@@ -327,7 +327,12 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
               if (hasPending) {
                 updateSession(sessionId, { activityStatus: { type: 'waiting-approval' } });
               } else if (hasRunning) {
-                updateSession(sessionId, { isProcessing: true, activityStatus: { type: 'tool', toolName: 'running' } });
+                // Extract the actual tool name from the last in-progress tool part
+                const runningPart = lastAssistant.parts.find(
+                  p => p.type === 'dynamic-tool' && (p.state === 'input-available' || p.state === 'input-streaming'),
+                );
+                const runningToolName = (runningPart && 'toolName' in runningPart) ? runningPart.toolName : undefined;
+                updateSession(sessionId, { isProcessing: true, activityStatus: { type: 'tool', toolName: runningToolName || 'sandbox' } });
               }
             }
           }

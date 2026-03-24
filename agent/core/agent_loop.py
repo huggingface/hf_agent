@@ -255,7 +255,7 @@ class Handlers:
                     tool_choice="auto",
                     stream=True,
                     stream_options={"include_usage": True},
-                    timeout=600,  # 10 min — long tool-use turns can take a while
+                    timeout=600,       # 10 min — long tool-use turns can take a while
                     **llm_params,
                 )
 
@@ -320,10 +320,47 @@ class Handlers:
                 # ── Stream finished — reconstruct full message ───────
                 content = full_content or None
 
-                # If output was truncated, all tool call args are garbage
+                # If output was truncated, all tool call args are garbage.
+                # Inject a system hint so the LLM retries with smaller content.
                 if finish_reason == "length" and tool_calls_acc:
-                    logger.warning("Output truncated (finish_reason=length) — dropping tool calls")
+                    dropped_names = [
+                        tc["function"]["name"]
+                        for tc in tool_calls_acc.values()
+                        if tc["function"]["name"]
+                    ]
+                    logger.warning(
+                        "Output truncated (finish_reason=length) — dropping tool calls: %s",
+                        dropped_names,
+                    )
                     tool_calls_acc.clear()
+
+                    # Tell the agent what happened so it can retry differently
+                    truncation_hint = (
+                        "Your previous response was truncated because the output hit the "
+                        "token limit. The following tool calls were lost: "
+                        f"{dropped_names}. "
+                        "IMPORTANT: Do NOT retry with the same large content. Instead:\n"
+                        "  • For 'write': use bash with cat<<'HEREDOC' to write the file, "
+                        "or split into several smaller edit calls.\n"
+                        "  • For other tools: reduce the size of your arguments or use bash."
+                    )
+                    if content:
+                        assistant_msg = Message(role="assistant", content=content)
+                        session.context_manager.add_message(assistant_msg, token_count)
+                    session.context_manager.add_message(
+                        Message(role="user", content=f"[SYSTEM: {truncation_hint}]")
+                    )
+                    await session.send_event(
+                        Event(event_type="assistant_stream_end", data={})
+                    )
+                    await session.send_event(
+                        Event(
+                            event_type="error",
+                            data={"error": f"Output truncated — retrying with smaller content ({dropped_names})"},
+                        )
+                    )
+                    iteration += 1
+                    continue  # retry this iteration
 
                 # Build tool_calls list from accumulated deltas
                 tool_calls: list[ToolCall] = []
