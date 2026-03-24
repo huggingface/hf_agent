@@ -177,17 +177,19 @@ class ToolRouter:
             search_openapi_handler,
         )
 
-        # Register search_hf_api_endpoints with dynamic spec
-        openapi_spec = await _get_api_search_tool_spec()
-        self.register_tool(
-            ToolSpec(
-                name=openapi_spec["name"],
-                description=openapi_spec["description"],
-                parameters=openapi_spec["parameters"],
-                handler=search_openapi_handler,
+        try:
+            openapi_spec = await _get_api_search_tool_spec()
+            self.register_tool(
+                ToolSpec(
+                    name=openapi_spec["name"],
+                    description=openapi_spec["description"],
+                    parameters=openapi_spec["parameters"],
+                    handler=search_openapi_handler,
+                )
             )
-        )
-        logger.info(f"Loaded OpenAPI search tool: {openapi_spec['name']}")
+            logger.info(f"Loaded OpenAPI search tool: {openapi_spec['name']}")
+        except Exception as e:
+            logger.warning("Failed to load OpenAPI search tool: %s", e)
 
     def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
         """Get tool specifications in OpenAI format"""
@@ -207,12 +209,15 @@ class ToolRouter:
 
     async def __aenter__(self) -> "ToolRouter":
         if self.mcp_client is not None:
-            await self.mcp_client.__aenter__()
-            await self.mcp_client.initialize()
-            await self.register_mcp_tools()
-            self._mcp_initialized = True
+            try:
+                await self.mcp_client.__aenter__()
+                await self.mcp_client.initialize()
+                await self.register_mcp_tools()
+                self._mcp_initialized = True
+            except Exception as e:
+                logger.warning("MCP connection failed, continuing without MCP tools: %s", e)
+                self.mcp_client = None
 
-        # Register OpenAPI tool (requires async initialization)
         await self.register_openapi_tool()
 
         total_tools = len(self.tools)

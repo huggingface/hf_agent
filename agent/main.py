@@ -147,6 +147,12 @@ async def event_listener(
                 content = event.data.get("content", "") if event.data else ""
                 if content:
                     print(f"\nAssistant: {content}")
+            elif event.event_type == "assistant_chunk":
+                content = event.data.get("content", "") if event.data else ""
+                if content:
+                    print(content, end="", flush=True)
+            elif event.event_type == "assistant_stream_end":
+                print()  # newline after streaming
             elif event.event_type == "tool_call":
                 tool_name = event.data.get("tool", "") if event.data else ""
                 arguments = event.data.get("arguments", {}) if event.data else {}
