@@ -59,9 +59,9 @@ HARDWARE_OPTIONS = [
 OUTPUT_LIMIT = 30000
 LINE_LIMIT = 2000
 DEFAULT_READ_LIMIT = 2000
-DEFAULT_TIMEOUT = 120
-MAX_TIMEOUT = 600
-WAIT_TIMEOUT = 300
+DEFAULT_TIMEOUT = 240
+MAX_TIMEOUT = 1200
+WAIT_TIMEOUT = 600
 WAIT_INTERVAL = 5
 API_WAIT_TIMEOUT = 180
 
@@ -584,7 +584,7 @@ class Sandbox:
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "Timeout in seconds (default: 120, max: 600).",
+                        "description": "Timeout in seconds (default: 240, max: 1200).",
                     },
                 },
             },
