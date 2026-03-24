@@ -313,6 +313,23 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
           if (uiMsgs.length > 0) {
             chat.setMessages(uiMsgs);
             saveMessages(sessionId, uiMsgs);
+
+            // Derive processing state from hydrated messages so the input
+            // doesn't flash as enabled before the agent loop resumes.
+            const lastAssistant = [...uiMsgs].reverse().find(m => m.role === 'assistant');
+            if (lastAssistant) {
+              const hasPending = lastAssistant.parts.some(
+                p => p.type === 'dynamic-tool' && p.state === 'approval-requested',
+              );
+              const hasRunning = lastAssistant.parts.some(
+                p => p.type === 'dynamic-tool' && (p.state === 'input-available' || p.state === 'input-streaming'),
+              );
+              if (hasPending) {
+                updateSession(sessionId, { activityStatus: { type: 'waiting-approval' } });
+              } else if (hasRunning) {
+                updateSession(sessionId, { isProcessing: true, activityStatus: { type: 'tool', toolName: 'running' } });
+              }
+            }
           }
         }
       } catch {
