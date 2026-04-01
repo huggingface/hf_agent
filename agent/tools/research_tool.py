@@ -14,6 +14,8 @@ from typing import Any
 
 from litellm import Message, acompletion
 
+from agent.core.session import Event
+
 logger = logging.getLogger(__name__)
 
 # Tools the research agent can use (read-only subset)
@@ -210,6 +212,17 @@ async def research_handler(
         if spec["function"]["name"] in RESEARCH_TOOL_NAMES
     ]
 
+    async def _log(text: str) -> None:
+        """Send a progress event to the UI so it doesn't look frozen."""
+        try:
+            await session.send_event(
+                Event(event_type="tool_log", data={"tool": "research", "log": text})
+            )
+        except Exception:
+            pass
+
+    await _log("Starting research sub-agent...")
+
     # Run the research loop (max 20 iterations — research should be focused)
     max_iterations = 20
     for _iteration in range(max_iterations):
@@ -231,6 +244,7 @@ async def research_handler(
 
         # If no tool calls, we have our final answer
         if not msg.tool_calls:
+            await _log("Research complete.")
             content = msg.content or "Research completed but no summary generated."
             return content, True
 
@@ -263,6 +277,21 @@ async def research_handler(
                 continue
 
             try:
+                # Brief description for the UI
+                brief = tool_name
+                if tool_name == "github_find_examples":
+                    brief = f"github_find_examples({tool_args.get('repo', '')}/{tool_args.get('keyword', '')})"
+                elif tool_name == "github_read_file":
+                    brief = f"github_read_file({tool_args.get('path', '')})"
+                elif tool_name == "explore_hf_docs":
+                    brief = f"explore_hf_docs({tool_args.get('endpoint', '')})"
+                elif tool_name == "fetch_hf_docs":
+                    url = tool_args.get("url", "")
+                    brief = f"fetch_hf_docs(...{url[-50:]})" if len(url) > 50 else f"fetch_hf_docs({url})"
+                elif tool_name == "hf_inspect_dataset":
+                    brief = f"hf_inspect_dataset({tool_args.get('dataset', '')})"
+                await _log(brief)
+
                 output, _success = await session.tool_router.call_tool(
                     tool_name, tool_args, session=session
                 )
