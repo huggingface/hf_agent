@@ -27,22 +27,19 @@ def get_console() -> Console:
 # ── Banner ─────────────────────────────────────────────────────────────
 
 def print_banner() -> None:
-    logo = Text.from_ansi(
-        "\033[38;2;255;200;50m"  # warm gold
-        "  🤗 Hugging Face Agent\n"
-        "\033[0m"
-    )
-    _console.print()
-    _console.print(
-        Panel(
-            logo,
-            subtitle="[dim]/help for commands · /quit to exit[/dim]",
-            border_style="dim",
-            expand=False,
-            padding=(0, 2),
-        )
-    )
-    _console.print()
+    # HF yellow: rgb(255, 200, 50) — warm gold matching the brand
+    Y = "\033[38;2;255;200;50m"  # HF yellow
+    D = "\033[38;2;180;140;40m"  # dimmer gold for accents
+    R = "\033[0m"
+    art = f"""
+{Y} _  _                _             ___                _                _   {R}
+{Y}| || |_  _ __ _ __ _(_)_ _  __ _  | __|_ _ __ ___    /_\\  __ _ ___ _ _| |_ {R}
+{Y}| __ | || / _` / _` | | ' \\/ _` | | _/ _` / _/ -_)  / _ \\/ _` / -_) ' \\  _|{R}
+{Y}|_||_|\\_,_\\__, \\__, |_|_||_\\__, | |_|\\__,_\\__\\___| /_/ \\_\\__, \\___|_||_\\__|{R}
+{D}          |___/|___/       |___/                         |___/             {R}
+"""
+    _console.print(art, highlight=False)
+    _console.print("  [dim]🤗 /help for commands · /quit to exit[/dim]\n")
 
 
 # ── Init progress ──────────────────────────────────────────────────────
