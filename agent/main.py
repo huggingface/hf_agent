@@ -291,11 +291,9 @@ async def event_listener(
             elif event.event_type == "tool_output":
                 output = event.data.get("output", "") if event.data else ""
                 success = event.data.get("success", False) if event.data else False
-                # Skip research output — sub-agent progress shown via tool_log,
-                # and the main agent will summarize the findings in its response
-                if last_tool_name[0] != "research" and output:
-                    should_truncate = last_tool_name[0] != "plan_tool"
-                    print_tool_output(output, success, truncate=should_truncate)
+                # Only show output for plan_tool — everything else is noise
+                if last_tool_name[0] == "plan_tool" and output:
+                    print_tool_output(output, success, truncate=False)
                 shimmer.start()
             elif event.event_type == "turn_complete":
                 shimmer.stop()
@@ -966,8 +964,8 @@ async def headless_main(prompt: str, model: str | None = None) -> None:
         elif event.event_type == "tool_output":
             output = event.data.get("output", "") if event.data else ""
             success = event.data.get("success", False) if event.data else False
-            if _hl_last_tool[0] != "research" and output:
-                print_tool_output(output, success, truncate=True)
+            if _hl_last_tool[0] == "plan_tool" and output:
+                print_tool_output(output, success, truncate=False)
             shimmer.start()
         elif event.event_type == "tool_log":
             tool = event.data.get("tool", "") if event.data else ""
