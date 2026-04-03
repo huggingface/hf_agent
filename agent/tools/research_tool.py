@@ -290,16 +290,14 @@ async def research_handler(
                     brief = f"fetch_hf_docs(...{url[-50:]})" if len(url) > 50 else f"fetch_hf_docs({url})"
                 elif tool_name == "hf_inspect_dataset":
                     brief = f"hf_inspect_dataset({tool_args.get('dataset', '')})"
-                await _log(brief)
-
                 output, _success = await session.tool_router.call_tool(
                     tool_name, tool_args, session=session
                 )
-                # Log a short preview of the output
+                # Log tool name + output preview on one line
                 preview = output.replace("\n", " ").strip()[:20]
                 if len(output.strip()) > 20:
                     preview += "…"
-                await _log(f"  → {preview}")
+                await _log(f"{tool_name} → {preview}")
                 # Truncate tool output for the research context
                 if len(output) > 8000:
                     output = (
