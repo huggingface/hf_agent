@@ -122,8 +122,9 @@ def print_tool_log(tool: str, log: str) -> None:
 # ── Messages ───────────────────────────────────────────────────────────
 
 def print_markdown(text: str) -> None:
+    from rich.padding import Padding
     _console.print()
-    _console.print(Markdown(text))
+    _console.print(Padding(Markdown(text), (0, 0, 0, 2)))
 
 
 def print_error(message: str) -> None:
