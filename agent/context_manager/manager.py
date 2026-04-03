@@ -79,11 +79,13 @@ class ContextManager:
         tool_specs: list[dict[str, Any]] | None = None,
         prompt_file_suffix: str = "system_prompt_v3.yaml",
         hf_token: str | None = None,
+        local_mode: bool = False,
     ):
         self.system_prompt = self._load_system_prompt(
             tool_specs or [],
             prompt_file_suffix="system_prompt_v3.yaml",
             hf_token=hf_token,
+            local_mode=local_mode,
         )
         self.max_context = max_context - 10000
         self.compact_size = int(max_context * compact_size)
@@ -96,6 +98,7 @@ class ContextManager:
         tool_specs: list[dict[str, Any]],
         prompt_file_suffix: str = "system_prompt.yaml",
         hf_token: str | None = None,
+        local_mode: bool = False,
     ):
         """Load and render the system prompt from YAML file with Jinja2"""
         prompt_file = Path(__file__).parent.parent / "prompts" / f"{prompt_file_suffix}"
@@ -119,6 +122,23 @@ class ContextManager:
             tools=tool_specs,
             num_tools=len(tool_specs),
         )
+
+        # CLI-specific context for local mode
+        if local_mode:
+            import os
+            cwd = os.getcwd()
+            local_context = (
+                f"\n\n# CLI / Local mode\n\n"
+                f"You are running as a local CLI tool on the user's machine. "
+                f"There is NO sandbox — bash, read, write, and edit operate directly "
+                f"on the local filesystem.\n\n"
+                f"Working directory: {cwd}\n"
+                f"Use absolute paths or paths relative to the working directory. "
+                f"Do NOT use /app/ paths — that is a sandbox convention that does not apply here.\n"
+                f"The sandbox_create tool is NOT available. Run code directly with bash."
+            )
+            static_prompt += local_context
+
         return (
             f"{static_prompt}\n\n"
             f"[Session context: Date={current_date}, Time={current_time}, "

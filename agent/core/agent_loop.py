@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
 
 from litellm import ChatCompletionMessageToolCall, Message, acompletion
 from litellm.exceptions import ContextWindowExceededError
@@ -244,6 +245,164 @@ async def _cleanup_on_cancel(session: Session) -> None:
         session._running_job_ids.clear()
 
 
+@dataclass
+class LLMResult:
+    """Result from an LLM call (streaming or non-streaming)."""
+    content: str | None
+    tool_calls_acc: dict[int, dict]
+    token_count: int
+    finish_reason: str | None
+
+
+async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
+    """Call the LLM with streaming, emitting assistant_chunk events."""
+    response = None
+    for _llm_attempt in range(_MAX_LLM_RETRIES):
+        try:
+            response = await acompletion(
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                stream=True,
+                stream_options={"include_usage": True},
+                timeout=600,
+                **llm_params,
+            )
+            break
+        except ContextWindowExceededError:
+            raise
+        except Exception as e:
+            if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
+                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                logger.warning(
+                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
+                    _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
+                )
+                await session.send_event(Event(
+                    event_type="tool_log",
+                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
+                ))
+                await asyncio.sleep(_delay)
+                continue
+            raise
+
+    full_content = ""
+    tool_calls_acc: dict[int, dict] = {}
+    token_count = 0
+    finish_reason = None
+
+    async for chunk in response:
+        if session.is_cancelled:
+            tool_calls_acc.clear()
+            break
+
+        choice = chunk.choices[0] if chunk.choices else None
+        if not choice:
+            if hasattr(chunk, "usage") and chunk.usage:
+                token_count = chunk.usage.total_tokens
+            continue
+
+        delta = choice.delta
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
+
+        if delta.content:
+            full_content += delta.content
+            await session.send_event(
+                Event(event_type="assistant_chunk", data={"content": delta.content})
+            )
+
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                idx = tc_delta.index
+                if idx not in tool_calls_acc:
+                    tool_calls_acc[idx] = {
+                        "id": "", "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                if tc_delta.id:
+                    tool_calls_acc[idx]["id"] = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_calls_acc[idx]["function"]["name"] += tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_calls_acc[idx]["function"]["arguments"] += tc_delta.function.arguments
+
+        if hasattr(chunk, "usage") and chunk.usage:
+            token_count = chunk.usage.total_tokens
+
+    return LLMResult(
+        content=full_content or None,
+        tool_calls_acc=tool_calls_acc,
+        token_count=token_count,
+        finish_reason=finish_reason,
+    )
+
+
+async def _call_llm_non_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
+    """Call the LLM without streaming, emit assistant_message at the end."""
+    response = None
+    for _llm_attempt in range(_MAX_LLM_RETRIES):
+        try:
+            response = await acompletion(
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                stream=False,
+                timeout=600,
+                **llm_params,
+            )
+            break
+        except ContextWindowExceededError:
+            raise
+        except Exception as e:
+            if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
+                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                logger.warning(
+                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
+                    _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
+                )
+                await session.send_event(Event(
+                    event_type="tool_log",
+                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
+                ))
+                await asyncio.sleep(_delay)
+                continue
+            raise
+
+    choice = response.choices[0]
+    message = choice.message
+    content = message.content or None
+    finish_reason = choice.finish_reason
+    token_count = response.usage.total_tokens if response.usage else 0
+
+    # Build tool_calls_acc in the same format as streaming
+    tool_calls_acc: dict[int, dict] = {}
+    if message.tool_calls:
+        for idx, tc in enumerate(message.tool_calls):
+            tool_calls_acc[idx] = {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+
+    # Emit the full message as a single event
+    if content:
+        await session.send_event(
+            Event(event_type="assistant_message", data={"content": content})
+        )
+
+    return LLMResult(
+        content=content,
+        tool_calls_acc=tool_calls_acc,
+        token_count=token_count,
+        finish_reason=finish_reason,
+    )
+
+
 class Handlers:
     """Handler functions for each operation type"""
 
@@ -345,98 +504,17 @@ class Handlers:
             messages = session.context_manager.get_messages()
             tools = session.tool_router.get_tool_specs_for_llm()
             try:
-                # ── Stream the LLM response (with retry for transient errors) ──
+                # ── Call the LLM (streaming or non-streaming) ──
                 llm_params = _resolve_hf_router_params(session.config.model_name)
-                response = None
-                for _llm_attempt in range(_MAX_LLM_RETRIES):
-                    try:
-                        response = await acompletion(
-                            messages=messages,
-                            tools=tools,
-                            tool_choice="auto",
-                            stream=True,
-                            stream_options={"include_usage": True},
-                            timeout=600,
-                            **llm_params,
-                        )
-                        break
-                    except ContextWindowExceededError:
-                        raise
-                    except Exception as e:
-                        if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                            _delay = _LLM_RETRY_DELAYS[_llm_attempt]
-                            logger.warning(
-                                "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
-                                _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
-                            )
-                            await session.send_event(Event(
-                                event_type="tool_log",
-                                data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
-                            ))
-                            await asyncio.sleep(_delay)
-                            continue
-                        raise
+                if session.stream:
+                    llm_result = await _call_llm_streaming(session, messages, tools, llm_params)
+                else:
+                    llm_result = await _call_llm_non_streaming(session, messages, tools, llm_params)
 
-                full_content = ""
-                tool_calls_acc: dict[int, dict] = {}
-                token_count = 0
-                finish_reason = None
-
-                async for chunk in response:
-                    # ── Check cancellation during streaming ──
-                    if session.is_cancelled:
-                        tool_calls_acc.clear()
-                        break
-
-                    choice = chunk.choices[0] if chunk.choices else None
-                    if not choice:
-                        # Last chunk may carry only usage info
-                        if hasattr(chunk, "usage") and chunk.usage:
-                            token_count = chunk.usage.total_tokens
-                        continue
-
-                    delta = choice.delta
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
-
-                    # Stream text deltas to the frontend
-                    if delta.content:
-                        full_content += delta.content
-                        await session.send_event(
-                            Event(
-                                event_type="assistant_chunk",
-                                data={"content": delta.content},
-                            )
-                        )
-
-                    # Accumulate tool-call deltas (name + args arrive in pieces)
-                    if delta.tool_calls:
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in tool_calls_acc:
-                                tool_calls_acc[idx] = {
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
-                            if tc_delta.id:
-                                tool_calls_acc[idx]["id"] = tc_delta.id
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    tool_calls_acc[idx]["function"]["name"] += (
-                                        tc_delta.function.name
-                                    )
-                                if tc_delta.function.arguments:
-                                    tool_calls_acc[idx]["function"]["arguments"] += (
-                                        tc_delta.function.arguments
-                                    )
-
-                    # Capture usage from the final chunk
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        token_count = chunk.usage.total_tokens
-
-                # ── Stream finished — reconstruct full message ───────
-                content = full_content or None
+                content = llm_result.content
+                tool_calls_acc = llm_result.tool_calls_acc
+                token_count = llm_result.token_count
+                finish_reason = llm_result.finish_reason
 
                 # If output was truncated, all tool call args are garbage.
                 # Inject a system hint so the LLM retries with smaller content.
@@ -468,9 +546,10 @@ class Handlers:
                     session.context_manager.add_message(
                         Message(role="user", content=f"[SYSTEM: {truncation_hint}]")
                     )
-                    await session.send_event(
-                        Event(event_type="assistant_stream_end", data={})
-                    )
+                    if session.stream:
+                        await session.send_event(
+                            Event(event_type="assistant_stream_end", data={})
+                        )
                     await session.send_event(
                         Event(
                             event_type="tool_log",
@@ -496,9 +575,10 @@ class Handlers:
                     )
 
                 # Signal end of streaming to the frontend
-                await session.send_event(
-                    Event(event_type="assistant_stream_end", data={})
-                )
+                if session.stream:
+                    await session.send_event(
+                        Event(event_type="assistant_stream_end", data={})
+                    )
 
                 # If no tool calls, add assistant message and we're done
                 if not tool_calls:
@@ -1043,6 +1123,8 @@ async def submission_loop(
     tool_router: ToolRouter | None = None,
     session_holder: list | None = None,
     hf_token: str | None = None,
+    local_mode: bool = False,
+    stream: bool = True,
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.
@@ -1051,7 +1133,8 @@ async def submission_loop(
 
     # Create session with tool router
     session = Session(
-        event_queue, config=config, tool_router=tool_router, hf_token=hf_token
+        event_queue, config=config, tool_router=tool_router, hf_token=hf_token,
+        local_mode=local_mode, stream=stream,
     )
     if session_holder is not None:
         session_holder[0] = session

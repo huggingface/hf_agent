@@ -20,6 +20,7 @@ agent = [
     "fastmcp>=2.4.0",
     "prompt-toolkit>=3.0.0",
     "thefuzz>=0.22.1",
+    "rich>=13.0.0",
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
     "datasets>=4.3.0",  # For session logging to HF datasets

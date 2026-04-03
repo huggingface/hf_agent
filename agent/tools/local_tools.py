@@ -227,7 +227,63 @@ async def _edit_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
     return msg, True
 
 
-# ── Public API ──────────────────────────────────────────────────────────
+# ── Local tool specs (override sandbox /app references) ────────────────
+
+_LOCAL_TOOL_SPECS = {
+    "bash": {
+        "description": (
+            "Run a shell command on the local machine and return stdout/stderr.\n"
+            "\n"
+            "Commands run in a shell at the working directory (default: current directory). "
+            "Each invocation is independent.\n"
+            "\n"
+            "AVOID using bash for operations covered by specialized tools:\n"
+            "- File reading: use read (not cat/head/tail)\n"
+            "- File editing: use edit (not sed/awk)\n"
+            "- File writing: use write (not echo/cat <<EOF)\n"
+            "\n"
+            "Chain dependent commands with &&. Independent commands should be "
+            "separate bash calls (they can run in parallel).\n"
+            "\n"
+            "Timeout default 120s, max 600s."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["command"],
+            "additionalProperties": False,
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short description (5-10 words, active voice).",
+                },
+                "work_dir": {
+                    "type": "string",
+                    "description": "Working directory (default: current directory).",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (default: 120, max: 600).",
+                },
+            },
+        },
+    },
+    "read": {
+        "description": Sandbox.TOOLS["read"]["description"],
+        "parameters": Sandbox.TOOLS["read"]["parameters"],
+    },
+    "write": {
+        "description": Sandbox.TOOLS["write"]["description"],
+        "parameters": Sandbox.TOOLS["write"]["parameters"],
+    },
+    "edit": {
+        "description": Sandbox.TOOLS["edit"]["description"],
+        "parameters": Sandbox.TOOLS["edit"]["parameters"],
+    },
+}
 
 _HANDLERS = {
     "bash": _bash_handler,
@@ -242,7 +298,7 @@ def get_local_tools():
     from agent.core.tools import ToolSpec
 
     tools = []
-    for name, spec in Sandbox.TOOLS.items():
+    for name, spec in _LOCAL_TOOL_SPECS.items():
         handler = _HANDLERS.get(name)
         if handler is None:
             continue

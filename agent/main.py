@@ -1,10 +1,16 @@
 """
 Interactive CLI chat with the agent
+
+Supports two modes:
+  Interactive:  python -m agent.main
+  Headless:     python -m agent.main "find me bird datasets"
 """
 
+import argparse
 import asyncio
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,7 +57,7 @@ def _safe_get_args(arguments: dict) -> dict:
 
 
 def _get_hf_token() -> str | None:
-    """Get HF token from environment or huggingface_hub cached login."""
+    """Get HF token from environment, huggingface_hub API, or cached token file."""
     token = os.environ.get("HF_TOKEN")
     if token:
         return token
@@ -63,6 +69,12 @@ def _get_hf_token() -> str | None:
             return token
     except Exception:
         pass
+    # Fallback: read the cached token file directly
+    token_path = Path.home() / ".cache" / "huggingface" / "token"
+    if token_path.exists():
+        token = token_path.read_text().strip()
+        if token:
+            return token
     return None
 
 
@@ -123,6 +135,128 @@ class Submission:
     operation: Operation
 
 
+def _create_rich_console():
+    """Create a rich Console for markdown rendering."""
+    from rich.console import Console
+    return Console(highlight=False)
+
+
+def _render_markdown(console, text: str) -> None:
+    """Render markdown text to the terminal via rich."""
+    from rich.markdown import Markdown
+    console.print(Markdown(text))
+
+
+class _ThinkingShimmer:
+    """Animated shiny/shimmer thinking indicator — a bright gradient sweeps across the text."""
+
+    _BASE = (90, 90, 110)       # dim base color
+    _HIGHLIGHT = (255, 200, 80) # bright shimmer highlight (warm gold)
+    _WIDTH = 5                  # shimmer width in characters
+    _FPS = 24
+
+    def __init__(self, console):
+        self._console = console
+        self._task = None
+        self._running = False
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.ensure_future(self._animate())
+
+    def stop(self):
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            self._task = None
+        # Clear the shimmer line
+        self._console.file.write("\r\033[K")
+        self._console.file.flush()
+
+    def _render_frame(self, text: str, offset: float) -> str:
+        """Render one frame: a bright spot sweeps left-to-right across `text`."""
+        out = []
+        n = len(text)
+        for i, ch in enumerate(text):
+            # Distance from the shimmer center (wraps around)
+            dist = abs(i - offset)
+            wrap_dist = abs(i - offset + n + self._WIDTH)
+            dist = min(dist, wrap_dist, abs(i - offset - n - self._WIDTH))
+            # Blend factor: 1.0 at center, 0.0 beyond _WIDTH
+            t = max(0.0, 1.0 - dist / self._WIDTH)
+            t = t * t * (3 - 2 * t)  # smoothstep
+            r = int(self._BASE[0] + (self._HIGHLIGHT[0] - self._BASE[0]) * t)
+            g = int(self._BASE[1] + (self._HIGHLIGHT[1] - self._BASE[1]) * t)
+            b = int(self._BASE[2] + (self._HIGHLIGHT[2] - self._BASE[2]) * t)
+            out.append(f"\033[38;2;{r};{g};{b}m{ch}")
+        out.append("\033[0m")
+        return "".join(out)
+
+    async def _animate(self):
+        text = "Thinking..."
+        n = len(text)
+        speed = 0.45  # characters per frame
+        pos = 0.0
+        try:
+            while self._running:
+                frame = self._render_frame(text, pos)
+                self._console.file.write(f"\r{frame}")
+                self._console.file.flush()
+                pos = (pos + speed) % (n + self._WIDTH)
+                await asyncio.sleep(1.0 / self._FPS)
+        except asyncio.CancelledError:
+            pass
+
+
+class _StreamBuffer:
+    """Buffers streaming chunks and renders markdown line-by-line via rich Live."""
+
+    def __init__(self, console):
+        self._console = console
+        self._buffer = ""
+        self._live = None
+        self._lines_printed = 0
+
+    def _start_live(self):
+        if self._live is None:
+            from rich.live import Live
+            self._live = Live(
+                "",
+                console=self._console,
+                refresh_per_second=8,
+                vertical_overflow="visible",
+            )
+            self._live.start()
+
+    def add_chunk(self, text: str):
+        self._buffer += text
+        self._start_live()
+        self._update()
+
+    def _update(self):
+        from rich.markdown import Markdown
+        if self._live:
+            self._live.update(Markdown(self._buffer))
+
+    def finish(self):
+        """Finalize: stop live display (final frame is already rendered)."""
+        if self._live:
+            self._live.stop()
+            self._live = None
+        self._buffer = ""
+        self._lines_printed = 0
+
+    def discard(self):
+        """Discard without final render (e.g. for tool-only turns)."""
+        if self._live:
+            self._live.stop()
+            self._live = None
+        self._buffer = ""
+        self._lines_printed = 0
+
+
 async def event_listener(
     event_queue: asyncio.Queue,
     submission_queue: asyncio.Queue,
@@ -134,6 +268,9 @@ async def event_listener(
     """Background task that listens for events and displays them"""
     submission_id = [1000]  # Use list to make it mutable in closure
     last_tool_name = [None]  # Track last tool called
+    console = _create_rich_console()
+    spinner = _ThinkingShimmer(console)
+    stream_buf = _StreamBuffer(console)
 
     while True:
         try:
@@ -144,16 +281,22 @@ async def event_listener(
                 print(format_success("\U0001f917 Agent ready"))
                 ready_event.set()
             elif event.event_type == "assistant_message":
+                # Non-streaming: full message arrives at once
+                spinner.stop()
                 content = event.data.get("content", "") if event.data else ""
                 if content:
-                    print(f"\nAssistant: {content}")
+                    console.print()
+                    _render_markdown(console, content)
             elif event.event_type == "assistant_chunk":
+                spinner.stop()
                 content = event.data.get("content", "") if event.data else ""
                 if content:
-                    print(content, end="", flush=True)
+                    stream_buf.add_chunk(content)
             elif event.event_type == "assistant_stream_end":
-                print()  # newline after streaming
+                stream_buf.finish()
             elif event.event_type == "tool_call":
+                spinner.stop()
+                stream_buf.discard()
                 tool_name = event.data.get("tool", "") if event.data else ""
                 arguments = event.data.get("arguments", {}) if event.data else {}
                 if tool_name:
@@ -167,7 +310,11 @@ async def event_listener(
                     # Don't truncate plan_tool output, truncate everything else
                     should_truncate = last_tool_name[0] != "plan_tool"
                     print(format_tool_output(output, success, truncate=should_truncate))
+                # After tool output, agent will think again
+                spinner.start()
             elif event.event_type == "turn_complete":
+                spinner.stop()
+                stream_buf.discard()
                 print(format_turn_complete())
                 # Display plan after turn complete
                 plan_display = format_plan_display()
@@ -175,6 +322,8 @@ async def event_listener(
                     print(plan_display)
                 turn_complete_event.set()
             elif event.event_type == "interrupted":
+                spinner.stop()
+                stream_buf.discard()
                 print("\n(interrupted)")
                 turn_complete_event.set()
             elif event.event_type == "undo_complete":
@@ -191,6 +340,8 @@ async def event_listener(
                 if state in ("approved", "rejected", "running"):
                     print(f"  {tool}: {state}")
             elif event.event_type == "error":
+                spinner.stop()
+                stream_buf.discard()
                 error = (
                     event.data.get("error", "Unknown error")
                     if event.data
@@ -199,9 +350,11 @@ async def event_listener(
                 print(format_error(error))
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
+                spinner.stop()
+                stream_buf.discard()
                 break
             elif event.event_type == "processing":
-                pass  # print("Processing...", flush=True)
+                spinner.start()
             elif event.event_type == "compacted":
                 old_tokens = event.data.get("old_tokens", 0) if event.data else 0
                 new_tokens = event.data.get("new_tokens", 0) if event.data else 0
@@ -670,6 +823,8 @@ async def main():
             tool_router=tool_router,
             session_holder=session_holder,
             hf_token=hf_token,
+            local_mode=True,
+            stream=True,
         )
     )
 
@@ -762,17 +917,167 @@ async def main():
     )
     await submission_queue.put(shutdown_submission)
 
+    # Wait for agent to finish (the listener must keep draining events
+    # or the agent will block on event_queue.put)
     try:
-        await asyncio.wait_for(agent_task, timeout=5.0)
+        await asyncio.wait_for(agent_task, timeout=10.0)
     except asyncio.TimeoutError:
         agent_task.cancel()
+        # Agent didn't shut down cleanly — close MCP explicitly
+        await tool_router.__aexit__(None, None, None)
+
+    # Now safe to cancel the listener (agent is done emitting events)
     listener_task.cancel()
 
     print("Goodbye!\n")
 
 
-if __name__ == "__main__":
+async def headless_main(prompt: str, model: str | None = None) -> None:
+    """Run a single prompt headlessly and exit."""
+    import logging
+
+    logging.basicConfig(level=logging.WARNING)
+
+    hf_token = _get_hf_token()
+    if not hf_token:
+        print("ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"HF token loaded", file=sys.stderr)
+
+    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
+    config = load_config(config_path)
+    config.yolo_mode = True  # Auto-approve everything in headless mode
+
+    if model:
+        if model not in VALID_MODEL_IDS:
+            print(f"ERROR: Unknown model '{model}'. Valid: {', '.join(VALID_MODEL_IDS)}", file=sys.stderr)
+            sys.exit(1)
+        config.model_name = model
+
+    print(f"Model: {config.model_name}", file=sys.stderr)
+    print(f"Prompt: {prompt}", file=sys.stderr)
+    print("---", file=sys.stderr)
+
+    submission_queue: asyncio.Queue = asyncio.Queue()
+    event_queue: asyncio.Queue = asyncio.Queue()
+
+    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    session_holder: list = [None]
+
+    agent_task = asyncio.create_task(
+        submission_loop(
+            submission_queue,
+            event_queue,
+            config=config,
+            tool_router=tool_router,
+            session_holder=session_holder,
+            hf_token=hf_token,
+            local_mode=True,
+            stream=True,
+        )
+    )
+
+    # Wait for ready
+    while True:
+        event = await event_queue.get()
+        if event.event_type == "ready":
+            break
+
+    # Submit the prompt
+    submission = Submission(
+        id="sub_1",
+        operation=Operation(op_type=OpType.USER_INPUT, data={"text": prompt}),
+    )
+    await submission_queue.put(submission)
+
+    # Process events until turn completes
+    console = _create_rich_console()
+    err_console = _create_rich_console()
+    err_console.file = sys.stderr
+    spinner = _ThinkingShimmer(console)
+    stream_buf = _StreamBuffer(console)
+    spinner.start()
+
+    while True:
+        event = await event_queue.get()
+
+        if event.event_type == "assistant_chunk":
+            spinner.stop()
+            content = event.data.get("content", "") if event.data else ""
+            if content:
+                stream_buf.add_chunk(content)
+        elif event.event_type == "assistant_stream_end":
+            stream_buf.finish()
+        elif event.event_type == "assistant_message":
+            spinner.stop()
+            content = event.data.get("content", "") if event.data else ""
+            if content:
+                _render_markdown(console, content)
+        elif event.event_type == "tool_call":
+            spinner.stop()
+            stream_buf.discard()
+            tool_name = event.data.get("tool", "") if event.data else ""
+            arguments = event.data.get("arguments", {}) if event.data else {}
+            if tool_name:
+                args_str = json.dumps(arguments)[:100] + "..."
+                print(format_tool_call(tool_name, args_str), file=sys.stderr)
+        elif event.event_type == "tool_output":
+            output = event.data.get("output", "") if event.data else ""
+            success = event.data.get("success", False) if event.data else False
+            if output:
+                print(format_tool_output(output, success, truncate=True), file=sys.stderr)
+            spinner.start()
+        elif event.event_type == "tool_log":
+            tool = event.data.get("tool", "") if event.data else ""
+            log = event.data.get("log", "") if event.data else ""
+            if log:
+                print(f"  [{tool}] {log}", file=sys.stderr)
+        elif event.event_type == "compacted":
+            old_tokens = event.data.get("old_tokens", 0) if event.data else 0
+            new_tokens = event.data.get("new_tokens", 0) if event.data else 0
+            print(f"Compacted: {old_tokens} -> {new_tokens} tokens", file=sys.stderr)
+        elif event.event_type == "error":
+            spinner.stop()
+            stream_buf.discard()
+            error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+            print(f"ERROR: {error}", file=sys.stderr)
+            break
+        elif event.event_type in ("turn_complete", "interrupted"):
+            spinner.stop()
+            stream_buf.discard()
+            break
+
+    # Shutdown
+    shutdown_submission = Submission(
+        id="sub_shutdown", operation=Operation(op_type=OpType.SHUTDOWN)
+    )
+    await submission_queue.put(shutdown_submission)
+
     try:
-        asyncio.run(main())
+        await asyncio.wait_for(agent_task, timeout=10.0)
+    except asyncio.TimeoutError:
+        agent_task.cancel()
+        await tool_router.__aexit__(None, None, None)
+
+
+if __name__ == "__main__":
+    import logging as _logging
+    import warnings
+    # Suppress aiohttp "Unclosed client session" noise during event loop teardown
+    _logging.getLogger("asyncio").setLevel(_logging.CRITICAL)
+    # Suppress litellm pydantic deprecation warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="litellm")
+
+    parser = argparse.ArgumentParser(description="Hugging Face Agent CLI")
+    parser.add_argument("prompt", nargs="?", default=None, help="Run headlessly with this prompt")
+    parser.add_argument("--model", "-m", default=None, help=f"Model to use (default: from config)")
+    args = parser.parse_args()
+
+    try:
+        if args.prompt:
+            asyncio.run(headless_main(args.prompt, model=args.model))
+        else:
+            asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\nGoodbye!")

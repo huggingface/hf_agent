@@ -84,9 +84,12 @@ class Session:
         tool_router=None,
         context_manager: ContextManager | None = None,
         hf_token: str | None = None,
+        local_mode: bool = False,
+        stream: bool = True,
     ):
         self.hf_token: Optional[str] = hf_token
         self.tool_router = tool_router
+        self.stream = stream
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
         self.context_manager = context_manager or ContextManager(
             max_context=_get_max_tokens_safe(config.model_name),
@@ -94,6 +97,7 @@ class Session:
             untouched_messages=5,
             tool_specs=tool_specs,
             hf_token=hf_token,
+            local_mode=local_mode,
         )
         self.event_queue = event_queue
         self.session_id = str(uuid.uuid4())
