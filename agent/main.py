@@ -212,35 +212,23 @@ class _ThinkingShimmer:
 
 
 class _StreamBuffer:
-    """Buffers streaming tokens, flushes complete lines. No flicker."""
+    """Accumulates streamed tokens, renders full markdown on finish."""
 
     def __init__(self, console):
         self._console = console
         self._buffer = ""
-        self._started = False
 
     def add_chunk(self, text: str):
         self._buffer += text
-        # Flush every complete line
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            if not self._started:
-                self._console.print()  # blank line before first output
-                self._started = True
-            self._console.print(line)
 
     def finish(self):
-        """Print any remaining partial line, then reset."""
+        """Render the accumulated text as markdown, then reset."""
         if self._buffer.strip():
-            if not self._started:
-                self._console.print()
-            self._console.print(self._buffer)
+            print_markdown(self._buffer)
         self._buffer = ""
-        self._started = False
 
     def discard(self):
         self._buffer = ""
-        self._started = False
 
 
 async def event_listener(
@@ -271,11 +259,11 @@ async def event_listener(
                 if content:
                     print_markdown(content)
             elif event.event_type == "assistant_chunk":
-                shimmer.stop()
                 content = event.data.get("content", "") if event.data else ""
                 if content:
                     stream_buf.add_chunk(content)
             elif event.event_type == "assistant_stream_end":
+                shimmer.stop()
                 stream_buf.finish()
             elif event.event_type == "tool_call":
                 shimmer.stop()
@@ -942,11 +930,11 @@ async def headless_main(prompt: str, model: str | None = None) -> None:
         event = await event_queue.get()
 
         if event.event_type == "assistant_chunk":
-            shimmer.stop()
             content = event.data.get("content", "") if event.data else ""
             if content:
                 stream_buf.add_chunk(content)
         elif event.event_type == "assistant_stream_end":
+            shimmer.stop()
             stream_buf.finish()
         elif event.event_type == "assistant_message":
             shimmer.stop()
