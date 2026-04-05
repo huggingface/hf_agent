@@ -2,6 +2,12 @@ import { useCallback, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   IconButton,
   Typography,
   CircularProgress,
@@ -51,19 +57,29 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     }
   }, [isCreatingSession, createSession, setPlan, clearPanel, onClose]);
 
-  const handleDelete = useCallback(
-    async (sessionId: string, e: React.MouseEvent) => {
+  // -- Delete with dialog confirmation ------------------------------------
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const handleDeleteClick = useCallback(
+    (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      useAgentStore.getState().clearSessionState(sessionId);
-      try {
-        await apiFetch(`/api/session/${sessionId}`, { method: 'DELETE' });
-        deleteSession(sessionId);
-      } catch {
-        deleteSession(sessionId);
-      }
+      setConfirmDeleteId(sessionId);
     },
-    [deleteSession],
+    [],
   );
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!confirmDeleteId) return;
+    const sessionId = confirmDeleteId;
+    setConfirmDeleteId(null);
+    useAgentStore.getState().clearSessionState(sessionId);
+    try {
+      await apiFetch(`/api/session/${sessionId}`, { method: 'DELETE' });
+      deleteSession(sessionId);
+    } catch {
+      deleteSession(sessionId);
+    }
+  }, [deleteSession, confirmDeleteId]);
 
   const handleSelect = useCallback(
     (sessionId: string) => {
@@ -181,6 +197,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                   px: 1.5,
                   py: 0.875,
                   mx: 0.75,
+                  mb: 0.2,
                   borderRadius: '10px',
                   cursor: 'pointer',
                   transition: 'background-color 0.12s ease',
@@ -256,7 +273,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                 <IconButton
                   className="delete-btn"
                   size="small"
-                  onClick={(e) => handleDelete(session.id, e)}
+                  onClick={(e) => handleDeleteClick(session.id, e)}
                   sx={{
                     color: 'var(--muted-text)',
                     width: 26,
@@ -328,6 +345,81 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
         </Box>
 
       </Box>
+      {/* Delete confirmation dialog */}
+      <Dialog
+        open={!!confirmDeleteId}
+        onClose={() => setConfirmDeleteId(null)}
+        slotProps={{
+          backdrop: { sx: { backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' } },
+        }}
+        PaperProps={{
+          sx: {
+            bgcolor: 'var(--panel)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: 'var(--shadow-1)',
+            maxWidth: 340,
+            mx: 2,
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            color: 'var(--text)',
+            fontWeight: 700,
+            fontSize: '0.95rem',
+            pb: 0,
+            pt: 2.5,
+            px: 3,
+          }}
+        >
+          Delete conversation?
+        </DialogTitle>
+        <DialogContent sx={{ px: 3, pt: 1 }}>
+          <DialogContentText
+            sx={{
+              color: 'var(--muted-text)',
+              fontSize: '0.82rem',
+              lineHeight: 1.6,
+            }}
+          >
+            This will permanently remove this conversation and its history.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button
+            onClick={() => setConfirmDeleteId(null)}
+            size="small"
+            sx={{
+              color: 'var(--muted-text)',
+              fontSize: '0.82rem',
+              px: 2,
+              '&:hover': { bgcolor: 'var(--hover-bg)' },
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeleteConfirm}
+            variant="contained"
+            size="small"
+            sx={{
+              fontSize: '0.82rem',
+              px: 2.5,
+              bgcolor: 'var(--accent-red)',
+              color: '#fff',
+              boxShadow: 'none',
+              '&:hover': {
+                bgcolor: 'var(--accent-red)',
+                filter: 'brightness(1.15)',
+                boxShadow: 'none',
+              },
+            }}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
