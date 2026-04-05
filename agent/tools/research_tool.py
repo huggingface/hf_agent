@@ -14,9 +14,16 @@ from typing import Any
 
 from litellm import Message, acompletion
 
+from agent.core.doom_loop import check_for_doom_loop
 from agent.core.session import Event
 
 logger = logging.getLogger(__name__)
+
+# Context budget for the research subagent (tokens).
+# When usage exceeds WARN threshold, the subagent is told to wrap up.
+# At MAX, the loop is force-stopped and whatever content exists is returned.
+_RESEARCH_CONTEXT_WARN = 170_000  # 85% of 200k
+_RESEARCH_CONTEXT_MAX = 190_000
 
 # Tools the research agent can use (read-only subset)
 RESEARCH_TOOL_NAMES = {
@@ -171,7 +178,7 @@ def _resolve_llm_params(model_name: str) -> dict:
 def _get_research_model(main_model: str) -> str:
     """Pick a cheaper model for research based on the main model."""
     if "anthropic/" in main_model:
-        return "anthropic/claude-haiku-4-5-20251001"
+        return "anthropic/claude-sonnet-4-6"
     # For non-Anthropic models (HF router etc.), use the same model
     return main_model
 
@@ -221,12 +228,60 @@ async def research_handler(
 
     _tool_uses = 0
     _total_tokens = 0
+    _warned_context = False
 
     await _log("Starting research sub-agent...")
 
-    # Run the research loop (max 20 iterations — research should be focused)
-    max_iterations = 20
+    # Run the research loop — context budget is the real limiter
+    max_iterations = 60
     for _iteration in range(max_iterations):
+        # ── Doom-loop detection ──
+        doom_prompt = check_for_doom_loop(messages)
+        if doom_prompt:
+            logger.warning("Research sub-agent doom loop detected at iteration %d", _iteration)
+            await _log("Doom loop detected — injecting corrective prompt")
+            messages.append(Message(role="user", content=doom_prompt))
+
+        # ── Context budget: warn at 75%, hard-stop at 95% ──
+        if _total_tokens >= _RESEARCH_CONTEXT_MAX:
+            logger.warning(
+                "Research sub-agent hit context max (%d tokens) — forcing summary",
+                _total_tokens,
+            )
+            await _log(f"Context limit reached ({_total_tokens} tokens) — forcing wrap-up")
+            # Ask for a final summary with no tools
+            messages.append(Message(
+                role="user",
+                content=(
+                    "[SYSTEM: CONTEXT LIMIT REACHED] You have used all available context. "
+                    "Summarize your findings NOW. Do NOT call any more tools."
+                ),
+            ))
+            try:
+                response = await acompletion(
+                    messages=messages,
+                    tools=None,  # no tools — force text response
+                    stream=False,
+                    timeout=120,
+                    **llm_params,
+                )
+                content = response.choices[0].message.content or ""
+                return content or "Research context exhausted — no summary produced.", bool(content)
+            except Exception:
+                return "Research context exhausted and summary call failed.", False
+
+        if not _warned_context and _total_tokens >= _RESEARCH_CONTEXT_WARN:
+            _warned_context = True
+            await _log(f"Context at {_total_tokens} tokens — nudging to wrap up")
+            messages.append(Message(
+                role="user",
+                content=(
+                    "[SYSTEM: You have used 75% of your context budget. "
+                    "Start wrapping up: finish any critical lookups, then "
+                    "produce your final summary within the next 1-2 iterations.]"
+                ),
+            ))
+
         try:
             response = await acompletion(
                 messages=messages,
@@ -242,7 +297,7 @@ async def research_handler(
 
         # Track tokens
         if response.usage:
-            _total_tokens += response.usage.total_tokens
+            _total_tokens = response.usage.total_tokens
             await _log(f"tokens:{_total_tokens}")
 
         choice = response.choices[0]
@@ -308,8 +363,31 @@ async def research_handler(
                 )
             )
 
+    # ── Iteration limit: try to salvage findings ──
+    await _log("Iteration limit reached — extracting summary")
+    messages.append(Message(
+        role="user",
+        content=(
+            "[SYSTEM: ITERATION LIMIT] You have reached the maximum number of research "
+            "iterations. Summarize ALL findings so far. Do NOT call any more tools."
+        ),
+    ))
+    try:
+        response = await acompletion(
+            messages=messages,
+            tools=None,
+            stream=False,
+            timeout=120,
+            **llm_params,
+        )
+        content = response.choices[0].message.content or ""
+        if content:
+            return content, True
+    except Exception as e:
+        logger.error("Research summary call failed: %s", e)
+
     return (
-        "Research agent hit iteration limit (20). "
+        "Research agent hit iteration limit (60). "
         "Partial findings may be incomplete — try a more focused task.",
         False,
     )

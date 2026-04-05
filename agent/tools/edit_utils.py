@@ -181,7 +181,11 @@ def apply_edit(
     if old_str not in content:
         original_match, fuzzy_note = fuzzy_find_original_match(content, old_str)
         if original_match is None:
-            raise ValueError("old_str not found in file.")
+            raise ValueError(
+                "old_str was not found in the file. Make sure old_str matches "
+                "the file contents exactly, including whitespace and indentation. "
+                "Use the read tool to verify the current file contents before retrying."
+            )
         old_str = original_match
 
     count = content.count(old_str)
@@ -189,8 +193,10 @@ def apply_edit(
     if mode == "replace":
         if count > 1 and not replace_all:
             raise ValueError(
-                f"old_str appears {count} times. Use replace_all=true to replace all, "
-                "or provide a more specific old_str."
+                f"Found {count} matches of old_str in the file, but replace_all is "
+                f"false. To replace all occurrences, set replace_all to true. To "
+                f"replace only one, provide a larger old_str with more surrounding "
+                f"context to uniquely identify the instance."
             )
         if replace_all:
             new_content = content.replace(old_str, new_str)

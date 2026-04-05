@@ -89,7 +89,7 @@ class ContextManager:
         )
         self.max_context = max_context - 10000
         self.compact_size = int(max_context * compact_size)
-        self.context_length = max_context
+        self.context_length = 0  # Updated after each LLM call with actual usage
         self.untouched_messages = untouched_messages
         self.items: list[Message] = [Message(role="system", content=self.system_prompt)]
 
@@ -243,120 +243,25 @@ class ContextManager:
 
         return False
 
-    # Tools whose outputs should never be pruned (too valuable to summarise)
-    _PRUNE_SKIP_TOOLS: set[str] = {"research", "plan_tool"}
-
-    # Tools whose outputs are pruned via a cheap LLM call instead of
-    # deterministic truncation (the output structure is too complex for
-    # a fixed head-slice to capture the answer reliably).
-    _LLM_PRUNE_TOOLS: set[str] = {"hf_jobs"}
-
-    async def prune_old_tool_outputs(self, model_name: str | None = None) -> None:
-        """Stage 1 compaction: shrink old tool outputs.
-
-        For any tool message older than the last 6 messages whose content
-        exceeds 500 chars:
-        - Tools in _LLM_PRUNE_TOOLS get a cheap LLM summarisation (≤600 tokens).
-        - All other tools get a deterministic one-line summary.
-        tool_call_id and name are always preserved.
-        """
-        if len(self.items) <= 6:
-            return
-
-        cutoff = len(self.items) - 6
-
-        # Find the preceding assistant tool_call arguments so the LLM
-        # knows what question the tool output was answering.
-        def _find_tool_call_args(tool_call_id: str) -> str | None:
-            for msg in self.items:
-                if getattr(msg, "role", None) != "assistant":
-                    continue
-                for tc in getattr(msg, "tool_calls", None) or []:
-                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id")
-                    if tc_id == tool_call_id:
-                        fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
-                        return fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "")
-            return None
-
-        for i in range(cutoff - 1, -1, -1):
-            msg = self.items[i]
-            if getattr(msg, "role", None) != "tool":
-                continue
-            content = getattr(msg, "content", None) or ""
-            if len(content) <= 500:
-                continue
-
-            tool_name = getattr(msg, "name", None) or "tool"
-            if tool_name in self._PRUNE_SKIP_TOOLS:
-                continue
-
-            # --- LLM-based pruning for complex tool outputs ---
-            if tool_name in self._LLM_PRUNE_TOOLS and model_name:
-                call_args = _find_tool_call_args(getattr(msg, "tool_call_id", ""))
-                context_line = (
-                    f"The tool was called with: {call_args}\n\n" if call_args else ""
-                )
-                try:
-                    hf_key = os.environ.get("INFERENCE_TOKEN")
-                    resp = await acompletion(
-                        model=model_name,
-                        messages=[
-                            Message(
-                                role="user",
-                                content=(
-                                    f"{context_line}"
-                                    f"Below is the raw output of the '{tool_name}' tool.\n"
-                                    "Give the answer to the original request unchanged — "
-                                    "preserve all job IDs, numbers, status values, error "
-                                    "messages, and metrics exactly. Omit filler/boilerplate. "
-                                    "Stay under 600 tokens.\n\n"
-                                    f"{content}"
-                                ),
-                            )
-                        ],
-                        max_completion_tokens=600,
-                        api_key=hf_key
-                        if hf_key and model_name.startswith("huggingface/")
-                        else None,
-                    )
-                    msg.content = resp.choices[0].message.content
-                    continue
-                except Exception:
-                    logger.warning(
-                        "LLM prune failed for %s, falling back to deterministic",
-                        tool_name,
-                    )
-                    # fall through to deterministic pruning below
-
-            # --- Deterministic pruning ---
-            preview = content[:80]
-            total = len(content)
-
-            if tool_name == "bash":
-                exit_code_part = ""
-                if "exit_code" in content[:200]:
-                    for line in content[:200].splitlines():
-                        if "exit_code" in line:
-                            exit_code_part = "exit_code visible if present, "
-                            break
-                summary = f"[bash: {exit_code_part}{preview}... ({total} chars)]"
-            else:
-                summary = f"[{tool_name}: {preview}... ({total} chars)]"
-
-            msg.content = summary
-
     async def compact(
         self, model_name: str, tool_specs: list[dict] | None = None
     ) -> None:
         """Remove old messages to keep history under target size"""
-        await self.prune_old_tool_outputs(model_name=model_name)
-
         if (self.context_length <= self.max_context) or not self.items:
             return
 
         system_msg = (
             self.items[0] if self.items and self.items[0].role == "system" else None
         )
+
+        # Preserve the first user message (task prompt) — never summarize it
+        first_user_msg = None
+        first_user_idx = 1
+        for i in range(1, len(self.items)):
+            if getattr(self.items[i], "role", None) == "user":
+                first_user_msg = self.items[i]
+                first_user_idx = i
+                break
 
         # Don't summarize a certain number of just-preceding messages
         # Walk back to find a user message to make sure we keep an assistant -> user ->
@@ -366,7 +271,7 @@ class ContextManager:
             idx -= 1
 
         recent_messages = self.items[idx:]
-        messages_to_summarize = self.items[1:idx]
+        messages_to_summarize = self.items[first_user_idx + 1:idx]
 
         # improbable, messages would have to very long
         if not messages_to_summarize:
@@ -393,11 +298,11 @@ class ContextManager:
             role="assistant", content=response.choices[0].message.content
         )
 
-        # Reconstruct: system + summary + recent messages (includes tools)
-        if system_msg:
-            self.items = [system_msg, summarized_message] + recent_messages
-        else:
-            self.items = [summarized_message] + recent_messages
+        # Reconstruct: system + first user msg + summary + recent messages
+        head = [system_msg] if system_msg else []
+        if first_user_msg:
+            head.append(first_user_msg)
+        self.items = head + [summarized_message] + recent_messages
 
         self.context_length = (
             len(self.system_prompt) // 4 + response.usage.completion_tokens
