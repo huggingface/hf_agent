@@ -725,11 +725,6 @@ export default function ToolCallGroup({ tools, approveTools }: ToolCallGroupProp
         // Tool completed but has no output - show input as fallback
         setPanel({ title: displayName, output: { content: JSON.stringify(args, null, 2), language: 'json' }, input: inputSection }, 'output');
         setRightPanelOpen(true);
-      } else if (isRunning && args) {
-        // Tool is still running - show running message
-        const content = `Tool \`${tool.toolName}\` is still running...\n\nClick the input tab to view the tool arguments.`;
-        setPanel({ title: displayName, output: { content, language: 'markdown' }, input: inputSection }, 'output');
-        setRightPanelOpen(true);
       } else if (args) {
         const runningMessages = [
           'Crunching numbers and herding tensors...',
