@@ -153,35 +153,6 @@ _MAX_LLM_RETRIES = 3
 _LLM_RETRY_DELAYS = [5, 15, 30]  # seconds between retries
 
 
-def _append_failure_warning(
-    output: str,
-    tool_name: str,
-    tool_error_counts: dict[str, int],
-    max_failures: int,
-) -> str:
-    """Track a tool failure and append a warning to the output.
-
-    Returns the output with an appended warning indicating how many
-    failures have occurred and whether the LLM should switch approach.
-    """
-    tool_error_counts[tool_name] = tool_error_counts.get(tool_name, 0) + 1
-    count = tool_error_counts[tool_name]
-    if count >= max_failures:
-        return output + (
-            f"\n\n⚠ Tool '{tool_name}' has now failed "
-            f"{count} times this turn. You should try a "
-            f"different approach instead of calling this "
-            f"tool again."
-        )
-    remaining = max_failures - count
-    return output + (
-        f"\n\n⚠ Tool '{tool_name}' has failed "
-        f"{count}/{max_failures} times this turn. "
-        f"{remaining} attempt(s) before you should "
-        f"switch to a different approach."
-    )
-
-
 def _is_transient_error(error: Exception) -> bool:
     """Return True for errors that are likely transient and worth retrying."""
     err_str = str(error).lower()
@@ -200,10 +171,12 @@ def _is_transient_error(error: Exception) -> bool:
 
 async def _compact_and_notify(session: Session) -> None:
     """Run compaction and send event if context was reduced."""
-    await session.context_manager.prune_old_tool_outputs(
-        model_name=session.config.model_name,
-    )
     old_length = session.context_manager.context_length
+    max_ctx = session.context_manager.max_context
+    logger.debug(
+        "Compaction check: context_length=%d, max_context=%d, needs_compact=%s",
+        old_length, max_ctx, old_length > max_ctx,
+    )
     tool_specs = session.tool_router.get_tool_specs_for_llm()
     await session.context_manager.compact(
         model_name=session.config.model_name,
@@ -211,6 +184,11 @@ async def _compact_and_notify(session: Session) -> None:
     )
     new_length = session.context_manager.context_length
     if new_length != old_length:
+        logger.warning(
+            "Context compacted: %d -> %d tokens (max=%d, %d messages)",
+            old_length, new_length, max_ctx,
+            len(session.context_manager.items),
+        )
         await session.send_event(
             Event(
                 event_type="compacted",
@@ -446,7 +424,7 @@ class Handlers:
 
     @staticmethod
     async def run_agent(
-        session: Session, text: str, max_iterations: int = 300
+        session: Session, text: str,
     ) -> str | None:
         """
         Handle user input (like user_input_or_turn in codex.rs:1291)
@@ -474,10 +452,9 @@ class Handlers:
         iteration = 0
         final_response = None
         errored = False
-        tool_error_counts: dict[str, int] = {}
+        max_iterations = session.config.max_iterations
 
-        effective_max = min(max_iterations, session.config.max_requests_per_turn)
-        while iteration < effective_max:
+        while max_iterations == -1 or iteration < max_iterations:
             # ── Cancellation check: before LLM call ──
             if session.is_cancelled:
                 break
@@ -582,6 +559,34 @@ class Handlers:
 
                 # If no tool calls, add assistant message and we're done
                 if not tool_calls:
+                    logger.warning(
+                        "Agent loop ending: no tool calls. "
+                        "finish_reason=%s, token_count=%d, "
+                        "context_length=%d, max_context=%d, "
+                        "iteration=%d/%d, "
+                        "response_text=%s",
+                        finish_reason,
+                        token_count,
+                        session.context_manager.context_length,
+                        session.context_manager.max_context,
+                        iteration,
+                        max_iterations,
+                        (content or "")[:500],
+                    )
+                    await session.send_event(
+                        Event(
+                            event_type="tool_log",
+                            data={
+                                "tool": "system",
+                                "log": (
+                                    f"Loop exit: no tool calls. "
+                                    f"finish_reason={finish_reason}, "
+                                    f"tokens={token_count}/{session.context_manager.max_context}, "
+                                    f"iter={iteration}/{max_iterations}"
+                                ),
+                            },
+                        )
+                    )
                     if content:
                         assistant_msg = Message(role="assistant", content=content)
                         session.context_manager.add_message(assistant_msg, token_count)
@@ -722,15 +727,7 @@ class Handlers:
                     results = gather_task.result()
 
                     # 4. Record results and send outputs (order preserved)
-                    max_failures = session.config.max_tool_failures_per_turn
                     for tc, tool_name, tool_args, output, success in results:
-                        if not success:
-                            output = _append_failure_warning(
-                                output, tool_name, tool_error_counts, max_failures,
-                            )
-                        else:
-                            tool_error_counts.pop(tool_name, None)
-
                         tool_msg = Message(
                             role="tool",
                             content=output,
@@ -788,6 +785,14 @@ class Handlers:
 
             except ContextWindowExceededError:
                 # Force compact and retry this iteration
+                logger.warning(
+                    "ContextWindowExceededError at iteration %d — forcing compaction "
+                    "(context_length=%d, max_context=%d, messages=%d)",
+                    iteration,
+                    session.context_manager.context_length,
+                    session.context_manager.max_context,
+                    len(session.context_manager.items),
+                )
                 session.context_manager.context_length = (
                     session.context_manager.max_context + 1
                 )

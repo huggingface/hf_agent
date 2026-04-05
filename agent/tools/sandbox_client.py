@@ -57,7 +57,7 @@ HARDWARE_OPTIONS = [
     "a100-large",
 ]
 OUTPUT_LIMIT = 25000
-LINE_LIMIT = 2000
+LINE_LIMIT = 4000
 DEFAULT_READ_LIMIT = 2000
 DEFAULT_TIMEOUT = 240
 MAX_TIMEOUT = 1200
@@ -855,22 +855,23 @@ class Sandbox:
             "description": (
                 "Run a shell command in the remote sandbox and return stdout/stderr.\n"
                 "\n"
-                "Commands run in a shell at the working directory (default /app). "
-                "Each invocation is independent — use files in /app to persist state.\n"
+                "IMPORTANT: Do NOT use bash for file operations — use the dedicated tools instead:\n"
+                "- To read files: use read (not cat/head/tail)\n"
+                "- To edit files: use edit (not sed/awk)\n"
+                "- To write files: use write (not echo/cat <<EOF)\n"
                 "\n"
-                "AVOID using bash for operations covered by specialized tools:\n"
-                "- File reading: use read (not cat/head/tail)\n"
-                "- File editing: use edit (not sed/awk)\n"
-                "- File writing: use write (not echo/cat <<EOF)\n"
-                "\n"
-                "For long-running tasks, background them:\n"
-                "  nohup uv run train.py > /app/train.log 2>&1 &\n"
-                "Then check with read on the log file.\n"
-                "\n"
+                "Commands run in a shell at /app. Each invocation is independent — "
+                "use files in /app to persist state.\n"
                 "Chain dependent commands with &&. Independent commands should be "
                 "separate bash calls (they can run in parallel).\n"
                 "\n"
-                "Timeout default 120s, max 600s."
+                "For long-running commands (training, evaluation), run in the background and poll:\n"
+                "  nohup <command> > /app/output.log 2>&1 & echo $!\n"
+                "Then check status:\n"
+                "  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
+                "  tail -n 50 /app/output.log\n"
+                "\n"
+                "Timeout default 240s, max 1200s."
             ),
             "parameters": {
                 "type": "object",
@@ -883,7 +884,7 @@ class Sandbox:
                     },
                     "description": {
                         "type": "string",
-                        "description": "Short description (5-10 words, active voice). E.g. 'Install dependencies', 'Run training script'.",
+                        "description": "Short description (5-10 words, active voice).",
                     },
                     "work_dir": {
                         "type": "string",
@@ -891,20 +892,25 @@ class Sandbox:
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "Timeout in seconds (default: 240, max: 1200).",
+                        "description": "Optional timeout in seconds (default: 240, max: 1200).",
                     },
                 },
             },
         },
         "read": {
             "description": (
-                "Read file contents with line numbers (cat -n format).\n"
+                "Reads a file from the sandbox filesystem. Returns contents with line "
+                "numbers (cat -n format).\n"
                 "\n"
-                "Returns the first 2000 lines by default. For large files, use offset/limit "
-                "to read a specific range. Line numbers always match the original file.\n"
-                "\n"
-                "Lines longer than 2000 chars are truncated.\n"
-                "Cannot read directories — use bash with 'ls' instead."
+                "Usage:\n"
+                "- By default, reads up to 2000 lines from the beginning of the file.\n"
+                "- You can optionally specify offset and limit for large files, but prefer "
+                "reading the whole file first.\n"
+                "- Lines longer than 4000 chars are truncated.\n"
+                "- Cannot read directories — use bash with 'ls' instead.\n"
+                "- You should read multiple potentially useful files in parallel when possible.\n"
+                "- IMPORTANT: Always read a file before editing or overwriting it. The edit and "
+                "write tools will reject operations on files you haven't read."
             ),
             "parameters": {
                 "type": "object",
@@ -917,21 +923,25 @@ class Sandbox:
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "Start from this line (1-based). Only if file is too large.",
+                        "description": "The line number to start reading from (1-based). Only provide if the file is too large to read at once.",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Number of lines to read. Only if file is too large.",
+                        "description": "The number of lines to read. Only provide if the file is too large to read at once.",
                     },
                 },
             },
         },
         "write": {
             "description": (
-                "Create or overwrite a file. Creates parent directories as needed.\n"
+                "Writes a file to the sandbox filesystem. Overwrites the existing file if "
+                "one exists at the path.\n"
                 "\n"
-                "For existing files, you MUST read the file first (system enforced). "
-                "Prefer edit for modifications."
+                "- If this is an existing file, you MUST use the read tool first. This tool "
+                "will fail if you did not read the file first.\n"
+                "- ALWAYS prefer editing existing files with the edit tool over overwriting "
+                "with write.\n"
+                "- Creates parent directories as needed."
             ),
             "parameters": {
                 "type": "object",
@@ -944,32 +954,32 @@ class Sandbox:
                     },
                     "content": {
                         "type": "string",
-                        "description": "Complete file content.",
+                        "description": "The complete file content to write.",
                     },
                 },
             },
         },
         "edit": {
             "description": (
-                "Targeted edit via string replacement with fuzzy matching fallback.\n"
+                "Performs string replacements in files. Supports exact matching with "
+                "fuzzy fallback.\n"
+                "\n"
+                "Usage:\n"
+                "- You must read the file at least once before editing. This tool will "
+                "error if you attempt an edit without reading the file.\n"
+                "- The edit will FAIL if old_str is not unique in the file. Either provide "
+                "a larger string with more surrounding context to make it unique, or set "
+                "replace_all to true.\n"
+                "- old_str and new_str must differ.\n"
+                "- Preserve indentation exactly as it appears in the file.\n"
+                "- Do NOT include line number prefixes from read output in old_str or new_str.\n"
+                "- To delete code, set new_str to empty string.\n"
+                "- Use replace_all for renaming variables or strings across the file.\n"
                 "\n"
                 "Modes:\n"
                 "- replace (default): replace first occurrence of old_str with new_str.\n"
                 "- append_after: insert new_str immediately after old_str (old_str is kept).\n"
-                "- prepend_before: insert new_str immediately before old_str (old_str is kept).\n"
-                "\n"
-                "Rules:\n"
-                "- old_str must appear EXACTLY once (unless replace_all is true).\n"
-                "- Include enough context in old_str for uniqueness.\n"
-                "- old_str and new_str must differ.\n"
-                "- Preserve indentation exactly.\n"
-                "- To delete code, set new_str to empty string.\n"
-                "- File MUST have been read this session (system enforced).\n"
-                "- Do NOT include line number prefixes in old_str/new_str.\n"
-                "\n"
-                "If exact match fails, the tool automatically tries trimmed/normalized matching.\n"
-                "Use replace_all=true for batch operations like variable renaming.\n"
-                "Use append_after/prepend_before to insert code without replacing existing code."
+                "- prepend_before: insert new_str immediately before old_str (old_str is kept)."
             ),
             "parameters": {
                 "type": "object",
@@ -978,16 +988,19 @@ class Sandbox:
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Absolute path to the file.",
+                        "description": "Absolute path to the file to edit.",
                     },
                     "old_str": {
                         "type": "string",
-                        "description": "Text to find (fuzzy matching used as fallback).",
+                        "description": "The text to find in the file. Must match exactly (fuzzy matching is used as fallback).",
                     },
-                    "new_str": {"type": "string", "description": "Replacement text (or text to insert for append_after/prepend_before)."},
+                    "new_str": {
+                        "type": "string",
+                        "description": "The replacement text. For append_after/prepend_before modes, the text to insert.",
+                    },
                     "replace_all": {
                         "type": "boolean",
-                        "description": "Replace all occurrences (default: false).",
+                        "description": "Replace all occurrences of old_str (default: false).",
                         "default": False,
                     },
                     "mode": {

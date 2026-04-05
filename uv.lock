@@ -871,7 +871,7 @@ wheels = [
 [[package]]
 name = "hf-agent"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "datasets" },
     { name = "pydantic" },
@@ -890,6 +890,7 @@ agent = [
     { name = "nbformat" },
     { name = "prompt-toolkit" },
     { name = "requests" },
+    { name = "rich" },
     { name = "thefuzz" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
@@ -909,6 +910,7 @@ all = [
     { name = "prompt-toolkit" },
     { name = "pytest" },
     { name = "requests" },
+    { name = "rich" },
     { name = "tenacity" },
     { name = "thefuzz" },
     { name = "uvicorn", extra = ["standard"] },
@@ -945,6 +947,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", marker = "extra == 'agent'", specifier = ">=2.32.5" },
+    { name = "rich", marker = "extra == 'agent'", specifier = ">=13.0.0" },
     { name = "tenacity", marker = "extra == 'eval'", specifier = ">=8.0.0" },
     { name = "thefuzz", marker = "extra == 'agent'", specifier = ">=0.22.1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'agent'", specifier = ">=0.32.0" },

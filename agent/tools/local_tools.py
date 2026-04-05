@@ -15,15 +15,24 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from agent.tools.sandbox_client import Sandbox
 
 MAX_OUTPUT_CHARS = 25_000
-MAX_LINE_LENGTH = 2000
+MAX_LINE_LENGTH = 4000
 DEFAULT_READ_LINES = 2000
 DEFAULT_TIMEOUT = 120
-MAX_TIMEOUT = 600
+MAX_TIMEOUT = 36000  # 10 hours — needed for long training runs (e.g. PostTrainBench)
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07')
+
+# Track files that have been read this session (enforces read-before-write/edit)
+_files_read: set[str] = set()
+
+
+def _resolve_path(path: str) -> str:
+    try:
+        return str(Path(path).resolve())
+    except Exception:
+        return path
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -78,6 +87,7 @@ def _truncate_output(output: str, max_chars: int = MAX_OUTPUT_CHARS, head_ratio:
     meta = f"\n\n... ({omitted:,} of {total:,} chars omitted, showing first {head_budget:,} + last {tail_budget:,}) ...\n"
     if spill_path:
         meta += f"Full output saved to {spill_path} — use the read tool with offset/limit to inspect specific sections.\n"
+    meta += "IMPORTANT: The command has finished. Analyze the output above and continue with your next action.\n"
     return head + meta + tail
 
 
@@ -104,7 +114,14 @@ async def _bash_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
             output = "(no output)"
         return output, result.returncode == 0
     except subprocess.TimeoutExpired:
-        return f"Command timed out after {timeout}s.", False
+        return (
+            f"Command timed out after {timeout}s and was killed.\n\n"
+            f"For long-running commands, run in the background and poll:\n"
+            f"  nohup <command> > /tmp/output.log 2>&1 & echo $!\n"
+            f"Then check status with:\n"
+            f"  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
+            f"  tail -n 50 /tmp/output.log"
+        ), False
     except Exception as e:
         return f"bash error: {e}", False
 
@@ -123,17 +140,7 @@ async def _read_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
     except Exception as e:
         return f"read error: {e}", False
 
-    # Check if file is unchanged since last read
-    session = _kw.get("session")
-    if session is not None:
-        is_unchanged, last_turn = session.file_content_cache.check_unchanged(
-            file_path, raw_content
-        )
-        if is_unchanged:
-            return (
-                f"[File unchanged since turn {last_turn}, "
-                f"content already in context.]"
-            ), True
+    _files_read.add(_resolve_path(file_path))
 
     lines = raw_content.splitlines()
     offset = max((args.get("offset") or 1), 1)
@@ -146,11 +153,6 @@ async def _read_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
             line = line[:MAX_LINE_LENGTH] + "..."
         numbered.append(f"{i:>6}\t{line}")
 
-    if session is not None:
-        session.file_content_cache.record_read(
-            file_path, raw_content, session.turn_count
-        )
-
     return "\n".join(numbered), True
 
 
@@ -160,11 +162,14 @@ async def _write_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
     if not file_path:
         return "No path provided.", False
     p = Path(file_path)
+    if p.exists() and _resolve_path(file_path) not in _files_read:
+        return (
+            f"You must read {file_path} before overwriting it. "
+            f"Use the read tool first to see current contents."
+        ), False
     try:
         _atomic_write(p, content)
-        session = _kw.get("session")
-        if session is not None:
-            session.file_content_cache.clear_path(file_path)
+        _files_read.add(_resolve_path(file_path))
         msg = f"Wrote {len(content)} bytes to {file_path}"
         # Syntax validation for Python files
         if p.suffix == ".py":
@@ -194,6 +199,11 @@ async def _edit_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
     p = Path(file_path)
     if not p.exists():
         return f"File not found: {file_path}", False
+    if _resolve_path(file_path) not in _files_read:
+        return (
+            f"You must read {file_path} before editing it. "
+            f"Use the read tool first to see current contents."
+        ), False
 
     try:
         text = p.read_text()
@@ -211,10 +221,6 @@ async def _edit_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
         _atomic_write(p, new_text)
     except Exception as e:
         return f"edit write error: {e}", False
-
-    session = _kw.get("session")
-    if session is not None:
-        session.file_content_cache.clear_path(file_path)
 
     msg = f"Edited {file_path} ({replacements} replacement{'s' if replacements > 1 else ''})"
     if fuzzy_note:
@@ -234,18 +240,22 @@ _LOCAL_TOOL_SPECS = {
         "description": (
             "Run a shell command on the local machine and return stdout/stderr.\n"
             "\n"
-            "Commands run in a shell at the working directory (default: current directory). "
-            "Each invocation is independent.\n"
+            "IMPORTANT: Do NOT use bash for file operations — use the dedicated tools instead:\n"
+            "- To read files: use read (not cat/head/tail)\n"
+            "- To edit files: use edit (not sed/awk)\n"
+            "- To write files: use write (not echo/cat <<EOF)\n"
             "\n"
-            "AVOID using bash for operations covered by specialized tools:\n"
-            "- File reading: use read (not cat/head/tail)\n"
-            "- File editing: use edit (not sed/awk)\n"
-            "- File writing: use write (not echo/cat <<EOF)\n"
-            "\n"
+            "Commands run in a shell at the working directory. Each invocation is independent.\n"
             "Chain dependent commands with &&. Independent commands should be "
             "separate bash calls (they can run in parallel).\n"
             "\n"
-            "Timeout default 120s, max 600s."
+            "For long-running commands (training, evaluation), run in the background and poll:\n"
+            "  nohup <command> > /tmp/output.log 2>&1 & echo $!\n"
+            "Then check status:\n"
+            "  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
+            "  tail -n 50 /tmp/output.log\n"
+            "\n"
+            "Timeout default 120s, max 36000s."
         ),
         "parameters": {
             "type": "object",
@@ -266,22 +276,125 @@ _LOCAL_TOOL_SPECS = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds (default: 120, max: 600).",
+                    "description": "Optional timeout in seconds (default: 120, max: 36000).",
                 },
             },
         },
     },
     "read": {
-        "description": Sandbox.TOOLS["read"]["description"],
-        "parameters": Sandbox.TOOLS["read"]["parameters"],
+        "description": (
+            "Reads a file from the local filesystem. Returns contents with line numbers "
+            "(cat -n format).\n"
+            "\n"
+            "Usage:\n"
+            "- By default, reads up to 2000 lines from the beginning of the file.\n"
+            "- You can optionally specify offset and limit for large files, but prefer "
+            "reading the whole file first.\n"
+            "- Lines longer than 4000 chars are truncated.\n"
+            "- Cannot read directories — use bash with 'ls' instead.\n"
+            "- You should read multiple potentially useful files in parallel when possible.\n"
+            "- IMPORTANT: Always read a file before editing or overwriting it. The edit and "
+            "write tools will reject operations on files you haven't read."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": False,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to read.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "The line number to start reading from (1-based). Only provide if the file is too large to read at once.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+                },
+            },
+        },
     },
     "write": {
-        "description": Sandbox.TOOLS["write"]["description"],
-        "parameters": Sandbox.TOOLS["write"]["parameters"],
+        "description": (
+            "Writes a file to the local filesystem. Overwrites the existing file if one "
+            "exists at the path.\n"
+            "\n"
+            "- If this is an existing file, you MUST use the read tool first. This tool "
+            "will fail if you did not read the file first.\n"
+            "- ALWAYS prefer editing existing files with the edit tool over overwriting "
+            "with write.\n"
+            "- Creates parent directories as needed."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["path", "content"],
+            "additionalProperties": False,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to write.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The complete file content to write.",
+                },
+            },
+        },
     },
     "edit": {
-        "description": Sandbox.TOOLS["edit"]["description"],
-        "parameters": Sandbox.TOOLS["edit"]["parameters"],
+        "description": (
+            "Performs string replacements in files. Supports exact matching with "
+            "fuzzy fallback.\n"
+            "\n"
+            "Usage:\n"
+            "- You must read the file at least once before editing. This tool will "
+            "error if you attempt an edit without reading the file.\n"
+            "- The edit will FAIL if old_str is not unique in the file. Either provide "
+            "a larger string with more surrounding context to make it unique, or set "
+            "replace_all to true.\n"
+            "- old_str and new_str must differ.\n"
+            "- Preserve indentation exactly as it appears in the file.\n"
+            "- Do NOT include line number prefixes from read output in old_str or new_str.\n"
+            "- To delete code, set new_str to empty string.\n"
+            "- Use replace_all for renaming variables or strings across the file.\n"
+            "\n"
+            "Modes:\n"
+            "- replace (default): replace first occurrence of old_str with new_str.\n"
+            "- append_after: insert new_str immediately after old_str (old_str is kept).\n"
+            "- prepend_before: insert new_str immediately before old_str (old_str is kept)."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["path", "old_str", "new_str"],
+            "additionalProperties": False,
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to edit.",
+                },
+                "old_str": {
+                    "type": "string",
+                    "description": "The text to find in the file. Must match exactly (fuzzy matching is used as fallback).",
+                },
+                "new_str": {
+                    "type": "string",
+                    "description": "The replacement text. For append_after/prepend_before modes, the text to insert.",
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences of old_str (default: false).",
+                    "default": False,
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["replace", "append_after", "prepend_before"],
+                    "description": "Edit mode (default: replace).",
+                    "default": "replace",
+                },
+            },
+        },
     },
 }
 
