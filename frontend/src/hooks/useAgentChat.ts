@@ -651,7 +651,10 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
       setNeedsAttention(sessionId, false);
       const hasApproved = approvals.some(a => a.approved);
       if (hasApproved) {
-        updateSession(sessionId, { isProcessing: true });
+        updateSession(sessionId, {
+          isProcessing: true,
+          activityStatus: { type: 'thinking' },
+        });
       }
 
       // Persist updated tool states so a page refresh during execution

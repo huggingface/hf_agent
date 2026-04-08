@@ -70,16 +70,30 @@ const markdownSx: SxProps<Theme> = {
     width: '100%',
     my: 2,
     fontSize: '0.85rem',
+    display: 'block',
+    overflowX: 'auto',
+    WebkitOverflowScrolling: 'touch',
+  },
+  '& thead': {
+    position: 'sticky',
+    top: 0,
   },
   '& th': {
     borderBottom: '2px solid var(--border-hover)',
+    bgcolor: 'var(--hover-bg)',
     textAlign: 'left',
-    p: 1,
+    px: 1.5,
+    py: 0.75,
     fontWeight: 600,
+    whiteSpace: 'nowrap',
   },
   '& td': {
     borderBottom: '1px solid var(--tool-border)',
-    p: 1,
+    px: 1.5,
+    py: 0.75,
+  },
+  '& tr:nth-of-type(even) td': {
+    bgcolor: 'color-mix(in srgb, var(--hover-bg) 50%, transparent)',
   },
 
   '& hr': {
