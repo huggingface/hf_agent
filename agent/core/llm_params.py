@@ -5,14 +5,7 @@ can import it without pulling in the whole agent loop / tool router and
 creating circular imports.
 """
 
-import os
-
-
-# HF router reasoning models only accept "low" | "medium" | "high" (e.g.
-# MiniMax M2 actually *requires* reasoning to be enabled). OpenAI's GPT-5
-# also accepts "minimal" for near-zero thinking. We map "minimal" to "low"
-# for HF so the user doesn't get a 400.
-_HF_ALLOWED_EFFORTS = {"low", "medium", "high"}
+from agent.core.provider_adapters import ADAPTERS
 
 
 def _resolve_llm_params(
@@ -50,27 +43,12 @@ def _resolve_llm_params(
       2. session.hf_token — the user's own token (CLI / OAuth / cache file).
       3. HF_TOKEN env — belt-and-suspenders fallback for CLI users.
     """
-    if model_name.startswith(("anthropic/", "openai/")):
-        params: dict = {"model": model_name}
-        if reasoning_effort:
-            params["reasoning_effort"] = reasoning_effort
-        return params
+    for adapter in ADAPTERS:
+        if adapter.matches(model_name):
+            return adapter.build_params(
+                model_name,
+                session_hf_token=session_hf_token,
+                reasoning_effort=reasoning_effort,
+            )
 
-    hf_model = model_name.removeprefix("huggingface/")
-    api_key = (
-        os.environ.get("INFERENCE_TOKEN")
-        or session_hf_token
-        or os.environ.get("HF_TOKEN")
-    )
-    params = {
-        "model": f"openai/{hf_model}",
-        "api_base": "https://router.huggingface.co/v1",
-        "api_key": api_key,
-    }
-    if os.environ.get("INFERENCE_TOKEN"):
-        params["extra_headers"] = {"X-HF-Bill-To": "huggingface"}
-    if reasoning_effort:
-        hf_level = "low" if reasoning_effort == "minimal" else reasoning_effort
-        if hf_level in _HF_ALLOWED_EFFORTS:
-            params["extra_body"] = {"reasoning_effort": hf_level}
-    return params
+    raise ValueError(f"Unsupported model id: {model_name}")
