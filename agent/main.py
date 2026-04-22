@@ -22,6 +22,7 @@ from prompt_toolkit import PromptSession
 
 from agent.config import load_config
 from agent.core.agent_loop import submission_loop
+from agent.core.provider_adapters import get_available_models, is_valid_model_name
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
 from agent.utils.reliability_checks import check_training_script_save_pattern
@@ -49,37 +50,26 @@ litellm.drop_params = True
 # on every error — users don't need it, and our friendly errors cover the case.
 litellm.suppress_debug_info = True
 
+
 # ── Suggested models shown by `/model` (not a gate) ──────────────────────
 # Users can paste any HF model id (e.g. "MiniMaxAI/MiniMax-M2.7") or use one
 # of the `anthropic/` / `openai/` prefixes for direct API access. For HF ids,
 # append ":fastest" / ":cheapest" / ":preferred" / ":<provider>" to override
 # the default routing policy (auto = fastest with failover).
-SUGGESTED_MODELS = [
-    {"id": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6"},
-    {"id": "MiniMaxAI/MiniMax-M2.7", "label": "MiniMax M2.7"},
-    {"id": "moonshotai/Kimi-K2.6", "label": "Kimi K2.6"},
-    {"id": "zai-org/GLM-5.1", "label": "GLM 5.1"},
-]
+def _suggested_models() -> list[dict[str, Any]]:
+    return get_available_models()
+
+
+def _looks_like_hf_model_id(model_id: str) -> bool:
+    if model_id.startswith(("anthropic/", "openai/")):
+        return False
+    bare = model_id.removeprefix("huggingface/").split(":", 1)[0]
+    parts = bare.split("/")
+    return len(parts) >= 2 and all(parts)
 
 
 def _is_valid_model_id(model_id: str) -> bool:
-    """Loose format check — lets users pick any model id.
-
-    Accepts:
-      • anthropic/<model>
-      • openai/<model>
-      • <org>/<model>[:<tag>]            (HF router; tag = provider or policy)
-      • huggingface/<org>/<model>[:<tag>] (same, accepts legacy prefix)
-
-    Actual availability is verified against the HF router catalog on switch,
-    or by the provider on first call.
-    """
-    if not model_id or "/" not in model_id:
-        return False
-    # Strip :tag suffix before structural check
-    head = model_id.split(":", 1)[0]
-    parts = head.split("/")
-    return len(parts) >= 2 and all(parts)
+    return is_valid_model_name(model_id) or _looks_like_hf_model_id(model_id)
 
 
 def _safe_get_args(arguments: dict) -> dict:
@@ -160,9 +150,7 @@ def _print_model_preflight(model_id: str, console) -> None:
         )
         ctx = f"{p.context_length:,} ctx" if p.context_length else "ctx n/a"
         tools = "tools" if p.supports_tools else "no tools"
-        console.print(
-            f"  [dim]{p.provider}: {price}, {ctx}, {tools}[/dim]"
-        )
+        console.print(f"  [dim]{p.provider}: {price}, {ctx}, {tools}[/dim]")
 
 
 def _get_hf_token() -> str | None:
@@ -172,6 +160,7 @@ def _get_hf_token() -> str | None:
         return token
     try:
         from huggingface_hub import HfApi
+
         api = HfApi()
         token = api.token
         if token:
@@ -224,9 +213,12 @@ async def _prompt_and_save_hf_token(prompt_session: PromptSession) -> str:
             login(token=token, add_to_git_credential=False)
             print("Token saved to ~/.cache/huggingface/token")
         except Exception as e:
-            print(f"Warning: could not persist token ({e}), using for this session only.")
+            print(
+                f"Warning: could not persist token ({e}), using for this session only."
+            )
 
         return token
+
 
 @dataclass
 class Operation:
@@ -252,9 +244,9 @@ def _create_rich_console():
 class _ThinkingShimmer:
     """Animated shiny/shimmer thinking indicator — a bright gradient sweeps across the text."""
 
-    _BASE = (90, 90, 110)       # dim base color
-    _HIGHLIGHT = (255, 200, 80) # bright shimmer highlight (warm gold)
-    _WIDTH = 5                  # shimmer width in characters
+    _BASE = (90, 90, 110)  # dim base color
+    _HIGHLIGHT = (255, 200, 80)  # bright shimmer highlight (warm gold)
+    _WIDTH = 5  # shimmer width in characters
     _FPS = 24
 
     def __init__(self, console):
@@ -335,7 +327,7 @@ class _StreamBuffer:
         if idx == -1:
             return None
         block = self._buffer[:idx]
-        self._buffer = self._buffer[idx + 2:]
+        self._buffer = self._buffer[idx + 2 :]
         return block
 
     async def flush_ready(
@@ -361,7 +353,9 @@ class _StreamBuffer:
         """Flush complete blocks, then render whatever incomplete tail remains."""
         await self.flush_ready(cancel_event=cancel_event, instant=instant)
         if self._buffer.strip():
-            await print_markdown(self._buffer, cancel_event=cancel_event, instant=instant)
+            await print_markdown(
+                self._buffer, cancel_event=cancel_event, instant=instant
+            )
         self._buffer = ""
 
     def discard(self):
@@ -459,7 +453,11 @@ async def event_listener(
             elif event.event_type == "error":
                 shimmer.stop()
                 stream_buf.discard()
-                error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+                error = (
+                    event.data.get("error", "Unknown error")
+                    if event.data
+                    else "Unknown error"
+                )
                 print_error(error)
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
@@ -721,7 +719,9 @@ async def event_listener(
                             f"Approve item {i}? (y=yes, yolo=approve all, n=no, or provide feedback): "
                         )
                     except (KeyboardInterrupt, EOFError):
-                        get_console().print("[dim]Approval cancelled — rejecting remaining items[/dim]")
+                        get_console().print(
+                            "[dim]Approval cancelled — rejecting remaining items[/dim]"
+                        )
                         approvals.append(
                             {
                                 "tool_call_id": tool_call_id,
@@ -847,9 +847,12 @@ def _handle_slash_command(
             console.print("[bold]Current model:[/bold]")
             console.print(f"  {current}")
             console.print("\n[bold]Suggested:[/bold]")
-            for m in SUGGESTED_MODELS:
+            for m in _suggested_models():
                 marker = " [dim]<-- current[/dim]" if m["id"] == current else ""
-                console.print(f"  {m['id']}  [dim]({m['label']})[/dim]{marker}")
+                provider = m.get("providerLabel") or m.get("provider") or "provider"
+                console.print(
+                    f"  {m['id']}  [dim]({m['label']} · {provider})[/dim]{marker}"
+                )
             console.print(
                 "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M2.7').\n"
                 "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"
@@ -865,7 +868,9 @@ def _handle_slash_command(
                 "  • openai/<model>[/dim]"
             )
             return None
-        normalized = arg.removeprefix("huggingface/")
+        normalized = (
+            arg.removeprefix("huggingface/") if _looks_like_hf_model_id(arg) else arg
+        )
         _print_model_preflight(normalized, console)
         session = session_holder[0] if session_holder else None
         if session:
@@ -932,6 +937,7 @@ async def main():
     hf_user = None
     try:
         from huggingface_hub import HfApi
+
         hf_user = HfApi(token=hf_token).whoami().get("name")
     except Exception:
         pass
@@ -941,6 +947,7 @@ async def main():
     # Pre-warm the HF router catalog in the background so /model switches
     # don't block on a network fetch.
     from agent.core import hf_router_catalog
+
     asyncio.create_task(asyncio.to_thread(hf_router_catalog.prewarm))
 
     # Create queues for communication
@@ -1084,7 +1091,11 @@ async def main():
             # Handle slash commands
             if user_input.strip().startswith("/"):
                 sub = _handle_slash_command(
-                    user_input.strip(), config, session_holder, submission_queue, submission_id
+                    user_input.strip(),
+                    config,
+                    session_holder,
+                    submission_queue,
+                    submission_id,
                 )
                 if sub is None:
                     # Command handled locally, loop back for input
@@ -1147,7 +1158,10 @@ async def headless_main(
 
     hf_token = _get_hf_token()
     if not hf_token:
-        print("ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.", file=sys.stderr)
+        print(
+            "ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"HF token loaded", file=sys.stderr)
@@ -1288,26 +1302,35 @@ async def headless_main(
                 for t in tools_data
             ]
             _hl_sub_id[0] += 1
-            await submission_queue.put(Submission(
-                id=f"hl_approval_{_hl_sub_id[0]}",
-                operation=Operation(
-                    op_type=OpType.EXEC_APPROVAL,
-                    data={"approvals": approvals},
-                ),
-            ))
+            await submission_queue.put(
+                Submission(
+                    id=f"hl_approval_{_hl_sub_id[0]}",
+                    operation=Operation(
+                        op_type=OpType.EXEC_APPROVAL,
+                        data={"approvals": approvals},
+                    ),
+                )
+            )
         elif event.event_type == "compacted":
             old_tokens = event.data.get("old_tokens", 0) if event.data else 0
             new_tokens = event.data.get("new_tokens", 0) if event.data else 0
             print_compacted(old_tokens, new_tokens)
         elif event.event_type == "error":
             stream_buf.discard()
-            error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+            error = (
+                event.data.get("error", "Unknown error")
+                if event.data
+                else "Unknown error"
+            )
             print_error(error)
             break
         elif event.event_type in ("turn_complete", "interrupted"):
             stream_buf.discard()
             history_size = event.data.get("history_size", "?") if event.data else "?"
-            print(f"\n--- Agent {event.event_type} (history_size={history_size}) ---", file=sys.stderr)
+            print(
+                f"\n--- Agent {event.event_type} (history_size={history_size}) ---",
+                file=sys.stderr,
+            )
             break
 
     # Shutdown
@@ -1327,6 +1350,7 @@ def cli():
     """Entry point for the ml-intern CLI command."""
     import logging as _logging
     import warnings
+
     # Suppress aiohttp "Unclosed client session" noise during event loop teardown
     _logging.getLogger("asyncio").setLevel(_logging.CRITICAL)
     # Suppress litellm pydantic deprecation warnings
@@ -1335,12 +1359,23 @@ def cli():
     warnings.filterwarnings("ignore", category=SyntaxWarning, module="whoosh")
 
     parser = argparse.ArgumentParser(description="Hugging Face Agent CLI")
-    parser.add_argument("prompt", nargs="?", default=None, help="Run headlessly with this prompt")
-    parser.add_argument("--model", "-m", default=None, help=f"Model to use (default: from config)")
-    parser.add_argument("--max-iterations", type=int, default=None,
-                        help="Max LLM requests per turn (default: 50, use -1 for unlimited)")
-    parser.add_argument("--no-stream", action="store_true",
-                        help="Disable token streaming (use non-streaming LLM calls)")
+    parser.add_argument(
+        "prompt", nargs="?", default=None, help="Run headlessly with this prompt"
+    )
+    parser.add_argument(
+        "--model", "-m", default=None, help=f"Model to use (default: from config)"
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Max LLM requests per turn (default: 50, use -1 for unlimited)",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable token streaming (use non-streaming LLM calls)",
+    )
     args = parser.parse_args()
 
     try:
@@ -1348,7 +1383,14 @@ def cli():
             max_iter = args.max_iterations
             if max_iter is not None and max_iter < 0:
                 max_iter = 10_000  # effectively unlimited
-            asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
+            asyncio.run(
+                headless_main(
+                    args.prompt,
+                    model=args.model,
+                    max_iterations=max_iter,
+                    stream=not args.no_stream,
+                )
+            )
         else:
             asyncio.run(main())
     except KeyboardInterrupt:

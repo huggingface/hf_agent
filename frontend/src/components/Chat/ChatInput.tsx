@@ -5,56 +5,58 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import StopIcon from '@mui/icons-material/Stop';
 import { apiFetch } from '@/utils/api';
 
-// Model configuration
 interface ModelOption {
   id: string;
-  name: string;
+  label: string;
   description: string;
-  modelPath: string;
   avatarUrl: string;
+  providerLabel?: string;
   recommended?: boolean;
 }
 
-const getHfAvatarUrl = (modelId: string) => {
-  const org = modelId.split('/')[0];
-  return `https://huggingface.co/api/avatars/${org}`;
-};
-
-const MODEL_OPTIONS: ModelOption[] = [
+const FALLBACK_MODELS: ModelOption[] = [
   {
-    id: 'claude-opus',
-    name: 'Claude Opus 4.6',
+    id: 'anthropic/claude-opus-4-6',
+    label: 'Claude Opus 4.6',
     description: 'Anthropic',
-    modelPath: 'anthropic/claude-opus-4-6',
     avatarUrl: 'https://huggingface.co/api/avatars/Anthropic',
+    providerLabel: 'Anthropic',
     recommended: true,
   },
   {
-    id: 'minimax-m2.7',
-    name: 'MiniMax M2.7',
-    description: 'Novita',
-    modelPath: 'MiniMaxAI/MiniMax-M2.7',
-    avatarUrl: getHfAvatarUrl('MiniMaxAI/MiniMax-M2.7'),
+    id: 'MiniMaxAI/MiniMax-M2.7',
+    label: 'MiniMax M2.7',
+    description: 'HF Router',
+    avatarUrl: 'https://huggingface.co/api/avatars/MiniMaxAI',
+    providerLabel: 'Hugging Face Router',
     recommended: true,
   },
   {
-    id: 'kimi-k2.6',
-    name: 'Kimi K2.6',
-    description: 'Novita',
-    modelPath: 'moonshotai/Kimi-K2.6',
-    avatarUrl: getHfAvatarUrl('moonshotai/Kimi-K2.6'),
+    id: 'moonshotai/Kimi-K2.6',
+    label: 'Kimi K2.6',
+    description: 'HF Router',
+    avatarUrl: 'https://huggingface.co/api/avatars/moonshotai',
+    providerLabel: 'Hugging Face Router',
   },
   {
-    id: 'glm-5.1',
-    name: 'GLM 5.1',
-    description: 'Together',
-    modelPath: 'zai-org/GLM-5.1',
-    avatarUrl: getHfAvatarUrl('zai-org/GLM-5.1'),
+    id: 'zai-org/GLM-5.1',
+    label: 'GLM 5.1',
+    description: 'HF Router',
+    avatarUrl: 'https://huggingface.co/api/avatars/zai-org',
+    providerLabel: 'Hugging Face Router',
   },
 ];
 
-const findModelByPath = (path: string): ModelOption | undefined => {
-  return MODEL_OPTIONS.find(m => m.modelPath === path || path?.includes(m.id));
+const toModelOption = (value: any): ModelOption | null => {
+  if (!value || !value.id || !value.label) return null;
+  return {
+    id: String(value.id),
+    label: String(value.label),
+    description: String(value.description || value.providerLabel || ''),
+    avatarUrl: String(value.avatarUrl || 'https://huggingface.co/api/avatars/huggingface'),
+    providerLabel: value.providerLabel ? String(value.providerLabel) : undefined,
+    recommended: Boolean(value.recommended),
+  };
 };
 
 interface ChatInputProps {
@@ -69,30 +71,56 @@ interface ChatInputProps {
 export default function ChatInput({ sessionId, onSend, onStop, isProcessing = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>(MODEL_OPTIONS[0].id);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>(FALLBACK_MODELS);
+  const [selectedModelPath, setSelectedModelPath] = useState<string>(FALLBACK_MODELS[0].id);
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
 
-  // Model is per-session: fetch this tab's current model every time the
-  // session changes. Other tabs keep their own selections independently.
+  useEffect(() => {
+    let cancelled = false;
+
+    apiFetch('/api/config/model')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+
+        const rawAvailable = Array.isArray(data.available) ? data.available : [];
+        const available = rawAvailable
+          .map(toModelOption)
+          .filter((value: ModelOption | null): value is ModelOption => value !== null);
+
+        if (available.length > 0) {
+          setModelOptions(available);
+        }
+        if (typeof data.current === 'string' && data.current) {
+          setSelectedModelPath(data.current);
+        }
+      })
+      .catch(() => { /* ignore */ });
+
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     if (!sessionId) return;
+
     let cancelled = false;
     apiFetch(`/api/session/${sessionId}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled) return;
-        if (data?.model) {
-          const model = findModelByPath(data.model);
-          if (model) setSelectedModelId(model.id);
+        if (typeof data?.model === 'string' && data.model) {
+          setSelectedModelPath(data.model);
         }
       })
       .catch(() => { /* ignore */ });
+
     return () => { cancelled = true; };
   }, [sessionId]);
 
-  const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId) || MODEL_OPTIONS[0];
+  const selectedModel = modelOptions.find((model) => model.id === selectedModelPath)
+    || toModelOption({ id: selectedModelPath, label: selectedModelPath, description: '', avatarUrl: 'https://huggingface.co/api/avatars/huggingface' })
+    || modelOptions[0];
 
-  // Auto-focus the textarea when the session becomes ready
   useEffect(() => {
     if (!disabled && !isProcessing && inputRef.current) {
       inputRef.current.focus();
@@ -113,7 +141,7 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
         handleSend();
       }
     },
-    [handleSend]
+    [handleSend],
   );
 
   const handleModelClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -124,16 +152,21 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
     setModelAnchorEl(null);
   };
 
-  const handleSelectModel = async (model: ModelOption) => {
+  const handleSelectModel = async (modelPath: string) => {
     handleModelClose();
     if (!sessionId) return;
+
     try {
       const res = await apiFetch(`/api/session/${sessionId}/model`, {
         method: 'POST',
-        body: JSON.stringify({ model: model.modelPath }),
+        body: JSON.stringify({ model: modelPath }),
       });
-      if (res.ok) setSelectedModelId(model.id);
-    } catch { /* ignore */ }
+      if (res.ok) {
+        setSelectedModelPath(modelPath);
+      }
+    } catch {
+      // ignore
+    }
   };
 
   return (
@@ -158,9 +191,9 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
             border: '1px solid var(--border)',
             transition: 'box-shadow 0.2s ease, border-color 0.2s ease',
             '&:focus-within': {
-                borderColor: 'var(--accent-yellow)',
-                boxShadow: 'var(--focus)',
-            }
+              borderColor: 'var(--accent-yellow)',
+              boxShadow: 'var(--focus)',
+            },
           }}
         >
           <TextField
@@ -175,27 +208,27 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
             variant="standard"
             inputRef={inputRef}
             InputProps={{
-                disableUnderline: true,
-                sx: {
-                    color: 'var(--text)',
-                    fontSize: '15px',
-                    fontFamily: 'inherit',
-                    padding: 0,
-                    lineHeight: 1.5,
-                    minHeight: { xs: '44px', md: '56px' },
-                    alignItems: 'flex-start',
-                }
+              disableUnderline: true,
+              sx: {
+                color: 'var(--text)',
+                fontSize: '15px',
+                fontFamily: 'inherit',
+                padding: 0,
+                lineHeight: 1.5,
+                minHeight: { xs: '44px', md: '56px' },
+                alignItems: 'flex-start',
+              },
             }}
             sx={{
-                flex: 1,
-                '& .MuiInputBase-root': {
-                    p: 0,
-                    backgroundColor: 'transparent',
-                },
-                '& textarea': {
-                    resize: 'none',
-                    padding: '0 !important',
-                }
+              flex: 1,
+              '& .MuiInputBase-root': {
+                p: 0,
+                backgroundColor: 'transparent',
+              },
+              '& textarea': {
+                resize: 'none',
+                padding: '0 !important',
+              },
             }}
           />
           {isProcessing ? (
@@ -243,7 +276,6 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
           )}
         </Box>
 
-        {/* Powered By Badge */}
         <Box
           onClick={handleModelClick}
           sx={{
@@ -256,8 +288,8 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
             cursor: 'pointer',
             transition: 'opacity 0.2s',
             '&:hover': {
-              opacity: 1
-            }
+              opacity: 1,
+            },
           }}
         >
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
@@ -265,16 +297,15 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
           </Typography>
           <img
             src={selectedModel.avatarUrl}
-            alt={selectedModel.name}
+            alt={selectedModel.label}
             style={{ height: '14px', width: '14px', objectFit: 'contain', borderRadius: '2px' }}
           />
           <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            {selectedModel.name}
+            {selectedModel.label}
           </Typography>
           <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
         </Box>
 
-        {/* Model Selection Menu */}
         <Menu
           anchorEl={modelAnchorEl}
           open={Boolean(modelAnchorEl)}
@@ -294,33 +325,33 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
                 border: '1px solid var(--divider)',
                 mb: 1,
                 maxHeight: '400px',
-              }
-            }
+              },
+            },
           }}
         >
-          {MODEL_OPTIONS.map((model) => (
+          {modelOptions.map((model) => (
             <MenuItem
               key={model.id}
-              onClick={() => handleSelectModel(model)}
-              selected={selectedModelId === model.id}
+              onClick={() => handleSelectModel(model.id)}
+              selected={selectedModelPath === model.id}
               sx={{
                 py: 1.5,
                 '&.Mui-selected': {
                   bgcolor: 'rgba(255,255,255,0.05)',
-                }
+                },
               }}
             >
               <ListItemIcon>
                 <img
                   src={model.avatarUrl}
-                  alt={model.name}
+                  alt={model.label}
                   style={{ width: 24, height: 24, borderRadius: '4px', objectFit: 'cover' }}
                 />
               </ListItemIcon>
               <ListItemText
-                primary={
+                primary={(
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    {model.name}
+                    {model.label}
                     {model.recommended && (
                       <Chip
                         label="Recommended"
@@ -335,10 +366,10 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
                       />
                     )}
                   </Box>
-                }
-                secondary={model.description}
+                )}
+                secondary={model.description || model.providerLabel}
                 secondaryTypographyProps={{
-                  sx: { fontSize: '12px', color: 'var(--muted-text)' }
+                  sx: { fontSize: '12px', color: 'var(--muted-text)' },
                 }}
               />
             </MenuItem>

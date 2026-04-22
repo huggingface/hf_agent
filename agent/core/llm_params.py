@@ -5,7 +5,7 @@ can import it without pulling in the whole agent loop / tool router and
 creating circular imports.
 """
 
-from agent.core.provider_adapters import ADAPTERS
+from agent.core.provider_adapters import resolve_adapter
 
 
 def _resolve_llm_params(
@@ -43,12 +43,12 @@ def _resolve_llm_params(
       2. session.hf_token — the user's own token (CLI / OAuth / cache file).
       3. HF_TOKEN env — belt-and-suspenders fallback for CLI users.
     """
-    for adapter in ADAPTERS:
-        if adapter.matches(model_name):
-            return adapter.build_params(
-                model_name,
-                session_hf_token=session_hf_token,
-                reasoning_effort=reasoning_effort,
-            )
+    adapter = resolve_adapter(model_name)
+    if adapter:
+        return adapter.build_params(
+            model_name,
+            session_hf_token=session_hf_token,
+            reasoning_effort=reasoning_effort,
+        )
 
     raise ValueError(f"Unsupported model id: {model_name}")

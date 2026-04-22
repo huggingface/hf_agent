@@ -1,4 +1,5 @@
 from agent.core.llm_params import _resolve_llm_params
+from agent.core.provider_adapters import build_model_catalog, is_valid_model_name
 
 
 def test_native_adapter_keeps_model_name():
@@ -33,3 +34,17 @@ def test_hf_adapter_adds_bill_to_header(monkeypatch):
 
     assert params["extra_headers"] == {"X-HF-Bill-To": "smolagents"}
     assert params["api_key"] == "hf-space-token"
+
+
+def test_model_catalog_comes_from_adapters():
+    catalog = build_model_catalog("anthropic/claude-opus-4-6")
+
+    assert catalog["current"] == "anthropic/claude-opus-4-6"
+    assert any(model["provider"] == "anthropic" for model in catalog["available"])
+    assert any(model["provider"] == "huggingface" for model in catalog["available"])
+    assert any(provider["id"] == "huggingface" for provider in catalog["providers"])
+
+
+def test_model_validation_accepts_free_form_hf_ids():
+    assert is_valid_model_name("moonshotai/Kimi-K2.6:fastest") is True
+    assert is_valid_model_name("huggingface/moonshotai/Kimi-K2.6:novita") is True

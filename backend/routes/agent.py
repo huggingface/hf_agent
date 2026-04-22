@@ -31,35 +31,11 @@ from models import (
 from session_manager import MAX_SESSIONS, SessionCapacityError, session_manager
 
 from agent.core.llm_params import _resolve_llm_params
+from agent.core.provider_adapters import build_model_catalog, is_valid_model_name
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
-
-AVAILABLE_MODELS = [
-    {
-        "id": "anthropic/claude-opus-4-6",
-        "label": "Claude Opus 4.6",
-        "provider": "anthropic",
-        "recommended": True,
-    },
-    {
-        "id": "MiniMaxAI/MiniMax-M2.7",
-        "label": "MiniMax M2.7",
-        "provider": "huggingface",
-        "recommended": True,
-    },
-    {
-        "id": "moonshotai/Kimi-K2.6",
-        "label": "Kimi K2.6",
-        "provider": "huggingface",
-    },
-    {
-        "id": "zai-org/GLM-5.1",
-        "label": "GLM 5.1",
-        "provider": "huggingface",
-    },
-]
 
 
 def _check_session_access(session_id: str, user: dict[str, Any]) -> None:
@@ -137,10 +113,7 @@ async def llm_health_check() -> LLMHealthResponse:
 @router.get("/config/model")
 async def get_model() -> dict:
     """Get current model and available models. No auth required."""
-    return {
-        "current": session_manager.config.model_name,
-        "available": AVAILABLE_MODELS,
-    }
+    return build_model_catalog(session_manager.config.model_name)
 
 
 @router.post("/config/model")
@@ -149,8 +122,7 @@ async def set_model(body: dict, user: dict = Depends(get_current_user)) -> dict:
     model_id = body.get("model")
     if not model_id:
         raise HTTPException(status_code=400, detail="Missing 'model' field")
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model_id not in valid_ids:
+    if not is_valid_model_name(model_id):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
     session_manager.config.model_name = model_id
     logger.info(f"Model changed to {model_id} by {user.get('username', 'unknown')}")
@@ -313,8 +285,7 @@ async def set_session_model(
     model_id = body.get("model")
     if not model_id:
         raise HTTPException(status_code=400, detail="Missing 'model' field")
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model_id not in valid_ids:
+    if not is_valid_model_name(model_id):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
     agent_session = session_manager.sessions.get(session_id)
     if not agent_session:
@@ -420,7 +391,9 @@ async def chat_sse(
             success = await session_manager.submit_user_input(session_id, text)
         else:
             broadcaster.unsubscribe(sub_id)
-            raise HTTPException(status_code=400, detail="Must provide 'text' or 'approvals'")
+            raise HTTPException(
+                status_code=400, detail="Must provide 'text' or 'approvals'"
+            )
 
         if not success:
             broadcaster.unsubscribe(sub_id)
@@ -437,7 +410,13 @@ async def chat_sse(
 # ---------------------------------------------------------------------------
 # Shared SSE helpers
 # ---------------------------------------------------------------------------
-_TERMINAL_EVENTS = {"turn_complete", "approval_required", "error", "interrupted", "shutdown"}
+_TERMINAL_EVENTS = {
+    "turn_complete",
+    "approval_required",
+    "error",
+    "interrupted",
+    "shutdown",
+}
 _SSE_KEEPALIVE_SECONDS = 15
 
 
@@ -537,7 +516,10 @@ async def truncate_session(
     _check_session_access(session_id, user)
     success = await session_manager.truncate(session_id, body.user_message_index)
     if not success:
-        raise HTTPException(status_code=404, detail="Session not found, inactive, or message index out of range")
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found, inactive, or message index out of range",
+        )
     return {"status": "truncated", "session_id": session_id}
 
 
@@ -563,5 +545,3 @@ async def shutdown_session(
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
     return {"status": "shutdown_requested", "session_id": session_id}
-
-
