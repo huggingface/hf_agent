@@ -19,7 +19,6 @@ class NativeAdapter:
         session_hf_token: str | None = None,
         reasoning_effort: str | None = None,
     ) -> dict:
-        del session_hf_token
         params: dict = {"model": model_name}
         if reasoning_effort:
             params["reasoning_effort"] = reasoning_effort
