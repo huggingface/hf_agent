@@ -68,7 +68,8 @@ def _resolve_llm_params(
         "api_key": api_key,
     }
     if os.environ.get("INFERENCE_TOKEN"):
-        params["extra_headers"] = {"X-HF-Bill-To": "huggingface"}
+        bill_to = os.environ.get("HF_BILL_TO", "smolagents")
+        params["extra_headers"] = {"X-HF-Bill-To": bill_to}
     if reasoning_effort:
         hf_level = "low" if reasoning_effort == "minimal" else reasoning_effort
         if hf_level in _HF_ALLOWED_EFFORTS:
