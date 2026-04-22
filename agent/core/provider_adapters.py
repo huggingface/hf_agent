@@ -1,29 +1,14 @@
 """Provider-specific LiteLLM parameter builders."""
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
 
-
-class ProviderAdapter:
-    """Build LiteLLM kwargs for one family of model ids."""
-
-    def matches(self, model_name: str) -> bool:
-        raise NotImplementedError
-
-    def build_params(
-        self,
-        model_name: str,
-        session_hf_token: str | None = None,
-        reasoning_effort: str | None = None,
-    ) -> dict:
-        raise NotImplementedError
+_NATIVE_PREFIXES = ("anthropic/", "openai/")
 
 
 @dataclass(frozen=True)
-class NativeAdapter(ProviderAdapter):
-    prefixes: tuple[str, ...] = ("anthropic/", "openai/")
+class NativeAdapter:
+    prefixes: tuple[str, ...] = _NATIVE_PREFIXES
 
     def matches(self, model_name: str) -> bool:
         return model_name.startswith(self.prefixes)
@@ -42,13 +27,11 @@ class NativeAdapter(ProviderAdapter):
 
 
 @dataclass(frozen=True)
-class HfRouterAdapter(ProviderAdapter):
+class HfRouterAdapter:
     allowed_efforts: tuple[str, ...] = ("low", "medium", "high")
 
     def matches(self, model_name: str) -> bool:
-        return "/" in model_name and not model_name.startswith(
-            ("anthropic/", "openai/")
-        )
+        return "/" in model_name and not model_name.startswith(_NATIVE_PREFIXES)
 
     def build_params(
         self,
@@ -65,7 +48,8 @@ class HfRouterAdapter(ProviderAdapter):
             "api_key": api_key,
         }
         if inference_token:
-            params["extra_headers"] = {"X-HF-Bill-To": "huggingface"}
+            bill_to = os.environ.get("HF_BILL_TO", "smolagents")
+            params["extra_headers"] = {"X-HF-Bill-To": bill_to}
         if reasoning_effort:
             hf_level = "low" if reasoning_effort == "minimal" else reasoning_effort
             if hf_level in self.allowed_efforts:
@@ -73,7 +57,7 @@ class HfRouterAdapter(ProviderAdapter):
         return params
 
 
-ADAPTERS: tuple[ProviderAdapter, ...] = (
+ADAPTERS = (
     NativeAdapter(),
     HfRouterAdapter(),
 )

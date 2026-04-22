@@ -31,5 +31,5 @@ def test_hf_adapter_adds_bill_to_header(monkeypatch):
 
     params = _resolve_llm_params("MiniMaxAI/MiniMax-M2.7")
 
-    assert params["extra_headers"] == {"X-HF-Bill-To": "huggingface"}
+    assert params["extra_headers"] == {"X-HF-Bill-To": "smolagents"}
     assert params["api_key"] == "hf-space-token"
