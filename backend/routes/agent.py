@@ -54,6 +54,13 @@ AVAILABLE_MODELS = [
         "recommended": True,
     },
     {
+        "id": "openai/gpt-5.5",
+        "label": "GPT-5.5",
+        "provider": "openai",
+        "tier": "pro",
+        "recommended": True,
+    },
+    {
         "id": "MiniMaxAI/MiniMax-M2.7",
         "label": "MiniMax M2.7",
         "provider": "huggingface",
@@ -691,5 +698,4 @@ async def shutdown_session(
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
     return {"status": "shutdown_requested", "session_id": session_id}
-
 

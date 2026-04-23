@@ -16,6 +16,9 @@ from agent.context_manager.manager import ContextManager
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_TOKENS = 200_000
+_LOCAL_MAX_TOKENS: dict[str, int] = {
+    "openai/gpt-5.5": 1_000_000,
+}
 
 
 def _get_max_tokens_safe(model_name: str) -> int:
@@ -29,6 +32,9 @@ def _get_max_tokens_safe(model_name: str) -> int:
     models not in the catalog (typically HF-router-only models).
     """
     from litellm import get_model_info
+
+    if model_name in _LOCAL_MAX_TOKENS:
+        return _LOCAL_MAX_TOKENS[model_name]
 
     candidates = [model_name]
     stripped = model_name.removeprefix("huggingface/").split(":", 1)[0]

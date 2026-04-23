@@ -42,6 +42,14 @@ const MODEL_OPTIONS: ModelOption[] = [
     recommended: true,
   },
   {
+    id: 'gpt-5-5',
+    name: 'GPT-5.5',
+    description: 'OpenAI',
+    modelPath: 'openai/gpt-5.5',
+    avatarUrl: 'https://openai.com/favicon.ico',
+    recommended: true,
+  },
+  {
     id: 'minimax-m2.7',
     name: 'MiniMax M2.7',
     description: 'Novita',
