@@ -528,7 +528,7 @@ class Sandbox:
         name: str | None = None,
         template: str = TEMPLATE_SPACE,
         hardware: str = "cpu-basic",
-        private: bool = False,
+        private: bool = True,
         sleep_time: int | None = None,
         token: str | None = None,
         secrets: dict[str, str] | None = None,
