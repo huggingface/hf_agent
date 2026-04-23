@@ -13,6 +13,8 @@ import yaml
 from jinja2 import Template
 from litellm import Message, acompletion
 
+from agent.core.prompt_caching import with_prompt_caching
+
 logger = logging.getLogger(__name__)
 
 _HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
@@ -111,7 +113,6 @@ async def summarize_messages(
     Returns ``(summary_text, completion_tokens)``.
     """
     from agent.core.llm_params import _resolve_llm_params
-    from agent.core.prompt_caching import with_prompt_caching
 
     prompt_messages = list(messages) + [Message(role="user", content=prompt)]
     llm_params = _resolve_llm_params(model_name, hf_token, reasoning_effort="high")

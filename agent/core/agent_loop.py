@@ -14,6 +14,7 @@ from litellm.exceptions import ContextWindowExceededError
 from agent.config import Config
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
+from agent.core.prompt_caching import with_prompt_caching
 from agent.core.session import Event, OpType, Session
 from agent.core.tools import ToolRouter
 from agent.tools.jobs_tool import CPU_FLAVORS
@@ -294,16 +295,14 @@ class LLMResult:
 
 async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
     """Call the LLM with streaming, emitting assistant_chunk events."""
-    from agent.core.prompt_caching import with_prompt_caching
-
     response = None
     _healed_effort = False  # one-shot safety net per call
-    cached_messages, cached_tools = with_prompt_caching(messages, tools, llm_params.get("model"))
+    messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
     for _llm_attempt in range(_MAX_LLM_RETRIES):
         try:
             response = await acompletion(
-                messages=cached_messages,
-                tools=cached_tools,
+                messages=messages,
+                tools=tools,
                 tool_choice="auto",
                 stream=True,
                 stream_options={"include_usage": True},
@@ -391,16 +390,14 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
 
 async def _call_llm_non_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
     """Call the LLM without streaming, emit assistant_message at the end."""
-    from agent.core.prompt_caching import with_prompt_caching
-
     response = None
     _healed_effort = False
-    cached_messages, cached_tools = with_prompt_caching(messages, tools, llm_params.get("model"))
+    messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
     for _llm_attempt in range(_MAX_LLM_RETRIES):
         try:
             response = await acompletion(
-                messages=cached_messages,
-                tools=cached_tools,
+                messages=messages,
+                tools=tools,
                 tool_choice="auto",
                 stream=False,
                 timeout=600,
