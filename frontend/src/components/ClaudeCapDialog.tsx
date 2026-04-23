@@ -1,15 +1,17 @@
 import {
+  Box,
   Button,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Typography,
 } from '@mui/material';
 import type { PlanTier } from '@/hooks/useUserQuota';
 
 const HF_PRICING_URL = 'https://huggingface.co/pricing';
-const HF_YELLOW = '#FFD21E';
+const PRO_CAP = 20;
 
 interface ClaudeCapDialogProps {
   open: boolean;
@@ -26,8 +28,8 @@ export default function ClaudeCapDialog({
   onClose,
   onUseFreeModel,
 }: ClaudeCapDialogProps) {
-  // plan currently not surfaced in copy — subtext reads the same for everyone;
-  // Pro users can still upgrade their org or hit "Use a free model".
+  // plan not surfaced in copy right now — Pro users see the same dialog and
+  // can upgrade their org if they're also capped.
   void plan;
 
   return (
@@ -43,7 +45,7 @@ export default function ClaudeCapDialog({
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-md)',
           boxShadow: 'var(--shadow-1)',
-          maxWidth: 440,
+          maxWidth: 460,
           mx: 2,
         },
       }}
@@ -51,18 +53,68 @@ export default function ClaudeCapDialog({
       <DialogTitle
         sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '1rem', pt: 2.5, pb: 0, px: 3 }}
       >
-        Opus is expensive
+        You've hit your Opus limit
       </DialogTitle>
       <DialogContent sx={{ px: 3, pt: 1.25, pb: 0 }}>
         <DialogContentText
           sx={{ color: 'var(--muted-text)', fontSize: '0.85rem', lineHeight: 1.6 }}
         >
-          You've burned through your {cap} Claude {cap === 1 ? 'session' : 'sessions'} for
-          today. Give Kimi, MiniMax, or GLM a spin — they're genuinely good and we use them
-          all the time. Resets at UTC midnight.
+          Opus costs an arm and a leg, so we unfortunately have to cap you at {cap}{' '}
+          {cap === 1 ? 'session' : 'sessions'} a day. Give Kimi, MiniMax, or GLM a spin —
+          they are genuinely good and we use them all the time.
         </DialogContentText>
+        <Box
+          sx={{
+            mt: 2,
+            p: 1.5,
+            borderRadius: '8px',
+            bgcolor: 'var(--accent-yellow-weak)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          <Typography
+            variant="caption"
+            sx={{
+              display: 'block',
+              fontWeight: 700,
+              color: 'var(--text)',
+              fontSize: '0.78rem',
+              mb: 0.5,
+              letterSpacing: '0.02em',
+            }}
+          >
+            HF Pro ($9/mo) — more Opus, more everything
+          </Typography>
+          <Typography
+            variant="caption"
+            sx={{ display: 'block', color: 'var(--muted-text)', fontSize: '0.78rem', lineHeight: 1.55 }}
+          >
+            {PRO_CAP} Opus sessions/day here, 20× HF Inference credits, ZeroGPU access,
+            and priority on Spaces hardware.
+          </Typography>
+        </Box>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2.5, pt: 2, gap: 1 }}>
+        <Button
+          component="a"
+          href={HF_PRICING_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          variant="contained"
+          size="small"
+          sx={{
+            fontSize: '0.82rem',
+            px: 2.5,
+            bgcolor: 'var(--accent-yellow)',
+            color: '#000',
+            textTransform: 'none',
+            fontWeight: 700,
+            boxShadow: 'none',
+            '&:hover': { bgcolor: '#FFB340', boxShadow: 'none' },
+          }}
+        >
+          Upgrade to Pro
+        </Button>
         <Button
           onClick={onUseFreeModel}
           size="small"
@@ -75,26 +127,6 @@ export default function ClaudeCapDialog({
           }}
         >
           Use a free model
-        </Button>
-        <Button
-          component="a"
-          href={HF_PRICING_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          variant="contained"
-          size="small"
-          sx={{
-            fontSize: '0.82rem',
-            px: 2.5,
-            bgcolor: HF_YELLOW,
-            color: '#000',
-            textTransform: 'none',
-            fontWeight: 700,
-            boxShadow: 'none',
-            '&:hover': { bgcolor: '#FFDE4F', boxShadow: 'none' },
-          }}
-        >
-          Upgrade to Pro
         </Button>
       </DialogActions>
     </Dialog>
