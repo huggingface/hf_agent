@@ -28,10 +28,16 @@ from models import (
     SubmitRequest,
     TruncateRequest,
 )
-from session_manager import MAX_SESSIONS, AgentSession, SessionCapacityError, session_manager
+from session_manager import (
+    MAX_SESSIONS,
+    AgentSession,
+    SessionCapacityError,
+    session_manager,
+)
 
 import user_quotas
 
+from agent.core.llm_errors import health_error_type, render_llm_error_message
 from agent.core.llm_params import _resolve_llm_params
 
 logger = logging.getLogger(__name__)
@@ -172,34 +178,12 @@ async def llm_health_check() -> LLMHealthResponse:
         )
         return LLMHealthResponse(status="ok", model=model)
     except Exception as e:
-        err_str = str(e).lower()
-        error_type = "unknown"
-
-        if (
-            "401" in err_str
-            or "auth" in err_str
-            or "invalid" in err_str
-            or "api key" in err_str
-        ):
-            error_type = "auth"
-        elif (
-            "402" in err_str
-            or "credit" in err_str
-            or "quota" in err_str
-            or "insufficient" in err_str
-            or "billing" in err_str
-        ):
-            error_type = "credits"
-        elif "429" in err_str or "rate" in err_str:
-            error_type = "rate_limit"
-        elif "timeout" in err_str or "connect" in err_str or "network" in err_str:
-            error_type = "network"
-
+        error_type = health_error_type(e)
         logger.warning(f"LLM health check failed ({error_type}): {e}")
         return LLMHealthResponse(
             status="error",
             model=model,
-            error=str(e)[:500],
+            error=render_llm_error_message(e)[:500],
             error_type=error_type,
         )
 
@@ -544,7 +528,9 @@ async def chat_sse(
             success = await session_manager.submit_user_input(session_id, text)
         else:
             broadcaster.unsubscribe(sub_id)
-            raise HTTPException(status_code=400, detail="Must provide 'text' or 'approvals'")
+            raise HTTPException(
+                status_code=400, detail="Must provide 'text' or 'approvals'"
+            )
 
         if not success:
             broadcaster.unsubscribe(sub_id)
@@ -561,7 +547,13 @@ async def chat_sse(
 # ---------------------------------------------------------------------------
 # Shared SSE helpers
 # ---------------------------------------------------------------------------
-_TERMINAL_EVENTS = {"turn_complete", "approval_required", "error", "interrupted", "shutdown"}
+_TERMINAL_EVENTS = {
+    "turn_complete",
+    "approval_required",
+    "error",
+    "interrupted",
+    "shutdown",
+}
 _SSE_KEEPALIVE_SECONDS = 15
 
 
@@ -661,7 +653,10 @@ async def truncate_session(
     _check_session_access(session_id, user)
     success = await session_manager.truncate(session_id, body.user_message_index)
     if not success:
-        raise HTTPException(status_code=404, detail="Session not found, inactive, or message index out of range")
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found, inactive, or message index out of range",
+        )
     return {"status": "truncated", "session_id": session_id}
 
 
@@ -687,5 +682,3 @@ async def shutdown_session(
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
     return {"status": "shutdown_requested", "session_id": session_id}
-
-

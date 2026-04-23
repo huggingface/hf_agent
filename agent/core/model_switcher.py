@@ -16,6 +16,7 @@ glues it to CLI output + session state.
 from __future__ import annotations
 
 from agent.core.effort_probe import ProbeInconclusive, probe_effort
+from agent.core.llm_errors import render_llm_error_message
 from agent.core.provider_adapters import is_valid_model_name
 
 
@@ -184,14 +185,17 @@ async def probe_and_switch_model(
         outcome = await probe_effort(model_id, preference, hf_token)
     except ProbeInconclusive as e:
         _commit_switch(model_id, config, session, effective=None, cache=False)
+        warning = render_llm_error_message(e)
         console.print(
             f"[yellow]Model switched to {model_id}[/yellow] "
-            f"[dim](couldn't validate: {e}; will verify on first message)[/dim]"
+            f"[dim](couldn't validate: {warning}; will verify on first message)[/dim]"
         )
         return
     except Exception as e:
         # Hard persistent error — auth, unknown model, quota. Don't switch.
-        console.print(f"[bold red]Switch failed:[/bold red] {e}")
+        console.print(
+            f"[bold red]Switch failed:[/bold red] {render_llm_error_message(e)}"
+        )
         console.print(f"[dim]Keeping current model: {config.model_name}[/dim]")
         return
 
