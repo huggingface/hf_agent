@@ -27,6 +27,10 @@ Create a `.env` file in the project root (or export these in your shell):
 
 ```bash
 ANTHROPIC_API_KEY=<your-anthropic-api-key> # if using anthropic models
+OLLAMA_BASE_URL=http://localhost:11434/v1  # if using ollama/ models
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1 # if using lm_studio/ models
+VLLM_BASE_URL=http://127.0.0.1:8000/v1     # if using vllm/ models
+OPENAI_COMPAT_BASE_URL=http://127.0.0.1:8000/v1 # generic OpenAI-compatible backend
 HF_TOKEN=<your-hugging-face-token>
 GITHUB_TOKEN=<github-personal-access-token> 
 ```
@@ -50,6 +54,9 @@ ml-intern "fine-tune llama on my dataset"
 
 ```bash
 ml-intern --model anthropic/claude-opus-4-6 "your prompt"
+ml-intern --model ollama/llama3.1:8b "your prompt"
+ml-intern --model lm_studio/google/gemma-4-e4b "your prompt"
+ml-intern --model vllm/meta-llama/Llama-3.1-8B-Instruct "your prompt"
 ml-intern --max-iterations 100 "your prompt"
 ml-intern --no-stream "your prompt"
 ```

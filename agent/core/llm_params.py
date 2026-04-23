@@ -8,6 +8,34 @@ creating circular imports.
 import os
 
 
+_OPENAI_COMPAT_PROVIDERS: dict[str, dict[str, str]] = {
+    "ollama/": {
+        "api_base_env": "OLLAMA_BASE_URL",
+        "api_base_default": "http://localhost:11434/v1",
+        "api_key_env": "OLLAMA_API_KEY",
+        "api_key_default": "ollama",
+    },
+    "lm_studio/": {
+        "api_base_env": "LMSTUDIO_BASE_URL",
+        "api_base_default": "http://127.0.0.1:1234/v1",
+        "api_key_env": "LMSTUDIO_API_KEY",
+        "api_key_default": "lm-studio",
+    },
+    "vllm/": {
+        "api_base_env": "VLLM_BASE_URL",
+        "api_base_default": "http://127.0.0.1:8000/v1",
+        "api_key_env": "VLLM_API_KEY",
+        "api_key_default": "EMPTY",
+    },
+    "openai-compat/": {
+        "api_base_env": "OPENAI_COMPAT_BASE_URL",
+        "api_base_default": "http://127.0.0.1:8000/v1",
+        "api_key_env": "OPENAI_COMPAT_API_KEY",
+        "api_key_default": "EMPTY",
+    },
+}
+
+
 def _patch_litellm_effort_validation() -> None:
     """Neuter LiteLLM 1.83's hardcoded effort-level validation.
 
@@ -84,6 +112,39 @@ class UnsupportedEffortError(ValueError):
     """
 
 
+def _resolve_openai_compat_params(
+    model_name: str,
+    reasoning_effort: str | None = None,
+    strict: bool = False,
+) -> dict:
+    for prefix, config in _OPENAI_COMPAT_PROVIDERS.items():
+        if not model_name.startswith(prefix):
+            continue
+
+        actual_model = model_name[len(prefix) :]
+        params = {
+            "model": f"openai/{actual_model}",
+            "api_base": os.environ.get(
+                config["api_base_env"], config["api_base_default"]
+            ).rstrip("/"),
+            "api_key": os.environ.get(
+                config["api_key_env"], config["api_key_default"]
+            ),
+        }
+        if reasoning_effort:
+            if reasoning_effort not in _OPENAI_EFFORTS:
+                if strict:
+                    raise UnsupportedEffortError(
+                        "OpenAI-compatible backends don't accept "
+                        f"effort={reasoning_effort!r}"
+                    )
+            else:
+                params["extra_body"] = {"reasoning_effort": reasoning_effort}
+        return params
+
+    raise ValueError(f"Unsupported model id: {model_name}")
+
+
 def _resolve_llm_params(
     model_name: str,
     session_hf_token: str | None = None,
@@ -108,6 +169,11 @@ def _resolve_llm_params(
 
     • ``openai/<model>`` — ``reasoning_effort`` forwarded as a top-level
       kwarg (GPT-5 / o-series). LiteLLM uses the user's ``OPENAI_API_KEY``.
+
+    • ``ollama/<model>``, ``lm_studio/<model>``, ``vllm/<model>``, and
+      ``openai-compat/<model>`` — OpenAI-compatible backends reachable via a
+      configurable ``api_base``. ``reasoning_effort`` is forwarded via
+      ``extra_body`` so local servers can ignore it safely if unsupported.
 
     • Anything else is treated as a HuggingFace router id. We hit the
       auto-routing OpenAI-compatible endpoint at
@@ -165,6 +231,9 @@ def _resolve_llm_params(
             else:
                 params["reasoning_effort"] = reasoning_effort
         return params
+
+    if any(model_name.startswith(prefix) for prefix in _OPENAI_COMPAT_PROVIDERS):
+        return _resolve_openai_compat_params(model_name, reasoning_effort, strict)
 
     hf_model = model_name.removeprefix("huggingface/")
     api_key = (
