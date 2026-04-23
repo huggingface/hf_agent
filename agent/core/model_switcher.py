@@ -16,20 +16,11 @@ glues it to CLI output + session state.
 from __future__ import annotations
 
 from agent.core.effort_probe import ProbeInconclusive, probe_effort
-
-
-# Suggested models shown by `/model` (not a gate). Users can paste any HF
-# model id (e.g. "MiniMaxAI/MiniMax-M2.7") or an `anthropic/` / `openai/`
-# prefix for direct API access. For HF ids, append ":fastest" /
-# ":cheapest" / ":preferred" / ":<provider>" to override the default
-# routing policy (auto = fastest with failover).
-SUGGESTED_MODELS = [
-    {"id": "anthropic/claude-opus-4-7", "label": "Claude Opus 4.7"},
-    {"id": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6"},
-    {"id": "MiniMaxAI/MiniMax-M2.7", "label": "MiniMax M2.7"},
-    {"id": "moonshotai/Kimi-K2.6", "label": "Kimi K2.6"},
-    {"id": "zai-org/GLM-5.1", "label": "GLM 5.1"},
-]
+from agent.core.provider_adapters import (
+    get_available_models,
+    is_valid_model_name,
+    resolve_adapter,
+)
 
 
 _ROUTING_POLICIES = {"fastest", "cheapest", "preferred"}
@@ -38,15 +29,12 @@ _ROUTING_POLICIES = {"fastest", "cheapest", "preferred"}
 def is_valid_model_id(model_id: str) -> bool:
     """Loose format check — lets users pick any model id.
 
-    Accepts:
-      • anthropic/<model>
-      • openai/<model>
-      • <org>/<model>[:<tag>]            (HF router; tag = provider or policy)
-      • huggingface/<org>/<model>[:<tag>] (same, accepts legacy prefix)
-
-    Actual availability is verified against the HF router catalog on
-    switch, and by the provider on the probe's ping call.
+    Checks the adapter registry first (covers all registered providers),
+    then falls back to the structural ``<org>/<model>[:<tag>]`` pattern
+    so unknown HF models are still accepted.
     """
+    if is_valid_model_name(model_id):
+        return True
     if not model_id or "/" not in model_id:
         return False
     head = model_id.split(":", 1)[0]
@@ -63,7 +51,8 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     Anthropic / OpenAI ids return ``True`` without printing anything —
     the probe below covers "does this model exist".
     """
-    if model_id.startswith(("anthropic/", "openai/")):
+    adapter = resolve_adapter(model_id)
+    if adapter and adapter.provider_id != "huggingface":
         return True
 
     from agent.core import hf_router_catalog as cat
@@ -130,9 +119,10 @@ def print_model_listing(config, console) -> None:
     console.print("[bold]Current model:[/bold]")
     console.print(f"  {current}")
     console.print("\n[bold]Suggested:[/bold]")
-    for m in SUGGESTED_MODELS:
+    for m in get_available_models():
         marker = " [dim]<-- current[/dim]" if m["id"] == current else ""
-        console.print(f"  {m['id']}  [dim]({m['label']})[/dim]{marker}")
+        provider = m.get("providerLabel") or m.get("provider") or ""
+        console.print(f"  {m['id']}  [dim]({m['label']} · {provider})[/dim]{marker}")
     console.print(
         "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M2.7').\n"
         "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"

@@ -1,9 +1,31 @@
-"""Provider adapters for runtime params and model catalog metadata."""
+"""Provider adapters for runtime params and model catalog metadata.
+
+Each adapter owns its LiteLLM kwargs construction (``build_params``) and
+the list of suggested models shown in ``/model`` and the web picker.
+Adding a new provider means subclassing ``ProviderAdapter``, implementing
+``build_params``, and appending to ``ADAPTERS``.
+"""
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+class UnsupportedEffortError(ValueError):
+    """The requested effort isn't valid for this provider's API surface.
+
+    Raised synchronously before any network call so the probe cascade can
+    skip levels the provider can't accept (e.g. ``max`` on HF router).
+    """
+
+
+# ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class SuggestedModel:
@@ -33,8 +55,10 @@ class ProviderAdapter:
     def build_params(
         self,
         model_name: str,
+        *,
         session_hf_token: str | None = None,
         reasoning_effort: str | None = None,
+        strict: bool = False,
     ) -> dict:
         raise NotImplementedError
 
@@ -52,15 +76,30 @@ class ProviderAdapter:
         }
 
 
-@dataclass(frozen=True)
-class NativeAdapter(ProviderAdapter):
-    prefixes: tuple[str, ...] = ("anthropic/", "openai/")
+# ---------------------------------------------------------------------------
+# Concrete adapters
+# ---------------------------------------------------------------------------
 
-    def matches(self, model_name: str) -> bool:
-        return model_name.startswith(self.prefixes)
+@dataclass(frozen=True)
+class AnthropicAdapter(ProviderAdapter):
+    """Anthropic models via native API (thinking + output_config.effort)."""
+
+    prefixes: tuple[str, ...] = ("anthropic/",)
+    _EFFORTS: ClassVar[frozenset[str]] = frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    )
 
     def suggested_models(self) -> tuple[SuggestedModel, ...]:
         return (
+            SuggestedModel(
+                id="anthropic/claude-opus-4-7",
+                label="Claude Opus 4.7",
+                description="Anthropic",
+                provider="anthropic",
+                provider_label="Anthropic",
+                avatar_url="https://huggingface.co/api/avatars/Anthropic",
+                recommended=True,
+            ),
             SuggestedModel(
                 id="anthropic/claude-opus-4-6",
                 label="Claude Opus 4.6",
@@ -68,30 +107,69 @@ class NativeAdapter(ProviderAdapter):
                 provider="anthropic",
                 provider_label="Anthropic",
                 avatar_url="https://huggingface.co/api/avatars/Anthropic",
-                recommended=True,
             ),
         )
 
     def build_params(
         self,
         model_name: str,
+        *,
         session_hf_token: str | None = None,
         reasoning_effort: str | None = None,
+        strict: bool = False,
     ) -> dict:
         params: dict[str, Any] = {"model": model_name}
         if reasoning_effort:
-            params["reasoning_effort"] = reasoning_effort
+            level = "low" if reasoning_effort == "minimal" else reasoning_effort
+            if level not in self._EFFORTS:
+                if strict:
+                    raise UnsupportedEffortError(
+                        f"Anthropic doesn't accept effort={level!r}"
+                    )
+            else:
+                params["thinking"] = {"type": "adaptive"}
+                params["output_config"] = {"effort": level}
+        return params
+
+
+@dataclass(frozen=True)
+class OpenAIAdapter(ProviderAdapter):
+    """OpenAI models via native API (reasoning_effort top-level kwarg)."""
+
+    prefixes: tuple[str, ...] = ("openai/",)
+    _EFFORTS: ClassVar[frozenset[str]] = frozenset(
+        {"minimal", "low", "medium", "high"}
+    )
+
+    def build_params(
+        self,
+        model_name: str,
+        *,
+        session_hf_token: str | None = None,
+        reasoning_effort: str | None = None,
+        strict: bool = False,
+    ) -> dict:
+        params: dict[str, Any] = {"model": model_name}
+        if reasoning_effort:
+            if reasoning_effort not in self._EFFORTS:
+                if strict:
+                    raise UnsupportedEffortError(
+                        f"OpenAI doesn't accept effort={reasoning_effort!r}"
+                    )
+            else:
+                params["reasoning_effort"] = reasoning_effort
         return params
 
 
 @dataclass(frozen=True)
 class HfRouterAdapter(ProviderAdapter):
-    allowed_efforts: tuple[str, ...] = ("low", "medium", "high")
+    """HuggingFace router — OpenAI-compat endpoint with HF token chain."""
+
+    _EFFORTS: ClassVar[frozenset[str]] = frozenset({"low", "medium", "high"})
 
     def _is_hf_model_name(self, model_name: str) -> bool:
         if model_name.startswith(("anthropic/", "openai/")):
             return False
-
         bare = model_name.removeprefix("huggingface/").split(":", 1)[0]
         parts = bare.split("/")
         return len(parts) >= 2 and all(parts)
@@ -134,8 +212,10 @@ class HfRouterAdapter(ProviderAdapter):
     def build_params(
         self,
         model_name: str,
+        *,
         session_hf_token: str | None = None,
         reasoning_effort: str | None = None,
+        strict: bool = False,
     ) -> dict:
         hf_model = model_name.removeprefix("huggingface/")
         inference_token = os.environ.get("INFERENCE_TOKEN")
@@ -153,58 +233,28 @@ class HfRouterAdapter(ProviderAdapter):
 
         if reasoning_effort:
             hf_level = "low" if reasoning_effort == "minimal" else reasoning_effort
-            if hf_level in self.allowed_efforts:
+            if hf_level not in self._EFFORTS:
+                if strict:
+                    raise UnsupportedEffortError(
+                        f"HF router doesn't accept effort={hf_level!r}"
+                    )
+            else:
                 params["extra_body"] = {"reasoning_effort": hf_level}
 
         return params
 
 
-@dataclass(frozen=True)
-class OpenCodeGoAdapter(ProviderAdapter):
-    prefixes: tuple[str, ...] = ("opencode-go/",)
-
-    def suggested_models(self) -> tuple[SuggestedModel, ...]:
-        return (
-            SuggestedModel(
-                id="opencode-go/kimi-k2.6",
-                label="Kimi K2.6",
-                description="OpenCode Go",
-                provider="opencode_go",
-                provider_label="OpenCode Go",
-                avatar_url="https://huggingface.co/api/avatars/opencode-ai",
-                recommended=True,
-            ),
-        )
-
-    def allows_model_name(self, model_name: str) -> bool:
-        if not self.matches(model_name):
-            return False
-        return bool(model_name.removeprefix("opencode-go/"))
-
-    def build_params(
-        self,
-        model_name: str,
-        session_hf_token: str | None = None,
-        reasoning_effort: str | None = None,
-    ) -> dict:
-        model_id = model_name.removeprefix("opencode-go/")
-        api_key = os.environ.get("OPENCODE_GO_API_KEY") or os.environ.get(
-            "OPENCODE_API_KEY"
-        )
-        return {
-            "model": f"openai/{model_id}",
-            "api_base": "https://opencode.ai/zen/go/v1",
-            "api_key": api_key,
-        }
-
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
 
 ADAPTERS: tuple[ProviderAdapter, ...] = (
-    NativeAdapter(provider_id="native", provider_label="Native"),
-    OpenCodeGoAdapter(
-        provider_id="opencode_go",
-        provider_label="OpenCode Go",
+    AnthropicAdapter(provider_id="anthropic", provider_label="Anthropic"),
+    OpenAIAdapter(
+        provider_id="openai",
+        provider_label="OpenAI",
         supports_custom_model=True,
-        custom_model_hint="Use opencode-go/<model-id>, for example opencode-go/kimi-k2.6",
+        custom_model_hint="Use openai/<model>, for example openai/gpt-5",
     ),
     HfRouterAdapter(
         provider_id="huggingface",
@@ -224,6 +274,10 @@ def resolve_adapter(model_name: str) -> ProviderAdapter | None:
             return adapter
     return None
 
+
+# ---------------------------------------------------------------------------
+# Catalog helpers (used by model_switcher, backend, frontend)
+# ---------------------------------------------------------------------------
 
 def is_valid_model_name(model_name: str) -> bool:
     adapter = resolve_adapter(model_name)

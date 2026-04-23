@@ -1,15 +1,66 @@
+import pytest
+
 from agent.core.llm_params import _resolve_llm_params
-from agent.core.provider_adapters import build_model_catalog, is_valid_model_name
+from agent.core.provider_adapters import (
+    UnsupportedEffortError,
+    build_model_catalog,
+    is_valid_model_name,
+)
 
 
-def test_native_adapter_keeps_model_name():
+# -- Anthropic adapter -------------------------------------------------------
+
+def test_anthropic_adapter_builds_thinking_config():
     params = _resolve_llm_params("anthropic/claude-opus-4-6", reasoning_effort="high")
 
     assert params == {
         "model": "anthropic/claude-opus-4-6",
-        "reasoning_effort": "high",
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
     }
 
+
+def test_anthropic_adapter_normalizes_minimal_to_low():
+    params = _resolve_llm_params("anthropic/claude-opus-4-7", reasoning_effort="minimal")
+
+    assert params["output_config"] == {"effort": "low"}
+
+
+def test_anthropic_adapter_no_effort():
+    params = _resolve_llm_params("anthropic/claude-opus-4-6")
+
+    assert params == {"model": "anthropic/claude-opus-4-6"}
+
+
+def test_anthropic_adapter_strict_rejects_invalid():
+    with pytest.raises(UnsupportedEffortError):
+        _resolve_llm_params(
+            "anthropic/claude-opus-4-6", reasoning_effort="turbo", strict=True
+        )
+
+
+def test_anthropic_adapter_nonstrict_drops_invalid():
+    params = _resolve_llm_params(
+        "anthropic/claude-opus-4-6", reasoning_effort="turbo", strict=False
+    )
+    assert "thinking" not in params
+    assert "output_config" not in params
+
+
+# -- OpenAI adapter -----------------------------------------------------------
+
+def test_openai_adapter_passes_reasoning_effort():
+    params = _resolve_llm_params("openai/gpt-5", reasoning_effort="medium")
+
+    assert params == {"model": "openai/gpt-5", "reasoning_effort": "medium"}
+
+
+def test_openai_adapter_strict_rejects_max():
+    with pytest.raises(UnsupportedEffortError):
+        _resolve_llm_params("openai/gpt-5", reasoning_effort="max", strict=True)
+
+
+# -- HF Router adapter --------------------------------------------------------
 
 def test_hf_adapter_builds_router_params(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf-test")
@@ -36,17 +87,14 @@ def test_hf_adapter_adds_bill_to_header(monkeypatch):
     assert params["api_key"] == "hf-space-token"
 
 
-def test_opencode_go_adapter_uses_api_key(monkeypatch):
-    monkeypatch.setenv("OPENCODE_GO_API_KEY", "go-test-key")
+def test_hf_adapter_strict_rejects_max():
+    with pytest.raises(UnsupportedEffortError):
+        _resolve_llm_params(
+            "MiniMaxAI/MiniMax-M2.7", reasoning_effort="max", strict=True
+        )
 
-    params = _resolve_llm_params("opencode-go/kimi-k2.6")
 
-    assert params == {
-        "model": "openai/kimi-k2.6",
-        "api_base": "https://opencode.ai/zen/go/v1",
-        "api_key": "go-test-key",
-    }
-
+# -- Catalog & validation -----------------------------------------------------
 
 def test_model_catalog_comes_from_adapters():
     catalog = build_model_catalog("anthropic/claude-opus-4-6")
@@ -54,9 +102,9 @@ def test_model_catalog_comes_from_adapters():
     assert catalog["current"] == "anthropic/claude-opus-4-6"
     assert any(model["provider"] == "anthropic" for model in catalog["available"])
     assert any(model["provider"] == "huggingface" for model in catalog["available"])
-    assert any(model["provider"] == "opencode_go" for model in catalog["available"])
-    assert any(provider["id"] == "opencode_go" for provider in catalog["providers"])
     assert any(provider["id"] == "huggingface" for provider in catalog["providers"])
+    assert any(provider["id"] == "anthropic" for provider in catalog["providers"])
+    assert catalog["currentInfo"] is not None
 
 
 def test_model_validation_accepts_free_form_hf_ids():
@@ -64,5 +112,14 @@ def test_model_validation_accepts_free_form_hf_ids():
     assert is_valid_model_name("huggingface/moonshotai/Kimi-K2.6:novita") is True
 
 
-def test_model_validation_accepts_free_form_opencode_go_ids():
-    assert is_valid_model_name("opencode-go/glm-5.1") is True
+def test_model_validation_rejects_garbage():
+    assert is_valid_model_name("") is False
+    assert is_valid_model_name("no-slash") is False
+
+
+def test_unsupported_effort_reexport():
+    """UnsupportedEffortError must be importable from llm_params (backward compat)."""
+    from agent.core.llm_params import UnsupportedEffortError as FromLlm
+    from agent.core.provider_adapters import UnsupportedEffortError as FromAdapters
+
+    assert FromLlm is FromAdapters

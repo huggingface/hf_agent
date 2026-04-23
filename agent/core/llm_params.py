@@ -3,9 +3,20 @@
 Kept separate from ``agent_loop`` so tools (research, context compaction, etc.)
 can import it without pulling in the whole agent loop / tool router and
 creating circular imports.
+
+Provider-specific logic (Anthropic thinking config, OpenAI reasoning_effort,
+HF router extra_body) lives in ``provider_adapters.py``.  This module is the
+stable import surface for ``effort_probe`` and ``agent_loop``.
 """
 
-import os
+from agent.core.provider_adapters import (
+    UnsupportedEffortError,
+    resolve_adapter,
+)
+
+# Re-export so existing ``from agent.core.llm_params import
+# UnsupportedEffortError`` in effort_probe.py keeps working.
+__all__ = ["UnsupportedEffortError", "_resolve_llm_params"]
 
 
 def _patch_litellm_effort_validation() -> None:
@@ -64,59 +75,17 @@ def _patch_litellm_effort_validation() -> None:
 _patch_litellm_effort_validation()
 
 
-# Effort levels accepted on the wire.
-#   Anthropic (4.6+):  low | medium | high | xhigh | max   (output_config.effort)
-#   OpenAI direct:     minimal | low | medium | high       (reasoning_effort top-level)
-#   HF router:         low | medium | high                 (extra_body.reasoning_effort)
-#
-# We validate *shape* here and let the probe cascade walk down on rejection;
-# we deliberately do NOT maintain a per-model capability table.
-_ANTHROPIC_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
-_OPENAI_EFFORTS = {"minimal", "low", "medium", "high"}
-_HF_EFFORTS = {"low", "medium", "high"}
-
-
-class UnsupportedEffortError(ValueError):
-    """The requested effort isn't valid for this provider's API surface.
-
-    Raised synchronously before any network call so the probe cascade can
-    skip levels the provider can't accept (e.g. ``max`` on HF router).
-    """
-
-
 def _resolve_llm_params(
     model_name: str,
     session_hf_token: str | None = None,
     reasoning_effort: str | None = None,
     strict: bool = False,
 ) -> dict:
-    """
-    Build LiteLLM kwargs for a given model id.
+    """Build LiteLLM kwargs for a given model id.
 
-    • ``anthropic/<model>`` — native thinking config. We bypass LiteLLM's
-      ``reasoning_effort`` → ``thinking`` mapping (which lags new Claude
-      releases like 4.7 and sends the wrong API shape). Instead we pass
-      both ``thinking={"type": "adaptive"}`` and ``output_config=
-      {"effort": <level>}`` as top-level kwargs — LiteLLM's Anthropic
-      adapter forwards unknown top-level kwargs into the request body
-      verbatim (confirmed by live probe; ``extra_body`` does NOT work
-      here because Anthropic's API rejects it as "Extra inputs are not
-      permitted"). This is the stable API for 4.6 and 4.7. Older
-      extended-thinking models that only accept ``thinking.type.enabled``
-      will reject this; the probe's cascade catches that and falls back
-      to no thinking.
-
-    • ``openai/<model>`` — ``reasoning_effort`` forwarded as a top-level
-      kwarg (GPT-5 / o-series). LiteLLM uses the user's ``OPENAI_API_KEY``.
-
-    • Anything else is treated as a HuggingFace router id. We hit the
-      auto-routing OpenAI-compatible endpoint at
-      ``https://router.huggingface.co/v1``. The id can be bare or carry an
-      HF routing suffix (``:fastest`` / ``:cheapest`` / ``:<provider>``).
-      A leading ``huggingface/`` is stripped. ``reasoning_effort`` is
-      forwarded via ``extra_body`` (LiteLLM's OpenAI adapter refuses it as
-      a top-level kwarg for non-OpenAI models). "minimal" normalizes to
-      "low".
+    Delegates to the matching provider adapter.  See ``provider_adapters.py``
+    for the per-provider logic (Anthropic thinking config, OpenAI
+    reasoning_effort, HF router extra_body, etc.).
 
     ``strict=True`` raises ``UnsupportedEffortError`` when the requested
     effort isn't in the provider's accepted set, instead of silently
@@ -131,62 +100,12 @@ def _resolve_llm_params(
       2. session.hf_token — the user's own token (CLI / OAuth / cache file).
       3. HF_TOKEN env — belt-and-suspenders fallback for CLI users.
     """
-    if model_name.startswith("anthropic/"):
-        params: dict = {"model": model_name}
-        if reasoning_effort:
-            level = reasoning_effort
-            if level == "minimal":
-                level = "low"
-            if level not in _ANTHROPIC_EFFORTS:
-                if strict:
-                    raise UnsupportedEffortError(
-                        f"Anthropic doesn't accept effort={level!r}"
-                    )
-            else:
-                # Adaptive thinking + output_config.effort is the stable
-                # Anthropic API for Claude 4.6 / 4.7. Both kwargs are
-                # passed top-level: LiteLLM forwards unknown params into
-                # the request body for Anthropic, so ``output_config``
-                # reaches the API. ``extra_body`` does NOT work here —
-                # Anthropic rejects it as "Extra inputs are not
-                # permitted".
-                params["thinking"] = {"type": "adaptive"}
-                params["output_config"] = {"effort": level}
-        return params
-
-    if model_name.startswith("openai/"):
-        params = {"model": model_name}
-        if reasoning_effort:
-            if reasoning_effort not in _OPENAI_EFFORTS:
-                if strict:
-                    raise UnsupportedEffortError(
-                        f"OpenAI doesn't accept effort={reasoning_effort!r}"
-                    )
-            else:
-                params["reasoning_effort"] = reasoning_effort
-        return params
-
-    hf_model = model_name.removeprefix("huggingface/")
-    api_key = (
-        os.environ.get("INFERENCE_TOKEN")
-        or session_hf_token
-        or os.environ.get("HF_TOKEN")
+    adapter = resolve_adapter(model_name)
+    if adapter is None:
+        raise ValueError(f"Unsupported model id: {model_name}")
+    return adapter.build_params(
+        model_name,
+        session_hf_token=session_hf_token,
+        reasoning_effort=reasoning_effort,
+        strict=strict,
     )
-    params = {
-        "model": f"openai/{hf_model}",
-        "api_base": "https://router.huggingface.co/v1",
-        "api_key": api_key,
-    }
-    if os.environ.get("INFERENCE_TOKEN"):
-        bill_to = os.environ.get("HF_BILL_TO", "smolagents")
-        params["extra_headers"] = {"X-HF-Bill-To": bill_to}
-    if reasoning_effort:
-        hf_level = "low" if reasoning_effort == "minimal" else reasoning_effort
-        if hf_level not in _HF_EFFORTS:
-            if strict:
-                raise UnsupportedEffortError(
-                    f"HF router doesn't accept effort={hf_level!r}"
-                )
-        else:
-            params["extra_body"] = {"reasoning_effort": hf_level}
-    return params
