@@ -23,6 +23,14 @@ def test_github_token():
     assert out == "[REDACTED_GITHUB_TOKEN]"
 
 
+def test_github_fine_grained_pat():
+    # Fine-grained PATs: github_pat_<alphanumeric + underscore>, 36+ chars
+    s = "github_pat_" + "A1B2_" * 10
+    out = scrub_string(s)
+    assert "github_pat_" not in out
+    assert "[REDACTED_GITHUB_TOKEN]" in out
+
+
 def test_aws_key_id():
     s = "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP"
     out = scrub_string(s)

@@ -76,9 +76,11 @@ def upload_session_as_file(
             scrub = _mod.scrub
         scrubbed_messages = scrub(data["messages"])
         scrubbed_events = scrub(data["events"])
+        scrubbed_tools = scrub(data.get("tools") or [])
 
         # Prepare JSONL content (single line)
-        # Store messages and events as JSON strings to avoid schema conflicts
+        # Store messages/events/tools as JSON strings to avoid schema conflicts
+        # across sessions with different tool rosters.
         session_row = {
             "session_id": data["session_id"],
             "session_start_time": data["session_start_time"],
@@ -86,6 +88,7 @@ def upload_session_as_file(
             "model_name": data["model_name"],
             "messages": json.dumps(scrubbed_messages),
             "events": json.dumps(scrubbed_events),
+            "tools": json.dumps(scrubbed_tools),
         }
 
         # Create temporary JSONL file

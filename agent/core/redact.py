@@ -22,8 +22,10 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"), "[REDACTED_ANTHROPIC_KEY]"),
     # OpenAI: sk-[A-Za-z0-9]{40,}  (legacy + proj keys)
     (re.compile(r"sk-(?!ant-)[A-Za-z0-9_\-]{40,}"), "[REDACTED_OPENAI_KEY]"),
-    # GitHub: ghp_, gho_, ghu_, ghs_, ghr_ followed by 36+ chars
+    # GitHub classic PATs: ghp_, gho_, ghu_, ghs_, ghr_ followed by 36+ chars
     (re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}"), "[REDACTED_GITHUB_TOKEN]"),
+    # GitHub fine-grained PATs: github_pat_<alphanumeric_underscore>
+    (re.compile(r"github_pat_[A-Za-z0-9_]{36,}"), "[REDACTED_GITHUB_TOKEN]"),
     # AWS access key IDs: AKIA / ASIA + 16 uppercase alnum
     (re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"), "[REDACTED_AWS_KEY_ID]"),
     # Generic 'Bearer <token>' header values

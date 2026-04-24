@@ -232,6 +232,17 @@ class Session:
 
             trajectory = self.get_trajectory()
 
+            # Scrub secrets at save time so session_logs/ never holds raw
+            # tokens on disk — a log aggregator, crash dump, or filesystem
+            # snapshot between heartbeats would otherwise leak them.
+            try:
+                from agent.core.redact import scrub
+                for key in ("messages", "events", "tools"):
+                    if key in trajectory:
+                        trajectory[key] = scrub(trajectory[key])
+            except Exception as _e:
+                logger.debug("Redact-on-save failed (non-fatal): %s", _e)
+
             # Add upload metadata
             trajectory["upload_status"] = upload_status
             trajectory["upload_url"] = dataset_url

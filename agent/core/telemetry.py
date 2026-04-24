@@ -241,6 +241,13 @@ async def record_feedback(
 
 # ── heartbeat ──────────────────────────────────────────────────────────────
 
+# Module-level reference set for fire-and-forget heartbeat tasks. asyncio only
+# keeps *weak* references to tasks, so the returned Task would otherwise be
+# eligible for GC before running — the task gets discarded and the upload
+# silently never happens. Hold strong refs until the task completes.
+_heartbeat_tasks: set[asyncio.Task] = set()
+
+
 class HeartbeatSaver:
     """Time-gated mid-turn flush.
 
@@ -268,9 +275,13 @@ class HeartbeatSaver:
         session._last_heartbeat_ts = now
         repo_id = session.config.session_dataset_repo
         try:
-            asyncio.get_running_loop().create_task(
+            task = asyncio.get_running_loop().create_task(
                 asyncio.to_thread(session.save_and_upload_detached, repo_id)
             )
+            # Hold a strong reference until the task finishes so asyncio can't
+            # GC it. ``set.discard`` is a no-op on missing keys → safe callback.
+            _heartbeat_tasks.add(task)
+            task.add_done_callback(_heartbeat_tasks.discard)
         except RuntimeError:
             try:
                 session.save_and_upload_detached(repo_id)

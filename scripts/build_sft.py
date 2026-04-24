@@ -23,8 +23,8 @@ Output row schema::
 Usage::
 
     python scripts/build_sft.py \\
-        --source akseljoonas/hf-agent-sessions \\
-        --target akseljoonas/hf-agent-sft \\
+        --source smolagents/ml-intern-sessions \\
+        --target smolagents/ml-intern-sft \\
         --days 7
 
 Env:
@@ -159,8 +159,8 @@ def run_for_day(
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="akseljoonas/hf-agent-sessions")
-    ap.add_argument("--target", default="akseljoonas/hf-agent-sft")
+    ap.add_argument("--source", default="smolagents/ml-intern-sessions")
+    ap.add_argument("--target", default="smolagents/ml-intern-sft")
     ap.add_argument(
         "--days", type=int, default=1,
         help="Number of trailing days to export (default: 1 = yesterday).",

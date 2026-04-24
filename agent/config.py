@@ -24,7 +24,7 @@ class Config(BaseModel):
     model_name: str
     mcpServers: dict[str, MCPServerConfig] = {}
     save_sessions: bool = True
-    session_dataset_repo: str = "akseljoonas/hf-agent-sessions"
+    session_dataset_repo: str = "smolagents/ml-intern-sessions"
     auto_save_interval: int = 1  # Save every N user turns (0 = disabled)
     yolo_mode: bool = False  # Auto-approve all tool calls without confirmation
     max_iterations: int = 300  # Max LLM calls per agent turn (-1 = unlimited)

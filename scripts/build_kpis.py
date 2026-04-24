@@ -463,8 +463,8 @@ def _parse_hour_arg(s: str) -> datetime:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="akseljoonas/hf-agent-sessions")
-    ap.add_argument("--target", default="akseljoonas/hf-agent-kpis")
+    ap.add_argument("--source", default="smolagents/ml-intern-sessions")
+    ap.add_argument("--target", default="smolagents/ml-intern-kpis")
     ap.add_argument(
         "--hours", type=int, default=1,
         help="Number of trailing hours to roll up (default: 1 = last completed hour).",

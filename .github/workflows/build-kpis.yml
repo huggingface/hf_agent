@@ -46,8 +46,8 @@ jobs:
         env:
           HF_KPI_WRITE_TOKEN: ${{ secrets.HF_KPI_WRITE_TOKEN }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          SOURCE_REPO: ${{ vars.KPI_SOURCE_REPO || 'akseljoonas/hf-agent-sessions' }}
-          TARGET_REPO: ${{ vars.KPI_TARGET_REPO || 'akseljoonas/hf-agent-kpis' }}
+          SOURCE_REPO: ${{ vars.KPI_SOURCE_REPO || 'smolagents/ml-intern-sessions' }}
+          TARGET_REPO: ${{ vars.KPI_TARGET_REPO || 'smolagents/ml-intern-kpis' }}
         run: |
           set -euo pipefail
           ARGS="--source ${SOURCE_REPO} --target ${TARGET_REPO}"
