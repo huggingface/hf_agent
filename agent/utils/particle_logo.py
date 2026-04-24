@@ -1,7 +1,7 @@
-"""Particle coalesce effect for the HUGGING FACE ML AGENT logo.
+"""Particle coalesce effect for the HUGGING FACE ML INTERN logo.
 
 Random particles swirl in from the edges, converge to form the text
-"HUGGING FACE / ML AGENT", hold briefly, then the final frame is printed.
+"HUGGING FACE / ML INTERN", hold briefly, then the final frame is printed.
 Rendered with braille characters for high detail.
 
 Based on Leandro's particle_coalesce.py demo.
@@ -71,7 +71,7 @@ def run_particle_logo(console: Console, hold_seconds: float = 1.5) -> None:
 
     # Get target positions from text
     text_pixels_line1 = text_to_pixels("HUGGING FACE", scale=2)
-    text_pixels_line2 = text_to_pixels("ML AGENT", scale=2)
+    text_pixels_line2 = text_to_pixels("ML INTERN", scale=2)
 
     # Calculate dimensions for centering
     def get_bounds(pixels):

@@ -23,7 +23,7 @@ export interface SideChannelCallbacks {
   onUndoComplete: () => void;
   onCompacted: (oldTokens: number, newTokens: number) => void;
   onPlanUpdate: (plan: Array<{ id: string; content: string; status: string }>) => void;
-  onToolLog: (tool: string, log: string) => void;
+  onToolLog: (tool: string, log: string, agentId?: string, label?: string) => void;
   onConnectionChange: (connected: boolean) => void;
   onSessionDead: (sessionId: string) => void;
   onApprovalRequired: (tools: Array<{ tool: string; arguments: Record<string, unknown>; tool_call_id: string }>) => void;
@@ -131,6 +131,8 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
           sideChannel.onToolLog(
             (event.data?.tool as string) || '',
             (event.data?.log as string) || '',
+            (event.data?.agent_id as string) || '',
+            (event.data?.label as string) || '',
           );
           break;
 
@@ -349,6 +351,17 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
       },
     });
 
+    if (response.status === 404) {
+      // Backend lost this session (e.g. Space restart). Signal the UI so
+      // it can flag the session for the catch-up banner.
+      this.sideChannel.onSessionDead(sessionId);
+    }
+    if (response.status === 429) {
+      // Claude daily-quota gate tripped. The prefix is the detection marker
+      // for useAgentChat's onError handler, which surfaces the cap dialog
+      // instead of a generic error banner.
+      throw new Error('CLAUDE_QUOTA_EXHAUSTED');
+    }
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Request failed');
       throw new Error(`Chat request failed: ${response.status} ${errorText}`);

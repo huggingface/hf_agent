@@ -7,7 +7,7 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import LaunchIcon from '@mui/icons-material/Launch';
 import SendIcon from '@mui/icons-material/Send';
 import BlockIcon from '@mui/icons-material/Block';
-import { useAgentStore } from '@/store/agentStore';
+import { useAgentStore, type ResearchAgentState } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { logger } from '@/utils/logger';
 import { RESEARCH_MAX_STEPS } from '@/lib/research-store';
@@ -36,16 +36,22 @@ interface ToolCallGroupProps {
 // Research sub-steps (inline under the research tool row)
 // ---------------------------------------------------------------------------
 
-/** Hook that ticks every second while startedAt is set, returning elapsed seconds. */
-function useElapsed(startedAt: number | null): number | null {
-  const [elapsed, setElapsed] = useState<number | null>(null);
+/** Hook that forces a re-render every second while enabled — used so each
+ * research card can compute its own elapsed seconds synchronously from
+ * Date.now() without needing its own timer. */
+function useSecondTick(enabled: boolean): void {
+  const [, setTick] = useState(0);
   useEffect(() => {
-    if (startedAt === null) { setElapsed(null); return; }
-    setElapsed(Math.round((Date.now() - startedAt) / 1000));
-    const id = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
+    if (!enabled) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
-  }, [startedAt]);
-  return elapsed;
+  }, [enabled]);
+}
+
+/** Compute elapsed seconds from startedAt (or null). Call under useSecondTick. */
+function computeElapsed(startedAt: number | null): number | null {
+  if (startedAt === null) return null;
+  return Math.round((Date.now() - startedAt) / 1000);
 }
 
 /** Format token count like the CLI: "12.4k" or "800". */
@@ -172,9 +178,8 @@ function formatResearchStep(raw: string): { label: string } {
   return { label: step.replace(/^▸\s*/, '') };
 }
 
-/** Rolling 2-line display of research sub-tool calls — hidden when complete. */
-function ResearchSteps({ steps, isRunning }: { steps: string[]; isRunning: boolean }) {
-  if (!isRunning) return null;
+/** Rolling display of research sub-tool calls for a single agent. */
+function ResearchSteps({ steps }: { steps: string[] }) {
   const visible = steps.slice(-RESEARCH_MAX_STEPS);
   if (visible.length === 0) return null;
 
@@ -214,9 +219,6 @@ function ResearchSteps({ steps, isRunning }: { steps: string[]; isRunning: boole
     </Box>
   );
 }
-
-// Stable reference to avoid infinite re-renders from Zustand selectors
-const EMPTY_STEPS: string[] = [];
 
 // ---------------------------------------------------------------------------
 // Hardware pricing ($/hr) — from HF Spaces & Jobs pricing
@@ -512,17 +514,22 @@ function InlineApproval({
 // Main component
 // ---------------------------------------------------------------------------
 
+const EMPTY_AGENTS: Record<string, ResearchAgentState> = {};
+
 export default function ToolCallGroup({ tools, approveTools }: ToolCallGroupProps) {
   const { setPanel, lockPanel, getJobUrl, getEditedScript, setJobStatus, getJobStatus, setToolError, getToolError, setToolRejected, getToolRejected } = useAgentStore();
-  const researchSteps = useAgentStore(s => {
+  const researchAgents = useAgentStore(s => {
     const activeId = s.activeSessionId;
-    return activeId ? (s.sessionStates[activeId]?.researchSteps) : undefined;
-  }) ?? EMPTY_STEPS;
-  const researchStats = useAgentStore(s => {
-    const activeId = s.activeSessionId;
-    return activeId ? s.sessionStates[activeId]?.researchStats : undefined;
-  }) ?? { toolCount: 0, tokenCount: 0, startedAt: null, finalElapsed: null };
-  const liveElapsed = useElapsed(researchStats.startedAt);
+    return (activeId && s.sessionStates[activeId]?.researchAgents) || EMPTY_AGENTS;
+  });
+  // Tick once per second while any research agent is running so each card's
+  // elapsed seconds update in real time.
+  const anyResearchRunning = useMemo(
+    () => Object.values(researchAgents).some(a => a.stats.startedAt !== null),
+    [researchAgents],
+  );
+  useSecondTick(anyResearchRunning);
+
   const isProcessing = useAgentStore(s => s.isProcessing);
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
 
@@ -964,13 +971,17 @@ export default function ToolCallGroup({ tools, approveTools }: ToolCallGroupProp
 
                 {/* Status chip (non hf_jobs, or hf_jobs without final status) */}
                 {(() => {
-                  // Research tool: override chip label with live stats (but not if cancelled/done)
+                  // Research tool: override chip label with this card's agent stats
+                  const agentState: ResearchAgentState | undefined = tool.toolName === 'research'
+                    ? researchAgents[tool.toolCallId]
+                    : undefined;
                   const researchDone = cancelled || state === 'output-available' || state === 'output-error' || state === 'output-denied';
-                  const researchLabel = tool.toolName === 'research' && !researchDone
-                    ? researchChipLabel(researchStats, liveElapsed)
-                    : (tool.toolName === 'research' && researchDone && researchStats.finalElapsed !== null)
-                      ? researchChipLabel({ ...researchStats, startedAt: null }, null)
-                      : null;
+                  const liveElapsed = agentState ? computeElapsed(agentState.stats.startedAt) : null;
+                  const researchLabel = tool.toolName === 'research' && agentState
+                    ? (researchDone && agentState.stats.finalElapsed !== null
+                        ? researchChipLabel({ ...agentState.stats, startedAt: null }, null)
+                        : researchChipLabel(agentState.stats, liveElapsed))
+                    : null;
                   const chipLabel = researchLabel || label;
                   if (!chipLabel || (tool.toolName === 'hf_jobs' && jobMeta.jobStatus)) return null;
 
@@ -1048,11 +1059,8 @@ export default function ToolCallGroup({ tools, approveTools }: ToolCallGroupProp
               </Stack>
 
               {/* Research sub-agent rolling steps (visible only while running) */}
-              {tool.toolName === 'research' && !cancelled && state !== 'output-available' && state !== 'output-error' && state !== 'output-denied' && (
-                <ResearchSteps
-                  steps={researchSteps}
-                  isRunning={researchStats.startedAt !== null}
-                />
+              {tool.toolName === 'research' && !cancelled && state !== 'output-available' && state !== 'output-error' && state !== 'output-denied' && researchAgents[tool.toolCallId] && (
+                <ResearchSteps steps={researchAgents[tool.toolCallId].steps} />
               )}
 
               {/* Per-tool approval: undecided */}

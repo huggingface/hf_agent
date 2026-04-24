@@ -91,6 +91,10 @@ class AgentSession:
     is_active: bool = True
     is_processing: bool = False  # True while a submission is being executed
     broadcaster: Any = None
+    # True once this session has been counted against the user's daily
+    # Claude quota. Guards double-counting when the user re-selects an
+    # Anthropic model mid-session.
+    claude_counted: bool = False
 
 
 class SessionCapacityError(Exception):
@@ -126,7 +130,12 @@ class SessionManager:
             if s.user_id == user_id and s.is_active
         )
 
-    async def create_session(self, user_id: str = "dev", hf_token: str | None = None) -> str:
+    async def create_session(
+        self,
+        user_id: str = "dev",
+        hf_token: str | None = None,
+        model: str | None = None,
+    ) -> str:
         """Create a new agent session and return its ID.
 
         Session() and ToolRouter() constructors contain blocking I/O
@@ -135,6 +144,10 @@ class SessionManager:
 
         Args:
             user_id: The ID of the user who owns this session.
+            hf_token: The user's HF OAuth token, stored for tool execution.
+            model: Optional model override. When set, replaces ``model_name``
+                on the per-session config clone. None falls back to the
+                config default.
 
         Raises:
             SessionCapacityError: If the server or user has reached the
@@ -172,8 +185,13 @@ class SessionManager:
         def _create_session_sync():
             t0 = _time.monotonic()
             tool_router = ToolRouter(self.config.mcpServers, hf_token=hf_token)
+            # Deep-copy config so each session's model switches independently —
+            # tab A picking GLM doesn't flip tab B off Claude.
+            session_config = self.config.model_copy(deep=True)
+            if model:
+                session_config.model_name = model
             session = Session(
-                event_queue, config=self.config, tool_router=tool_router,
+                event_queue, config=session_config, tool_router=tool_router,
                 hf_token=hf_token,
             )
             t1 = _time.monotonic()
@@ -203,6 +221,69 @@ class SessionManager:
 
         logger.info(f"Created session {session_id} for user {user_id}")
         return session_id
+
+    async def seed_from_summary(self, session_id: str, messages: list[dict]) -> int:
+        """Rehydrate a session from cached prior messages via summarization.
+
+        Runs the standard summarization prompt (same one compaction uses)
+        over the provided messages, then seeds the new session's context
+        with that summary. Tool-call pairing concerns disappear because the
+        output is plain text. Returns the number of messages summarized.
+        """
+        from litellm import Message
+
+        from agent.context_manager.manager import _RESTORE_PROMPT, summarize_messages
+
+        agent_session = self.sessions.get(session_id)
+        if not agent_session:
+            raise ValueError(f"Session {session_id} not found")
+
+        # Parse into Message objects, tolerating malformed entries.
+        parsed: list[Message] = []
+        for raw in messages:
+            if raw.get("role") == "system":
+                continue  # the new session has its own system prompt
+            try:
+                parsed.append(Message.model_validate(raw))
+            except Exception as e:
+                logger.warning("Dropping malformed message during seed: %s", e)
+
+        if not parsed:
+            return 0
+
+        session = agent_session.session
+        # Pass the real tool specs so the summarizer sees what the agent
+        # actually has — otherwise Anthropic's modify_params injects a
+        # dummy tool and the summarizer editorializes that the original
+        # tool calls were fabricated.
+        tool_specs = None
+        try:
+            tool_specs = agent_session.tool_router.get_tool_specs_for_llm()
+        except Exception:
+            pass
+        try:
+            summary, _ = await summarize_messages(
+                parsed,
+                model_name=session.config.model_name,
+                hf_token=session.hf_token,
+                max_tokens=4000,
+                prompt=_RESTORE_PROMPT,
+                tool_specs=tool_specs,
+            )
+        except Exception as e:
+            logger.error("Summary call failed during seed: %s", e)
+            raise
+
+        seed = Message(
+            role="user",
+            content=(
+                "[SYSTEM: Your prior memory of this conversation — written "
+                "in your own voice right before restart. Continue from here.]\n\n"
+                + (summary or "(no summary returned)")
+            ),
+        )
+        session.context_manager.items.append(seed)
+        return len(parsed)
 
     @staticmethod
     async def _cleanup_sandbox(session: Session) -> None:
@@ -424,6 +505,7 @@ class SessionManager:
             "message_count": len(agent_session.session.context_manager.items),
             "user_id": agent_session.user_id,
             "pending_approval": pending_approval,
+            "model": agent_session.session.config.model_name,
         }
 
     def list_sessions(self, user_id: str | None = None) -> list[dict[str, Any]]:

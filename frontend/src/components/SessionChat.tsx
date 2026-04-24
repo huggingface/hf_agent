@@ -11,6 +11,7 @@ import { useAgentStore } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
 import MessageList from '@/components/Chat/MessageList';
 import ChatInput from '@/components/Chat/ChatInput';
+import ExpiredBanner from '@/components/Chat/ExpiredBanner';
 import { apiFetch } from '@/utils/api';
 import { logger } from '@/utils/logger';
 
@@ -22,7 +23,8 @@ interface SessionChatProps {
 
 export default function SessionChat({ sessionId, isActive, onSessionDead }: SessionChatProps) {
   const { isConnected, isProcessing, activityStatus, updateSession } = useAgentStore();
-  const { updateSessionTitle } = useSessionStore();
+  const { updateSessionTitle, sessions } = useSessionStore();
+  const isExpired = sessions.find((s) => s.id === sessionId)?.expired === true;
 
   const { messages, sendMessage, stop, status, undoLastTurn, editAndRegenerate, approveTools } = useAgentChat({
     sessionId,
@@ -61,9 +63,10 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
     updateSession(sessionId, { activityStatus: { type: 'cancelled' } });
   }, [stop, updateSession, sessionId]);
 
-  // Regenerate an assistant response by re-sending the preceding user message.
-  // Implemented via editAndRegenerate: truncate at the preceding user message
-  // and send its text again (same transport as a normal submit).
+  // Regenerate the latest assistant reply: find the user turn that prompted it,
+  // then call editAndRegenerate(userId, sameText). That hook drops that user
+  // message and everything after it (including the old assistant message) from
+  // both UI state and backend history, then submits a fresh user message.
   const handleRegenerateAssistant = useCallback(
     async (assistantMessageId: string) => {
       const idx = messages.findIndex((m) => m.id === assistantMessageId);
@@ -132,17 +135,22 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
         onEditAndRegenerate={editAndRegenerate}
         onRegenerateAssistant={handleRegenerateAssistant}
       />
-      <ChatInput
-        onSend={handleSendMessage}
-        onStop={handleStop}
-        isProcessing={busy}
-        disabled={!isConnected || activityStatus.type === 'waiting-approval'}
-        placeholder={
-          activityStatus.type === 'waiting-approval'
-            ? 'Review pending tool actions to continue.'
-            : undefined
-        }
-      />
+      {isExpired ? (
+        <ExpiredBanner sessionId={sessionId} />
+      ) : (
+        <ChatInput
+          sessionId={sessionId}
+          onSend={handleSendMessage}
+          onStop={handleStop}
+          isProcessing={busy}
+          disabled={!isConnected || activityStatus.type === 'waiting-approval'}
+          placeholder={
+            activityStatus.type === 'waiting-approval'
+              ? 'Approve or reject pending tools first...'
+              : undefined
+          }
+        />
+      )}
     </>
   );
 }

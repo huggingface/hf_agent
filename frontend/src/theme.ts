@@ -1,19 +1,24 @@
 import { createTheme, type ThemeOptions } from '@mui/material/styles';
 
 // ── Shared tokens ────────────────────────────────────────────────
+// Manrope + Sora (Latin) with system/Noto fallbacks for non-Latin scripts
+// and emoji. Extra weights load once from Google Fonts; CJK still uses local/system fonts.
+const uiSans =
+  '"Manrope", "Sora", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"';
+
 const sharedTypography: ThemeOptions['typography'] = {
-  fontFamily: '"Manrope", "Segoe UI", sans-serif',
+  fontFamily: uiSans,
   fontSize: 15.5,
-  h1: { fontFamily: '"Sora", "Manrope", sans-serif', fontWeight: 700, letterSpacing: '-0.03em' },
-  h2: { fontFamily: '"Sora", "Manrope", sans-serif', fontWeight: 700, letterSpacing: '-0.025em' },
-  h3: { fontFamily: '"Sora", "Manrope", sans-serif', fontWeight: 650, letterSpacing: '-0.02em' },
-  h4: { fontFamily: '"Sora", "Manrope", sans-serif', fontWeight: 650, letterSpacing: '-0.015em' },
-  h5: { fontFamily: '"Sora", "Manrope", sans-serif', fontWeight: 600 },
-  h6: { fontFamily: '"Sora", "Manrope", sans-serif', fontWeight: 600 },
+  h1: { fontFamily: `"Sora", ${uiSans}`, fontWeight: 700, letterSpacing: '-0.03em' },
+  h2: { fontFamily: `"Sora", ${uiSans}`, fontWeight: 700, letterSpacing: '-0.025em' },
+  h3: { fontFamily: `"Sora", ${uiSans}`, fontWeight: 650, letterSpacing: '-0.02em' },
+  h4: { fontFamily: `"Sora", ${uiSans}`, fontWeight: 650, letterSpacing: '-0.015em' },
+  h5: { fontFamily: `"Sora", ${uiSans}`, fontWeight: 600 },
+  h6: { fontFamily: `"Sora", ${uiSans}`, fontWeight: 600 },
   body1: { lineHeight: 1.65 },
   body2: { lineHeight: 1.6 },
   button: {
-    fontFamily: '"Manrope", "Segoe UI", sans-serif',
+    fontFamily: uiSans,
     textTransform: 'none' as const,
     fontWeight: 600,
     letterSpacing: '0.01em',
