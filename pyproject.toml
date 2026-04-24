@@ -42,11 +42,18 @@ eval = [
 # Development and testing dependencies
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
 ]
 
 # All dependencies (eval + dev)
 all = [
     "hf-agent[eval,dev]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
 ]
 
 [project.scripts]
