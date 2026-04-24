@@ -50,6 +50,12 @@ all = [
     "ml-intern[eval,dev]",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.2.0",
+]
+
 [project.scripts]
 ml-intern = "agent.main:cli"
 
