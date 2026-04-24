@@ -33,6 +33,14 @@ SUGGESTED_MODELS = [
 
 
 _ROUTING_POLICIES = {"fastest", "cheapest", "preferred"}
+_DIRECT_PREFIXES = (
+    "anthropic/",
+    "openai/",
+    "ollama/",
+    "lm_studio/",
+    "vllm/",
+    "openai-compat/",
+)
 
 
 def is_valid_model_id(model_id: str) -> bool:
@@ -41,6 +49,10 @@ def is_valid_model_id(model_id: str) -> bool:
     Accepts:
       • anthropic/<model>
       • openai/<model>
+      • ollama/<model>
+      • lm_studio/<model>
+      • vllm/<model>
+      • openai-compat/<model>
       • <org>/<model>[:<tag>]            (HF router; tag = provider or policy)
       • huggingface/<org>/<model>[:<tag>] (same, accepts legacy prefix)
 
@@ -63,7 +75,7 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     Anthropic / OpenAI ids return ``True`` without printing anything —
     the probe below covers "does this model exist".
     """
-    if model_id.startswith(("anthropic/", "openai/")):
+    if model_id.startswith(_DIRECT_PREFIXES):
         return True
 
     from agent.core import hf_router_catalog as cat
@@ -136,7 +148,8 @@ def print_model_listing(config, console) -> None:
     console.print(
         "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M2.7').\n"
         "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"
-        "Use 'anthropic/<model>' or 'openai/<model>' for direct API access.[/dim]"
+        "Use 'anthropic/<model>', 'openai/<model>', 'ollama/<model>',\n"
+        "'lm_studio/<model>', 'vllm/<model>', or 'openai-compat/<model>' for direct access.[/dim]"
     )
 
 
@@ -146,7 +159,9 @@ def print_invalid_id(arg: str, console) -> None:
         "[dim]Expected:\n"
         "  • <org>/<model>[:tag]    (HF router — paste from huggingface.co)\n"
         "  • anthropic/<model>\n"
-        "  • openai/<model>[/dim]"
+        "  • openai/<model>\n"
+        "  • ollama/<model> | lm_studio/<model> | vllm/<model>\n"
+        "  • openai-compat/<model>[/dim]"
     )
 
 
