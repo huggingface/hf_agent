@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any
 
-from dependencies import get_current_user
+from dependencies import get_current_user, require_huggingface_org_member
 from fastapi import (
     APIRouter,
     Depends,
@@ -27,7 +27,7 @@ from models import (
     SubmitRequest,
     TruncateRequest,
 )
-from session_manager import MAX_SESSIONS, SessionCapacityError, session_manager
+from session_manager import MAX_SESSIONS, AgentSession, SessionCapacityError, session_manager
 
 from agent.core.agent_loop import _resolve_hf_router_params
 from agent.utils.hf_auth import get_hf_token
@@ -38,28 +38,100 @@ router = APIRouter(prefix="/api", tags=["agent"])
 
 AVAILABLE_MODELS = [
     {
-        "id": "anthropic/claude-opus-4-6",
+        "id": "moonshotai/Kimi-K2.6",
+        "label": "Kimi K2.6",
+        "provider": "huggingface",
+        "tier": "free",
+        "recommended": True,
+    },
+    {
+        "id": "bedrock/us.anthropic.claude-opus-4-6-v1",
         "label": "Claude Opus 4.6",
         "provider": "anthropic",
+        "tier": "pro",
         "recommended": True,
     },
     {
-        "id": "huggingface/fireworks-ai/MiniMaxAI/MiniMax-M2.5",
-        "label": "MiniMax M2.5",
+        "id": "MiniMaxAI/MiniMax-M2.7",
+        "label": "MiniMax M2.7",
         "provider": "huggingface",
-        "recommended": True,
+        "tier": "free",
     },
     {
-        "id": "huggingface/novita/moonshotai/kimi-k2.5",
-        "label": "Kimi K2.5",
+        "id": "zai-org/GLM-5.1",
+        "label": "GLM 5.1",
         "provider": "huggingface",
-    },
-    {
-        "id": "huggingface/novita/zai-org/glm-5",
-        "label": "GLM 5",
-        "provider": "huggingface",
+        "tier": "free",
     },
 ]
+
+
+def _is_anthropic_model(model_id: str) -> bool:
+    return "anthropic" in model_id
+
+
+async def _require_hf_for_anthropic(request: Request, model_id: str) -> None:
+    """403 if a non-``huggingface``-org user tries to select an Anthropic model.
+
+    Anthropic models are billed to the Space's ``ANTHROPIC_API_KEY``; every
+    other model in ``AVAILABLE_MODELS`` is routed through HF Router and
+    billed via ``X-HF-Bill-To``. The gate only fires for Anthropic so
+    non-HF users can still freely switch between the free models.
+
+    Pattern: https://github.com/huggingface/ml-intern/pull/63
+    """
+    if not _is_anthropic_model(model_id):
+        return
+    if not await require_huggingface_org_member(request):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "anthropic_restricted",
+                "message": (
+                    "Opus is gated to HF staff. Pick a free model — "
+                    "Kimi K2.6, MiniMax M2.7, or GLM 5.1 — instead."
+                ),
+            },
+        )
+
+
+async def _enforce_claude_quota(
+    user: dict[str, Any],
+    agent_session: AgentSession,
+) -> None:
+    """Charge the user's daily Claude quota on first use of Anthropic in a session.
+
+    Runs at *message-submit* time, not session-create time — so spinning up a
+    Claude session to look around doesn't burn quota. The ``claude_counted``
+    flag on ``AgentSession`` guards against re-counting the same session.
+
+    No-ops when the session's current model isn't Anthropic, or when this
+    session has already been charged. Raises 429 when the user has hit
+    their daily cap.
+    """
+    if agent_session.claude_counted:
+        return
+    model_name = agent_session.session.config.model_name
+    if not _is_anthropic_model(model_name):
+        return
+    user_id = user["user_id"]
+    used = await user_quotas.get_claude_used_today(user_id)
+    cap = user_quotas.daily_cap_for(user.get("plan"))
+    if used >= cap:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "claude_daily_cap",
+                "plan": user.get("plan", "free"),
+                "cap": cap,
+                "message": (
+                    "Daily Claude limit reached. Upgrade to HF Pro for "
+                    f"{user_quotas.CLAUDE_PRO_DAILY}/day or use a free model."
+                ),
+            },
+        )
+    await user_quotas.increment_claude(user_id)
+    agent_session.claude_counted = True
 
 
 def _check_session_access(session_id: str, user: dict[str, Any]) -> None:
@@ -93,7 +165,7 @@ async def llm_health_check() -> LLMHealthResponse:
     """
     model = session_manager.config.model_name
     try:
-        llm_params = _resolve_hf_router_params(model)
+        llm_params = _resolve_llm_params(model, reasoning_effort="high")
         await acompletion(
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=1,
@@ -143,53 +215,58 @@ async def get_model() -> dict:
     }
 
 
-@router.post("/config/model")
-async def set_model(body: dict, user: dict = Depends(get_current_user)) -> dict:
-    """Set the LLM model. Applies to new conversations."""
-    model_id = body.get("model")
-    if not model_id:
-        raise HTTPException(status_code=400, detail="Missing 'model' field")
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model_id not in valid_ids:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
-    session_manager.config.model_name = model_id
-    logger.info(f"Model changed to {model_id} by {user.get('username', 'unknown')}")
-    return {"model": model_id}
+_TITLE_STRIP_CHARS = str.maketrans("", "", "`*_~#[]()")
 
 
 @router.post("/title")
 async def generate_title(
     request: SubmitRequest, user: dict = Depends(get_current_user)
 ) -> dict:
-    """Generate a short title for a chat session based on the first user message."""
-    model = session_manager.config.model_name
-    llm_params = _resolve_hf_router_params(model)
+    """Generate a short title for a chat session based on the first user message.
+
+    Always uses gpt-oss-120b via Cerebras on the HF router. The tab headline
+    renders as plain text, so the model is told to avoid markdown and any
+    stray formatting characters are stripped before returning. gpt-oss is a
+    reasoning model — reasoning_effort=low keeps the reasoning budget small
+    so the 60-token output budget isn't consumed before the title is written.
+    """
+    api_key = (
+        os.environ.get("INFERENCE_TOKEN")
+        or (user.get("hf_token") if isinstance(user, dict) else None)
+        or os.environ.get("HF_TOKEN")
+    )
     try:
         response = await acompletion(
+            # Double openai/ prefix: LiteLLM strips the first as its provider
+            # prefix, leaving the HF model id on the wire for the router.
+            model="openai/openai/gpt-oss-120b:cerebras",
+            api_base="https://router.huggingface.co/v1",
+            api_key=api_key,
             messages=[
                 {
                     "role": "system",
                     "content": (
                         "Generate a very short title (max 6 words) for a chat conversation "
                         "that starts with the following user message. "
-                        "Reply with ONLY the title, no quotes, no punctuation at the end."
+                        "Reply with ONLY the title in plain text. "
+                        "Do NOT use markdown, backticks, asterisks, quotes, brackets, or any "
+                        "formatting characters. No punctuation at the end."
                     ),
                 },
                 {"role": "user", "content": request.text[:500]},
             ],
-            max_tokens=20,
+            max_tokens=60,
             temperature=0.3,
-            timeout=8,
-            **llm_params,
+            timeout=10,
+            reasoning_effort="low",
         )
         title = response.choices[0].message.content.strip().strip('"').strip("'")
-        # Safety: cap at 50 chars
+        title = title.translate(_TITLE_STRIP_CHARS).strip()
         if len(title) > 50:
             title = title[:50].rstrip() + "…"
         return {"title": title}
     except Exception as e:
         logger.warning(f"Title generation failed: {e}")
-        # Fallback: truncate the message
         fallback = request.text.strip()
         title = fallback[:40].rstrip() + "…" if len(fallback) > 40 else fallback
         return {"title": title}
@@ -205,6 +282,10 @@ async def create_session(
     and stored in the session so that tools (e.g. hf_jobs) can act on
     behalf of the user.
 
+    Optional body ``{"model"?: <id>}`` selects the session's LLM; unknown
+    ids are rejected (400). The Claude-quota gate runs at message-submit
+    time, not here — spinning up an Opus session to look around is free.
+
     Returns 503 if the server or user has reached the session limit.
     """
     # Extract request token first, then fall back to local HF auth.
@@ -217,13 +298,86 @@ async def create_session(
     if not hf_token:
         hf_token = get_hf_token()
 
+    # Optional model override. Empty body falls back to the config default.
+    model: str | None = None
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        model = body.get("model")
+
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model and model not in valid_ids:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
+
+    # Opus is gated to HF staff (PR #63). Only fires when the resolved model
+    # is Anthropic; free models pass through.
+    resolved_model = model or session_manager.config.model_name
+    await _require_hf_for_anthropic(request, resolved_model)
+
     try:
         session_id = await session_manager.create_session(
-            user_id=user["user_id"], hf_token=hf_token
+            user_id=user["user_id"], hf_token=hf_token, model=model
         )
     except SessionCapacityError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
+    return SessionResponse(session_id=session_id, ready=True)
+
+
+@router.post("/session/restore-summary", response_model=SessionResponse)
+async def restore_session_summary(
+    request: Request, body: dict, user: dict = Depends(get_current_user)
+) -> SessionResponse:
+    """Create a new session seeded with a summary of the caller's prior
+    conversation. The client sends its cached messages; we run the standard
+    summarization prompt on them and drop the result into the new
+    session's context as a user-role system note.
+
+    Optional ``"model"`` in the body overrides the session's LLM. The
+    Claude-quota gate runs at message-submit time, not here.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise HTTPException(status_code=400, detail="Missing 'messages' array")
+
+    hf_token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        hf_token = auth_header[7:]
+    if not hf_token:
+        hf_token = request.cookies.get("hf_access_token")
+    if not hf_token:
+        hf_token = os.environ.get("HF_TOKEN")
+
+    model = body.get("model")
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model and model not in valid_ids:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
+
+    resolved_model = model or session_manager.config.model_name
+    await _require_hf_for_anthropic(request, resolved_model)
+
+    try:
+        session_id = await session_manager.create_session(
+            user_id=user["user_id"], hf_token=hf_token, model=model
+        )
+    except SessionCapacityError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    try:
+        summarized = await session_manager.seed_from_summary(session_id, messages)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.exception("seed_from_summary failed")
+        raise HTTPException(status_code=500, detail=f"Summary failed: {e}")
+
+    logger.info(
+        f"Seeded session {session_id} for {user.get('username', 'unknown')} "
+        f"(summary of {summarized} messages)"
+    )
     return SessionResponse(session_id=session_id, ready=True)
 
 
@@ -235,6 +389,55 @@ async def get_session(
     _check_session_access(session_id, user)
     info = session_manager.get_session_info(session_id)
     return SessionInfo(**info)
+
+
+@router.post("/session/{session_id}/model")
+async def set_session_model(
+    session_id: str,
+    body: dict,
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Switch the active model for a single session (tab-scoped).
+
+    Takes effect on the next LLM call in that session — other sessions
+    (including other browser tabs) are unaffected. Model switches don't
+    charge quota — the Claude-quota gate only fires at message-submit time.
+
+    Switching TO an Anthropic model requires HF org membership (PR #63);
+    free-model switches are unrestricted.
+    """
+    _check_session_access(session_id, user)
+    model_id = body.get("model")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="Missing 'model' field")
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model_id not in valid_ids:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
+    await _require_hf_for_anthropic(request, model_id)
+    agent_session = session_manager.sessions.get(session_id)
+    if not agent_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    agent_session.session.update_model(model_id)
+    logger.info(
+        f"Session {session_id} model → {model_id} "
+        f"(by {user.get('username', 'unknown')})"
+    )
+    return {"session_id": session_id, "model": model_id}
+
+
+@router.get("/user/quota")
+async def get_user_quota(user: dict = Depends(get_current_user)) -> dict:
+    """Return the user's plan tier and today's Claude-session quota state."""
+    plan = user.get("plan", "free")
+    used = await user_quotas.get_claude_used_today(user["user_id"])
+    cap = user_quotas.daily_cap_for(plan)
+    return {
+        "plan": plan,
+        "claude_used_today": used,
+        "claude_daily_cap": cap,
+        "claude_remaining": max(0, cap - used),
+    }
 
 
 @router.get("/sessions", response_model=list[SessionInfo])
@@ -262,6 +465,9 @@ async def submit_input(
 ) -> dict:
     """Submit user input to a session. Only accessible by the session owner."""
     _check_session_access(request.session_id, user)
+    agent_session = session_manager.sessions.get(request.session_id)
+    if agent_session is not None:
+        await _enforce_claude_quota(user, agent_session)
     success = await session_manager.submit_user_input(request.session_id, request.text)
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
@@ -313,6 +519,16 @@ async def chat_sse(
     # Submit the operation
     text = body.get("text")
     approvals = body.get("approvals")
+
+    # Gate user-message sends against the daily Claude quota. Approvals are
+    # continuations of an in-progress turn — the session was already charged
+    # on its first message, so we skip the gate there.
+    if text is not None and not approvals:
+        try:
+            await _enforce_claude_quota(user, agent_session)
+        except HTTPException:
+            broadcaster.unsubscribe(sub_id)
+            raise
 
     try:
         if approvals:

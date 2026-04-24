@@ -145,7 +145,7 @@ async def _ensure_sandbox(
     await asyncio.to_thread(
         metadata_update,
         sb.space_id,
-        {"title": "ml-agent sandbox"},
+        {"title": "ml-intern sandbox"},
         repo_type="space",
         overwrite=True,
         token=token,

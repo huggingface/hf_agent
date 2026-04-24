@@ -9,12 +9,13 @@ Inspired by claude-code's code-explorer agent pattern.
 
 import json
 import logging
-import os
 from typing import Any
 
 from litellm import Message, acompletion
 
 from agent.core.doom_loop import check_for_doom_loop
+from agent.core.llm_params import _resolve_llm_params
+from agent.core.prompt_caching import with_prompt_caching
 from agent.core.session import Event
 
 logger = logging.getLogger(__name__)
@@ -213,34 +214,16 @@ RESEARCH_TOOL_SPEC = {
 }
 
 
-def _resolve_llm_params(model_name: str) -> dict:
-    """Build LiteLLM kwargs, reusing the HF router logic from agent_loop."""
-    if not model_name.startswith("huggingface/"):
-        return {"model": model_name}
-
-    parts = model_name.split("/", 2)  # ["huggingface", "<provider>", "<org>/<model>"]
-    if len(parts) < 3:
-        return {"model": model_name}
-
-    provider = parts[1]
-    model_id = parts[2]
-    return {
-        "model": f"openai/{model_id}",
-        "api_base": f"https://router.huggingface.co/{provider}/v3/openai",
-        "api_key": os.environ.get("INFERENCE_TOKEN", ""),
-    }
-
-
 def _get_research_model(main_model: str) -> str:
     """Pick a cheaper model for research based on the main model."""
-    if "anthropic/" in main_model:
-        return "anthropic/claude-sonnet-4-6"
+    if "anthropic" in main_model:
+        return "bedrock/us.anthropic.claude-sonnet-4-6"
     # For non-Anthropic models (HF router etc.), use the same model
     return main_model
 
 
 async def research_handler(
-    arguments: dict[str, Any], session=None, **_kw
+    arguments: dict[str, Any], session=None, tool_call_id: str | None = None, **_kw
 ) -> tuple[str, bool]:
     """Execute a research sub-agent with its own context."""
     task = arguments.get("task", "")
@@ -264,7 +247,17 @@ async def research_handler(
     # Use a cheaper/faster model for research
     main_model = session.config.model_name
     research_model = _get_research_model(main_model)
-    llm_params = _resolve_llm_params(research_model)
+    # Research is a cheap sub-call — cap the main session's effort at "high"
+    # so a user preference of ``max``/``xhigh`` (valid for Opus 4.6/4.7) doesn't
+    # propagate to a Sonnet research model that may not accept those levels.
+    # We also haven't probed this sub-model so we don't know its ceiling.
+    _pref = getattr(session.config, "reasoning_effort", None)
+    _capped = "high" if _pref in ("max", "xhigh") else _pref
+    llm_params = _resolve_llm_params(
+        research_model,
+        getattr(session, "hf_token", None),
+        reasoning_effort=_capped,
+    )
 
     # Get read-only tool specs from the session's tool router
     tool_specs = [
@@ -273,11 +266,28 @@ async def research_handler(
         if spec["function"]["name"] in RESEARCH_TOOL_NAMES
     ]
 
+    # Unique ID + short label so parallel agents show separate status lines.
+    # Use the tool_call_id when available — it's unique per invocation and lets
+    # the frontend match a research tool card to its agent state. Fall back to
+    # uuid for offline/test paths. Previously used md5(task), which collided
+    # when the same task string was researched in parallel.
+    if tool_call_id:
+        _agent_id = tool_call_id
+    else:
+        import uuid
+        _agent_id = uuid.uuid4().hex[:8]
+    _agent_label = "research: " + (task[:50] + "…" if len(task) > 50 else task)
+
     async def _log(text: str) -> None:
         """Send a progress event to the UI so it doesn't look frozen."""
         try:
             await session.send_event(
-                Event(event_type="tool_log", data={"tool": "research", "log": text})
+                Event(event_type="tool_log", data={
+                    "tool": "research",
+                    "log": text,
+                    "agent_id": _agent_id,
+                    "label": _agent_label,
+                })
             )
         except Exception:
             pass
@@ -314,8 +324,9 @@ async def research_handler(
                 ),
             ))
             try:
+                _msgs, _ = with_prompt_caching(messages, None, llm_params.get("model"))
                 response = await acompletion(
-                    messages=messages,
+                    messages=_msgs,
                     tools=None,  # no tools — force text response
                     stream=False,
                     timeout=120,
@@ -339,9 +350,12 @@ async def research_handler(
             ))
 
         try:
+            _msgs, _tools = with_prompt_caching(
+                messages, tool_specs if tool_specs else None, llm_params.get("model")
+            )
             response = await acompletion(
-                messages=messages,
-                tools=tool_specs if tool_specs else None,
+                messages=_msgs,
+                tools=_tools,
                 tool_choice="auto",
                 stream=False,
                 timeout=120,
@@ -365,8 +379,16 @@ async def research_handler(
             content = msg.content or "Research completed but no summary generated."
             return content, True
 
-        # Execute tool calls and add results
-        messages.append(msg)
+        # Execute tool calls and add results.
+        # Rebuild the assistant message with only the wire-safe fields —
+        # LiteLLM's raw Message carries `provider_specific_fields` and
+        # `reasoning_content`, which the HF router's OpenAI schema rejects
+        # if we echo them back in the next request.
+        messages.append(Message(
+            role="assistant",
+            content=msg.content,
+            tool_calls=msg.tool_calls,
+        ))
         for tc in msg.tool_calls:
             try:
                 tool_args = json.loads(tc.function.arguments)
@@ -429,8 +451,9 @@ async def research_handler(
         ),
     ))
     try:
+        _msgs, _ = with_prompt_caching(messages, None, llm_params.get("model"))
         response = await acompletion(
-            messages=messages,
+            messages=_msgs,
             tools=None,
             stream=False,
             timeout=120,

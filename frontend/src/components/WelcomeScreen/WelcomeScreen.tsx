@@ -276,7 +276,7 @@ export default function WelcomeScreen() {
     typeof window !== 'undefined'
       ? window.location.hostname.includes('.hf.space')
         ? window.location.origin
-        : 'https://smolagents-ml-agent.hf.space'
+        : 'https://smolagents-ml-intern.hf.space'
       : '';
 
   return (

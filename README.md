@@ -1,22 +1,26 @@
-# ML Agent
+<p align="center">
+  <img src="frontend/public/smolagents.webp" alt="smolagents logo" width="160" />
+</p>
 
-An MLE agent that researches, writes, and ships good quality ML releated code using the Hugging Face ecosystem — with deep access to docs, papers, datasets, and cloud compute.
+# ML Intern
+
+An ML intern that autonomously researches, writes, and ships good quality ML releated code using the Hugging Face ecosystem — with deep access to docs, papers, datasets, and cloud compute.
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-git clone git@github.com:huggingface/ml-agent.git
-cd ml-agent
+git clone git@github.com:huggingface/ml-intern.git
+cd ml-intern
 uv sync
 uv tool install -e .
 ```
 
-#### That's it. Now `ml-agent` works from any directory:
+#### That's it. Now `ml-intern` works from any directory:
 
 ```bash
-ml-agent
+ml-intern
 ```
 
 Create a `.env` file in the project root (or export these in your shell):
@@ -33,21 +37,21 @@ If no `HF_TOKEN` is set, the CLI will use the token saved by `huggingface-cli lo
 **Interactive mode** (start a chat session):
 
 ```bash
-ml-agent
+ml-intern
 ```
 
 **Headless mode** (single prompt, auto-approve):
 
 ```bash
-ml-agent "fine-tune llama on my dataset"
+ml-intern "fine-tune llama on my dataset"
 ```
 
 **Options:**
 
 ```bash
-ml-agent --model anthropic/claude-opus-4-6 "your prompt"
-ml-agent --max-iterations 100 "your prompt"
-ml-agent --no-stream "your prompt"
+ml-intern --model anthropic/claude-opus-4-6 "your prompt"
+ml-intern --max-iterations 100 "your prompt"
+ml-intern --no-stream "your prompt"
 ```
 
 ## Architecture
