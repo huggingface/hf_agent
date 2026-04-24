@@ -17,6 +17,7 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 
 _resolve_llm_params = _MODULE._resolve_llm_params
+UnsupportedEffortError = _MODULE.UnsupportedEffortError
 
 
 def test_resolve_ollama_params_from_env():
@@ -105,3 +106,12 @@ def test_resolve_generic_local_params_trims_trailing_slash():
             os.environ.pop("LOCAL_LLM_BASE_URL", None)
         else:
             os.environ["LOCAL_LLM_BASE_URL"] = old_base
+
+
+def test_local_params_reject_reasoning_effort_in_strict_mode():
+    try:
+        _resolve_llm_params("ollama/llama3.1", reasoning_effort="high", strict=True)
+    except UnsupportedEffortError as exc:
+        assert "reasoning_effort" in str(exc)
+    else:
+        raise AssertionError("Expected UnsupportedEffortError")

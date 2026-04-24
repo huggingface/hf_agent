@@ -85,6 +85,13 @@ class UnsupportedEffortError(ValueError):
     """
 
 
+def _raise_for_local_effort(reasoning_effort: str | None, strict: bool) -> None:
+    if reasoning_effort and strict:
+        raise UnsupportedEffortError(
+            "Local OpenAI-compatible endpoints don't accept reasoning_effort"
+        )
+
+
 def _resolve_llm_params(
     model_name: str,
     session_hf_token: str | None = None,
@@ -176,6 +183,7 @@ def _resolve_llm_params(
         return params
 
     if model_name.startswith("ollama/"):
+        _raise_for_local_effort(reasoning_effort, strict)
         local_model = model_name.split("/", 1)[1]
         api_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         return {
@@ -185,6 +193,7 @@ def _resolve_llm_params(
         }
 
     if model_name.startswith("vllm/"):
+        _raise_for_local_effort(reasoning_effort, strict)
         local_model = model_name.split("/", 1)[1]
         api_base = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
         return {
@@ -194,6 +203,7 @@ def _resolve_llm_params(
         }
 
     if model_name.startswith("llamacpp/"):
+        _raise_for_local_effort(reasoning_effort, strict)
         local_model = model_name.split("/", 1)[1]
         api_base = os.environ.get("LLAMACPP_BASE_URL", "http://localhost:8001")
         return {
@@ -203,6 +213,7 @@ def _resolve_llm_params(
         }
 
     if model_name.startswith("local://"):
+        _raise_for_local_effort(reasoning_effort, strict)
         local_model = model_name.split("://", 1)[1]
         api_base = os.environ.get("LOCAL_LLM_BASE_URL", "http://localhost:8000")
         return {

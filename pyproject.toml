@@ -57,7 +57,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agent*"]
+include = ["agent*", "ml_intern*"]
 
 [tool.uv]
 package = true
