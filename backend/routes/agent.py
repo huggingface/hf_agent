@@ -19,6 +19,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from litellm import acompletion
+from model_catalog import get_available_models, is_anthropic_model, is_valid_model_id
 from models import (
     ApprovalRequest,
     HealthResponse,
@@ -38,51 +39,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
 
-AVAILABLE_MODELS = [
-    {
-        "id": "moonshotai/Kimi-K2.6",
-        "label": "Kimi K2.6",
-        "provider": "huggingface",
-        "tier": "free",
-        "recommended": True,
-    },
-    {
-        "id": "bedrock/us.anthropic.claude-opus-4-6-v1",
-        "label": "Claude Opus 4.6",
-        "provider": "anthropic",
-        "tier": "pro",
-        "recommended": True,
-    },
-    {
-        "id": "MiniMaxAI/MiniMax-M2.7",
-        "label": "MiniMax M2.7",
-        "provider": "huggingface",
-        "tier": "free",
-    },
-    {
-        "id": "zai-org/GLM-5.1",
-        "label": "GLM 5.1",
-        "provider": "huggingface",
-        "tier": "free",
-    },
-]
-
-
-def _is_anthropic_model(model_id: str) -> bool:
-    return "anthropic" in model_id
-
 
 async def _require_hf_for_anthropic(request: Request, model_id: str) -> None:
     """403 if a non-``huggingface``-org user tries to select an Anthropic model.
 
     Anthropic models are billed to the Space's ``ANTHROPIC_API_KEY``; every
-    other model in ``AVAILABLE_MODELS`` is routed through HF Router and
+    other configured cloud model is routed through HF Router and
     billed via ``X-HF-Bill-To``. The gate only fires for Anthropic so
     non-HF users can still freely switch between the free models.
 
     Pattern: https://github.com/huggingface/ml-intern/pull/63
     """
-    if not _is_anthropic_model(model_id):
+    if not is_anthropic_model(model_id):
         return
     if not await require_huggingface_org_member(request):
         raise HTTPException(
@@ -114,7 +82,7 @@ async def _enforce_claude_quota(
     if agent_session.claude_counted:
         return
     model_name = agent_session.session.config.model_name
-    if not _is_anthropic_model(model_name):
+    if not is_anthropic_model(model_name):
         return
     user_id = user["user_id"]
     used = await user_quotas.get_claude_used_today(user_id)
@@ -213,7 +181,7 @@ async def get_model() -> dict:
     """Get current model and available models. No auth required."""
     return {
         "current": session_manager.config.model_name,
-        "available": AVAILABLE_MODELS,
+        "available": get_available_models(),
     }
 
 
@@ -309,8 +277,7 @@ async def create_session(
     if isinstance(body, dict):
         model = body.get("model")
 
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model and model not in valid_ids:
+    if model and not is_valid_model_id(model):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
 
     # Opus is gated to HF staff (PR #63). Only fires when the resolved model
@@ -354,8 +321,7 @@ async def restore_session_summary(
         hf_token = os.environ.get("HF_TOKEN")
 
     model = body.get("model")
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model and model not in valid_ids:
+    if model and not is_valid_model_id(model):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
 
     resolved_model = model or session_manager.config.model_name
@@ -413,8 +379,7 @@ async def set_session_model(
     model_id = body.get("model")
     if not model_id:
         raise HTTPException(status_code=400, detail="Missing 'model' field")
-    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
-    if model_id not in valid_ids:
+    if not is_valid_model_id(model_id):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
     await _require_hf_for_anthropic(request, model_id)
     agent_session = session_manager.sessions.get(session_id)
@@ -729,5 +694,3 @@ async def submit_feedback(
             agent_session.session.config.session_dataset_repo
         )
     return {"status": "ok"}
-
-
