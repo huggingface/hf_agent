@@ -63,6 +63,34 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
     updateSession(sessionId, { activityStatus: { type: 'cancelled' } });
   }, [stop, updateSession, sessionId]);
 
+  // Regenerate the latest assistant reply: find the user turn that prompted it,
+  // then call editAndRegenerate(userId, sameText). That hook drops that user
+  // message and everything after it (including the old assistant message) from
+  // both UI state and backend history, then submits a fresh user message.
+  const handleRegenerateAssistant = useCallback(
+    async (assistantMessageId: string) => {
+      const idx = messages.findIndex((m) => m.id === assistantMessageId);
+      if (idx <= 0) return;
+      let userMsg: typeof messages[number] | null = null;
+      for (let i = idx - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') {
+          userMsg = messages[i];
+          break;
+        }
+      }
+      if (!userMsg) return;
+      const text = userMsg.parts
+        .filter((p): p is Extract<typeof userMsg.parts[number], { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n\n')
+        .trim();
+      if (!text) return;
+      updateSession(sessionId, { isProcessing: true, activityStatus: { type: 'thinking' } });
+      await editAndRegenerate(userMsg.id, text);
+    },
+    [messages, editAndRegenerate, sessionId, updateSession],
+  );
+
   // SDK status is the ground truth — if it's streaming/submitted, agent is busy
   const sdkBusy = status === 'streaming' || status === 'submitted';
   const busy = isProcessing || sdkBusy;
@@ -105,6 +133,7 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
         approveTools={approveTools}
         onUndoLastTurn={undoLastTurn}
         onEditAndRegenerate={editAndRegenerate}
+        onRegenerateAssistant={handleRegenerateAssistant}
       />
       {isExpired ? (
         <ExpiredBanner sessionId={sessionId} />

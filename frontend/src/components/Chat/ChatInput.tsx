@@ -1,13 +1,27 @@
 import { useState, useCallback, useEffect, useRef, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Chip } from '@mui/material';
+import {
+  Box,
+  TextField,
+  IconButton,
+  CircularProgress,
+  Typography,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  Chip,
+  Button,
+} from '@mui/material';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import StopIcon from '@mui/icons-material/Stop';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { apiFetch } from '@/utils/api';
 import { useUserQuota } from '@/hooks/useUserQuota';
 import ClaudeCapDialog from '@/components/ClaudeCapDialog';
 import { useAgentStore } from '@/store/agentStore';
 import { FIRST_FREE_MODEL_PATH } from '@/utils/model';
+import ExamplePromptsDialog from '@/components/Chat/ExamplePromptsDialog';
 
 // Model configuration
 interface ModelOption {
@@ -73,11 +87,19 @@ interface ChatInputProps {
 const isClaudeModel = (m: ModelOption) => m.modelPath.startsWith('anthropic/');
 const firstFreeModel = () => MODEL_OPTIONS.find(m => !isClaudeModel(m)) ?? MODEL_OPTIONS[0];
 
-export default function ChatInput({ sessionId, onSend, onStop, isProcessing = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
+export default function ChatInput({
+  sessionId,
+  onSend,
+  onStop,
+  isProcessing = false,
+  disabled = false,
+  placeholder = 'Describe what you want to research, build, or ship....',
+}: ChatInputProps) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [selectedModelId, setSelectedModelId] = useState<string>(MODEL_OPTIONS[0].id);
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
+  const [promptsOpen, setPromptsOpen] = useState(false);
   const { quota, refresh: refreshQuota } = useUserQuota();
   // The daily-cap dialog is triggered from two places: (a) a 429 returned
   // from the chat transport when the user tries to send on Opus over cap —
@@ -168,6 +190,12 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
     } catch { /* ignore */ }
   };
 
+  const handleUsePrompt = useCallback((prompt: string) => {
+    setInput(prompt);
+    setPromptsOpen(false);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, []);
+
   // Dialog close: just clear the flag. The typed text is already restored.
   const handleCapDialogClose = useCallback(() => {
     setClaudeQuotaExhausted(false);
@@ -221,16 +249,17 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
           className="composer"
           sx={{
             display: 'flex',
-            gap: '10px',
+            gap: '12px',
             alignItems: 'flex-start',
             bgcolor: 'var(--composer-bg)',
             borderRadius: 'var(--radius-md)',
-            p: '12px',
+            p: '14px',
             border: '1px solid var(--border)',
-            transition: 'box-shadow 0.2s ease, border-color 0.2s ease',
+            transition: 'box-shadow 0.2s ease, border-color 0.2s ease, transform 0.18s ease',
             '&:focus-within': {
                 borderColor: 'var(--accent-yellow)',
                 boxShadow: 'var(--focus)',
+                transform: 'translateY(-1px)',
             }
           }}
         >
@@ -249,11 +278,11 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
                 disableUnderline: true,
                 sx: {
                     color: 'var(--text)',
-                    fontSize: '15px',
+                    fontSize: '0.96rem',
                     fontFamily: 'inherit',
                     padding: 0,
                     lineHeight: 1.5,
-                    minHeight: { xs: '44px', md: '56px' },
+                    minHeight: { xs: '46px', md: '58px' },
                     alignItems: 'flex-start',
                 }
             }}
@@ -314,35 +343,66 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
           )}
         </Box>
 
-        {/* Powered By Badge */}
         <Box
-          onClick={handleModelClick}
           sx={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            mt: 1.5,
-            gap: 0.8,
-            opacity: 0.6,
-            cursor: 'pointer',
-            transition: 'opacity 0.2s',
-            '&:hover': {
-              opacity: 1
-            }
+            justifyContent: 'space-between',
+            mt: 1.25,
+            gap: 1,
+            flexWrap: 'wrap',
           }}
         >
-          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
-            powered by
-          </Typography>
-          <img
-            src={selectedModel.avatarUrl}
-            alt={selectedModel.name}
-            style={{ height: '14px', width: '14px', objectFit: 'contain', borderRadius: '2px' }}
-          />
-          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            {selectedModel.name}
-          </Typography>
-          <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
+          <Button
+            variant="outlined"
+            onClick={() => setPromptsOpen(true)}
+            startIcon={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+            sx={{
+              borderColor: 'var(--border)',
+              color: 'var(--text)',
+              borderRadius: '999px',
+              px: 1.5,
+              py: 0.55,
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              '&:hover': {
+                borderColor: 'var(--accent-yellow)',
+                bgcolor: 'var(--hover-bg)',
+              },
+            }}
+          >
+            Example Prompts
+          </Button>
+
+          {/* Model Badge */}
+          <Box
+            onClick={handleModelClick}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.8,
+              opacity: 0.72,
+              cursor: 'pointer',
+              transition: 'opacity 0.2s, transform 0.2s',
+              '&:hover': {
+                opacity: 1,
+                transform: 'translateY(-1px)',
+              },
+            }}
+          >
+            <Typography variant="caption" sx={{ fontSize: '0.62rem', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+              Model
+            </Typography>
+            <img
+              src={selectedModel.avatarUrl}
+              alt={selectedModel.name}
+              style={{ height: '14px', width: '14px', objectFit: 'contain', borderRadius: '2px' }}
+            />
+            <Typography variant="caption" sx={{ fontSize: '0.7rem', color: 'var(--text)', fontWeight: 700, letterSpacing: '0.02em' }}>
+              {selectedModel.name}
+            </Typography>
+            <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
+          </Box>
         </Box>
 
         {/* Model Selection Menu */}
@@ -429,6 +489,11 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
           ))}
         </Menu>
 
+        <ExamplePromptsDialog
+          open={promptsOpen}
+          onClose={() => setPromptsOpen(false)}
+          onSelectPrompt={handleUsePrompt}
+        />
         <ClaudeCapDialog
           open={claudeQuotaExhausted}
           plan={quota?.plan ?? 'free'}

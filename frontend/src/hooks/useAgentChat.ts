@@ -717,13 +717,16 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
   }, [sessionId, updateSession]);
 
   // -- Edit message + regenerate from that point ----------------------------
+  // Dropping the target message and everything after (slice(0, msgIndex)) so there
+  // is no duplicate user turn or orphaned assistant reply; backend truncate matches.
+  // Assistant "regenerate" reuses this by passing the *preceding* user message id.
   const editAndRegenerate = useCallback(async (messageId: string, newText: string) => {
     try {
       const msgs = chatActionsRef.current.messages;
       const setMsgs = chatActionsRef.current.setMessages;
       if (!setMsgs) return;
 
-      // Find the target message and compute user message index (0-indexed, skipping system)
+      // Find the target user message and compute its index among user turns (for /api/truncate)
       const msgIndex = msgs.findIndex(m => m.id === messageId);
       if (msgIndex < 0) return;
 
