@@ -355,15 +355,16 @@ def _csv_cell(v: Any) -> str:
     return s
 
 
-def _write_csv(row: dict, bucket_key: str, path_in_repo: str, target_repo: str, token: str) -> None:
+def _write_csv(
+    api, row: dict, bucket_key: str, path_in_repo: str, target_repo: str, token: str,
+) -> None:
     """Render ``row`` to CSV with a leading ``bucket`` column and upload.
 
     ``bucket_key`` is the hour string (ISO ``YYYY-MM-DDTHH``) or date string;
     written as the ``bucket`` column so downstream consumers can union all
-    CSVs without date-parsing paths.
+    CSVs without date-parsing paths. ``api`` is the caller's ``HfApi``
+    instance — reused so we don't spin up a fresh one per CSV.
     """
-    from huggingface_hub import HfApi
-    api = HfApi()
     columns = list(row.keys())
     buf = io.StringIO()
     buf.write(",".join(["bucket", *columns]) + "\n")
@@ -428,7 +429,7 @@ def run_for_hour(
     row = _aggregate(per_session)
     bucket_key = window_start.strftime("%Y-%m-%dT%H")
     path_in_repo = f"hourly/{window_start.strftime('%Y-%m-%d')}/{window_start.strftime('%H')}.csv"
-    _write_csv(row, bucket_key, path_in_repo, target_repo, token)
+    _write_csv(api, row, bucket_key, path_in_repo, target_repo, token)
     logger.info("Wrote KPIs for %s (%d sessions): %s",
                 bucket_key, per_session and len(per_session), row)
     return row
@@ -448,7 +449,7 @@ def run_for_day(api, source_repo: str, target_repo: str, day: date, token: str) 
         return {}
     row = _aggregate(per_session)
     path_in_repo = f"daily/{day.isoformat()}.csv"
-    _write_csv(row, day.isoformat(), path_in_repo, target_repo, token)
+    _write_csv(api, row, day.isoformat(), path_in_repo, target_repo, token)
     return row
 
 

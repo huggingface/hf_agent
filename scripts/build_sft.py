@@ -171,9 +171,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    token = os.environ.get("HF_SFT_WRITE_TOKEN") or os.environ.get("HF_TOKEN")
+    token = (
+        os.environ.get("HF_SFT_WRITE_TOKEN")
+        or os.environ.get("HF_SESSION_UPLOAD_TOKEN")
+        or os.environ.get("HF_TOKEN")
+        or os.environ.get("HF_ADMIN_TOKEN")
+    )
     if not token:
-        logger.error("HF_SFT_WRITE_TOKEN or HF_TOKEN must be set.")
+        logger.error(
+            "No HF token found. Set one of: HF_SFT_WRITE_TOKEN, "
+            "HF_SESSION_UPLOAD_TOKEN, HF_TOKEN, HF_ADMIN_TOKEN."
+        )
         return 1
 
     from huggingface_hub import HfApi
