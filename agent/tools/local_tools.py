@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -100,28 +100,29 @@ async def _bash_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
     work_dir = args.get("work_dir", ".")
     timeout = min(args.get("timeout") or DEFAULT_TIMEOUT, MAX_TIMEOUT)
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "-c", command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             cwd=work_dir,
-            timeout=timeout,
         )
-        output = _strip_ansi(result.stdout + result.stderr)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return (
+                f"Command timed out after {timeout}s and was killed.\n\n"
+                f"For long-running commands, run in the background and poll:\n"
+                f"  nohup <command> > /tmp/output.log 2>&1 & echo $!\n"
+                f"Then check status with:\n"
+                f"  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
+                f"  tail -n 50 /tmp/output.log"
+            ), False
+        output = _strip_ansi(stdout.decode() + stderr.decode())
         output = _truncate_output(output)
         if not output.strip():
             output = "(no output)"
-        return output, result.returncode == 0
-    except subprocess.TimeoutExpired:
-        return (
-            f"Command timed out after {timeout}s and was killed.\n\n"
-            f"For long-running commands, run in the background and poll:\n"
-            f"  nohup <command> > /tmp/output.log 2>&1 & echo $!\n"
-            f"Then check status with:\n"
-            f"  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
-            f"  tail -n 50 /tmp/output.log"
-        ), False
+        return output, proc.returncode == 0
     except Exception as e:
         return f"bash error: {e}", False
 
