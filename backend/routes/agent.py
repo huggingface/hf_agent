@@ -32,6 +32,7 @@ from session_manager import MAX_SESSIONS, AgentSession, SessionCapacityError, se
 
 import user_quotas
 
+from agent.core.llm_errors import health_error_type, render_llm_error_message
 from agent.core.llm_params import _resolve_llm_params
 
 logger = logging.getLogger(__name__)
@@ -176,34 +177,12 @@ async def llm_health_check() -> LLMHealthResponse:
         )
         return LLMHealthResponse(status="ok", model=model)
     except Exception as e:
-        err_str = str(e).lower()
-        error_type = "unknown"
-
-        if (
-            "401" in err_str
-            or "auth" in err_str
-            or "invalid" in err_str
-            or "api key" in err_str
-        ):
-            error_type = "auth"
-        elif (
-            "402" in err_str
-            or "credit" in err_str
-            or "quota" in err_str
-            or "insufficient" in err_str
-            or "billing" in err_str
-        ):
-            error_type = "credits"
-        elif "429" in err_str or "rate" in err_str:
-            error_type = "rate_limit"
-        elif "timeout" in err_str or "connect" in err_str or "network" in err_str:
-            error_type = "network"
-
+        error_type = health_error_type(e)
         logger.warning(f"LLM health check failed ({error_type}): {e}")
         return LLMHealthResponse(
             status="error",
             model=model,
-            error=str(e)[:500],
+            error=render_llm_error_message(e)[:500],
             error_type=error_type,
         )
 
