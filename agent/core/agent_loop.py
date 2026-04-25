@@ -13,6 +13,7 @@ from litellm import ChatCompletionMessageToolCall, Message, acompletion
 from litellm.exceptions import ContextWindowExceededError
 
 from agent.config import Config
+from agent.messaging.gateway import NotificationGateway
 from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
@@ -1230,6 +1231,8 @@ async def submission_loop(
     hf_token: str | None = None,
     local_mode: bool = False,
     stream: bool = True,
+    notification_gateway: NotificationGateway | None = None,
+    notification_destinations: list[str] | None = None,
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.
@@ -1240,6 +1243,8 @@ async def submission_loop(
     session = Session(
         event_queue, config=config, tool_router=tool_router, hf_token=hf_token,
         local_mode=local_mode, stream=stream,
+        notification_gateway=notification_gateway,
+        notification_destinations=notification_destinations,
     )
     if session_holder is not None:
         session_holder[0] = session
