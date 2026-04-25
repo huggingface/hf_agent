@@ -56,7 +56,18 @@ ml-intern --no-stream "your prompt"
 
 ### Running inside Claude Code
 
-The repo also runs as a Claude Code project. From the repo root:
+Two ways:
+
+**As a plugin** (use ml-intern's slash commands and tools in *any* repo):
+
+```
+/plugin marketplace add huggingface/ml-intern
+/plugin install ml-intern@ml-intern
+```
+
+See [`plugin/README.md`](plugin/README.md) for plugin docs.
+
+**As a project** (this repo, for hacking on ml-intern itself). From the repo root:
 
 ```bash
 claude                                          # interactive
