@@ -7,9 +7,9 @@
  * `huggingface/` prefix) — matches upstream's auto-router.
  */
 
-export const CLAUDE_MODEL_PATH = 'anthropic/claude-opus-4-6';
+export const CLAUDE_MODEL_PATH = 'bedrock/us.anthropic.claude-opus-4-6-v1';
 export const FIRST_FREE_MODEL_PATH = 'moonshotai/Kimi-K2.6';
 
 export function isClaudePath(modelPath: string | undefined): boolean {
-  return !!modelPath && modelPath.startsWith('anthropic/');
+  return !!modelPath && modelPath.includes('anthropic');
 }

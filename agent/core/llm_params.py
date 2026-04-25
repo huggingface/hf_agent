@@ -74,6 +74,7 @@ _patch_litellm_effort_validation()
 _ANTHROPIC_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 _OPENAI_EFFORTS = {"minimal", "low", "medium", "high"}
 _HF_EFFORTS = {"low", "medium", "high"}
+_LOCAL_DEFAULT_API_KEY = "sk-no-key-required"
 
 
 class UnsupportedEffortError(ValueError):
@@ -82,6 +83,13 @@ class UnsupportedEffortError(ValueError):
     Raised synchronously before any network call so the probe cascade can
     skip levels the provider can't accept (e.g. ``max`` on HF router).
     """
+
+
+def _raise_for_local_effort(reasoning_effort: str | None, strict: bool) -> None:
+    if reasoning_effort and strict:
+        raise UnsupportedEffortError(
+            "Local OpenAI-compatible endpoints don't accept reasoning_effort"
+        )
 
 
 def _resolve_llm_params(
@@ -173,6 +181,46 @@ def _resolve_llm_params(
             else:
                 params["reasoning_effort"] = reasoning_effort
         return params
+
+    if model_name.startswith("ollama/"):
+        _raise_for_local_effort(reasoning_effort, strict)
+        local_model = model_name.split("/", 1)[1]
+        api_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        return {
+            "model": f"openai/{local_model}",
+            "api_base": f"{api_base.rstrip('/')}/v1",
+            "api_key": os.environ.get("OLLAMA_API_KEY", _LOCAL_DEFAULT_API_KEY),
+        }
+
+    if model_name.startswith("vllm/"):
+        _raise_for_local_effort(reasoning_effort, strict)
+        local_model = model_name.split("/", 1)[1]
+        api_base = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
+        return {
+            "model": f"openai/{local_model}",
+            "api_base": f"{api_base.rstrip('/')}/v1",
+            "api_key": os.environ.get("VLLM_API_KEY", _LOCAL_DEFAULT_API_KEY),
+        }
+
+    if model_name.startswith("llamacpp/"):
+        _raise_for_local_effort(reasoning_effort, strict)
+        local_model = model_name.split("/", 1)[1]
+        api_base = os.environ.get("LLAMACPP_BASE_URL", "http://localhost:8001")
+        return {
+            "model": f"openai/{local_model}",
+            "api_base": f"{api_base.rstrip('/')}/v1",
+            "api_key": os.environ.get("LLAMACPP_API_KEY", _LOCAL_DEFAULT_API_KEY),
+        }
+
+    if model_name.startswith("local://"):
+        _raise_for_local_effort(reasoning_effort, strict)
+        local_model = model_name.split("://", 1)[1]
+        api_base = os.environ.get("LOCAL_LLM_BASE_URL", "http://localhost:8000")
+        return {
+            "model": f"openai/{local_model}",
+            "api_base": f"{api_base.rstrip('/')}/v1",
+            "api_key": os.environ.get("LOCAL_LLM_API_KEY", _LOCAL_DEFAULT_API_KEY),
+        }
 
     hf_model = model_name.removeprefix("huggingface/")
     api_key = (
