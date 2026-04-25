@@ -150,29 +150,6 @@ def _is_effort_config_error(error: Exception) -> bool:
     return _is_thinking_unsupported(error) or _is_invalid_effort(error)
 
 
-def _is_bedrock_streaming_permission_error(error: Exception) -> bool:
-    """Return True when Bedrock rejects streaming due to missing IAM permission."""
-    err_str = str(error).lower()
-    if "invokemodelwithresponsestream" not in err_str:
-        return False
-
-    auth_markers = ["not authorized", "accessdenied", "forbidden", "permission"]
-    bedrock_markers = ["bedrock", "inference-profile", "converse-stream"]
-    return any(marker in err_str for marker in auth_markers) and any(
-        marker in err_str for marker in bedrock_markers
-    )
-
-
-def _is_bedrock_invoke_permission_error(error: Exception) -> bool:
-    """Return True when Bedrock rejects model invocation due to IAM policy."""
-    err_str = str(error).lower()
-    if "bedrock" not in err_str or "invokemodel" not in err_str:
-        return False
-
-    auth_markers = ["not authorized", "accessdenied", "forbidden", "permission"]
-    return any(marker in err_str for marker in auth_markers)
-
-
 async def _heal_effort_and_rebuild_params(
     session: Session, error: Exception, llm_params: dict,
 ) -> dict:
@@ -216,23 +193,6 @@ async def _heal_effort_and_rebuild_params(
 def _friendly_error_message(error: Exception) -> str | None:
     """Return a user-friendly message for known error types, or None to fall back to traceback."""
     err_str = str(error).lower()
-
-    if _is_bedrock_streaming_permission_error(error):
-        return (
-            "Bedrock denied streaming for this model.\n\n"
-            "Your AWS role is missing `bedrock:InvokeModelWithResponseStream` for "
-            "the selected inference profile. Run `ml-intern --no-stream ...` or "
-            "update the IAM policy to allow that action."
-        )
-
-    if _is_bedrock_invoke_permission_error(error):
-        return (
-            "Bedrock access was denied for this model.\n\n"
-            "Your AWS role needs permission to invoke the selected Bedrock model "
-            "or inference profile. Ensure the policy allows `bedrock:InvokeModel`, "
-            "and if you want token streaming, also allow "
-            "`bedrock:InvokeModelWithResponseStream`."
-        )
 
     if "authentication" in err_str or "unauthorized" in err_str or "invalid x-api-key" in err_str:
         return (
@@ -362,23 +322,6 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
                     data={"tool": "system", "log": "Reasoning effort not supported for this model — adjusting and retrying."},
                 ))
                 continue
-            if _is_bedrock_streaming_permission_error(e):
-                session.stream = False
-                await session.send_event(
-                    Event(
-                        event_type="tool_log",
-                        data={
-                            "tool": "system",
-                            "log": (
-                                "Bedrock rejected streaming for this role — "
-                                "switching this session to non-streaming mode."
-                            ),
-                        },
-                    )
-                )
-                return await _call_llm_non_streaming(
-                    session, messages, tools, llm_params
-                )
             if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
                 _delay = _LLM_RETRY_DELAYS[_llm_attempt]
                 logger.warning(
