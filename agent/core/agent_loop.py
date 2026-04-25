@@ -6,12 +6,14 @@ import asyncio
 import json
 import logging
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from litellm import ChatCompletionMessageToolCall, Message, acompletion
 from litellm.exceptions import ContextWindowExceededError
 
 from agent.config import Config
+from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
 from agent.core.prompt_caching import with_prompt_caching
@@ -291,6 +293,7 @@ class LLMResult:
     tool_calls_acc: dict[int, dict]
     token_count: int
     finish_reason: str | None
+    usage: dict = field(default_factory=dict)
 
 
 async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> LLMResult:
@@ -298,6 +301,7 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
     response = None
     _healed_effort = False  # one-shot safety net per call
     messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
+    t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
         try:
             response = await acompletion(
@@ -339,6 +343,7 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
     tool_calls_acc: dict[int, dict] = {}
     token_count = 0
     finish_reason = None
+    final_usage_chunk = None
 
     async for chunk in response:
         if session.is_cancelled:
@@ -349,6 +354,7 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
         if not choice:
             if hasattr(chunk, "usage") and chunk.usage:
                 token_count = chunk.usage.total_tokens
+                final_usage_chunk = chunk
             continue
 
         delta = choice.delta
@@ -379,12 +385,22 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
 
         if hasattr(chunk, "usage") and chunk.usage:
             token_count = chunk.usage.total_tokens
+            final_usage_chunk = chunk
+
+    usage = await telemetry.record_llm_call(
+        session,
+        model=llm_params.get("model", session.config.model_name),
+        response=final_usage_chunk,
+        latency_ms=int((time.monotonic() - t_start) * 1000),
+        finish_reason=finish_reason,
+    )
 
     return LLMResult(
         content=full_content or None,
         tool_calls_acc=tool_calls_acc,
         token_count=token_count,
         finish_reason=finish_reason,
+        usage=usage,
     )
 
 
@@ -393,6 +409,7 @@ async def _call_llm_non_streaming(session: Session, messages, tools, llm_params)
     response = None
     _healed_effort = False
     messages, tools = with_prompt_caching(messages, tools, llm_params.get("model"))
+    t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
         try:
             response = await acompletion(
@@ -454,11 +471,20 @@ async def _call_llm_non_streaming(session: Session, messages, tools, llm_params)
             Event(event_type="assistant_message", data={"content": content})
         )
 
+    usage = await telemetry.record_llm_call(
+        session,
+        model=llm_params.get("model", session.config.model_name),
+        response=response,
+        latency_ms=int((time.monotonic() - t_start) * 1000),
+        finish_reason=finish_reason,
+    )
+
     return LLMResult(
         content=content,
         tool_calls_acc=tool_calls_acc,
         token_count=token_count,
         finish_reason=finish_reason,
+        usage=usage,
     )
 
 
