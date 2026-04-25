@@ -3,7 +3,7 @@
 Split out of ``agent.main`` so the REPL dispatcher stays focused on input
 parsing. Exposes:
 
-* ``SUGGESTED_MODELS`` — the short list shown by ``/model`` with no arg.
+* Adapter-driven model catalog rendered by ``/model`` with no arg.
 * ``is_valid_model_id`` — loose format check on user input.
 * ``probe_and_switch_model`` — async: checks routing, fires a 1-token
   probe to resolve the effort cascade, then commits the switch (or
@@ -16,20 +16,14 @@ glues it to CLI output + session state.
 from __future__ import annotations
 
 from agent.core.effort_probe import ProbeInconclusive, probe_effort
-
-
-# Suggested models shown by `/model` (not a gate). Users can paste any HF
-# model id (e.g. "MiniMaxAI/MiniMax-M2.7") or an `anthropic/` / `openai/`
-# prefix for direct API access. For HF ids, append ":fastest" /
-# ":cheapest" / ":preferred" / ":<provider>" to override the default
-# routing policy (auto = fastest with failover).
-SUGGESTED_MODELS = [
-    {"id": "bedrock/us.anthropic.claude-opus-4-7", "label": "Claude Opus 4.7"},
-    {"id": "bedrock/us.anthropic.claude-opus-4-6-v1", "label": "Claude Opus 4.6"},
-    {"id": "MiniMaxAI/MiniMax-M2.7", "label": "MiniMax M2.7"},
-    {"id": "moonshotai/Kimi-K2.6", "label": "Kimi K2.6"},
-    {"id": "zai-org/GLM-5.1", "label": "GLM 5.1"},
-]
+from agent.core.llm_errors import render_llm_error_message
+from agent.core.provider_adapters import (
+    ADAPTERS,
+    find_model_option,
+    get_available_models,
+    is_valid_model_name,
+    resolve_adapter,
+)
 
 
 _ROUTING_POLICIES = {"fastest", "cheapest", "preferred"}
@@ -47,11 +41,7 @@ def is_valid_model_id(model_id: str) -> bool:
     Actual availability is verified against the HF router catalog on
     switch, and by the provider on the probe's ping call.
     """
-    if not model_id or "/" not in model_id:
-        return False
-    head = model_id.split(":", 1)[0]
-    parts = head.split("/")
-    return len(parts) >= 2 and all(parts)
+    return is_valid_model_name(model_id)
 
 
 def _print_hf_routing_info(model_id: str, console) -> bool:
@@ -63,7 +53,8 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     Anthropic / OpenAI ids return ``True`` without printing anything —
     the probe below covers "does this model exist".
     """
-    if model_id.startswith(("anthropic/", "openai/")):
+    adapter = resolve_adapter(model_id)
+    if adapter and adapter.provider_id != "huggingface":
         return True
 
     from agent.core import hf_router_catalog as cat
@@ -125,18 +116,45 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
 
 
 def print_model_listing(config, console) -> None:
-    """Render the default ``/model`` (no-arg) view: current + suggested."""
+    """Render the default ``/model`` (no-arg) view: current + available."""
     current = config.model_name if config else ""
+    current_info = find_model_option(current)
+    available = get_available_models()
+
     console.print("[bold]Current model:[/bold]")
-    console.print(f"  {current}")
-    console.print("\n[bold]Suggested:[/bold]")
-    for m in SUGGESTED_MODELS:
-        marker = " [dim]<-- current[/dim]" if m["id"] == current else ""
-        console.print(f"  {m['id']}  [dim]({m['label']})[/dim]{marker}")
+    if current_info:
+        console.print(f"  {current}  [dim]({current_info['label']})[/dim]")
+    else:
+        console.print(f"  {current}")
+
+    console.print("\n[bold]Available:[/bold]")
+    for adapter in ADAPTERS:
+        section = [m for m in available if m.get("provider") == adapter.provider_id]
+        if not section:
+            if adapter.provider_id == "openai_compat" and adapter.should_show():
+                console.print(f"\n[bold]{adapter.provider_label}[/bold]")
+                console.print("  [dim]Use openai-compat/<model-id>[/dim]")
+            continue
+
+        console.print(f"\n[bold]{adapter.provider_label}[/bold]")
+        section_sorted = sorted(
+            section,
+            key=lambda m: (
+                not bool(m.get("recommended")),
+                str(m.get("label", "")).lower(),
+            ),
+        )
+        for m in section_sorted:
+            marker = " [dim]<-- current[/dim]" if m["id"] == current else ""
+            source = m.get("source")
+            source_tag = " [dim](dynamic)[/dim]" if source == "dynamic" else ""
+            console.print(f"  {m['id']}  [dim]({m['label']})[/dim]{source_tag}{marker}")
+
     console.print(
         "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M2.7').\n"
         "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"
-        "Use 'anthropic/<model>' or 'openai/<model>' for direct API access.[/dim]"
+        "Direct prefixes: 'anthropic/', 'openai/', 'openrouter/', 'opencode/',\n"
+        "'opencode-go/', 'ollama/', 'lm_studio/', 'vllm/', 'openai-compat/'.[/dim]"
     )
 
 
@@ -146,7 +164,16 @@ def print_invalid_id(arg: str, console) -> None:
         "[dim]Expected:\n"
         "  • <org>/<model>[:tag]    (HF router — paste from huggingface.co)\n"
         "  • anthropic/<model>\n"
-        "  • openai/<model>[/dim]"
+        "  • openai/<model>\n"
+        "  • bedrock/<model>\n"
+        "  • gemini/<model>\n"
+        "  • openrouter/<model>\n"
+        "  • opencode/<model>\n"
+        "  • opencode-go/<model>\n"
+        "  • ollama/<model>\n"
+        "  • lm_studio/<model>\n"
+        "  • vllm/<model>\n"
+        "  • openai-compat/<model>[/dim]"
     )
 
 
@@ -187,14 +214,15 @@ async def probe_and_switch_model(
         outcome = await probe_effort(model_id, preference, hf_token)
     except ProbeInconclusive as e:
         _commit_switch(model_id, config, session, effective=None, cache=False)
+        warning = render_llm_error_message(e)
         console.print(
             f"[yellow]Model switched to {model_id}[/yellow] "
-            f"[dim](couldn't validate: {e}; will verify on first message)[/dim]"
+            f"[dim](couldn't validate: {warning}; will verify on first message)[/dim]"
         )
         return
     except Exception as e:
         # Hard persistent error — auth, unknown model, quota. Don't switch.
-        console.print(f"[bold red]Switch failed:[/bold red] {e}")
+        console.print(f"[bold red]Switch failed:[/bold red] {render_llm_error_message(e)}")
         console.print(f"[dim]Keeping current model: {config.model_name}[/dim]")
         return
 

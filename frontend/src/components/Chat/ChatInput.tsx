@@ -1,65 +1,27 @@
-import { useState, useCallback, useEffect, useRef, KeyboardEvent } from 'react';
-import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuItem, ListItemIcon, ListItemText, Chip } from '@mui/material';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
-import StopIcon from '@mui/icons-material/Stop';
-import { apiFetch } from '@/utils/api';
-import { useUserQuota } from '@/hooks/useUserQuota';
-import ClaudeCapDialog from '@/components/ClaudeCapDialog';
-import { useAgentStore } from '@/store/agentStore';
-import { FIRST_FREE_MODEL_PATH } from '@/utils/model';
-
-// Model configuration
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-  modelPath: string;
-  avatarUrl: string;
-  recommended?: boolean;
-}
-
-const getHfAvatarUrl = (modelId: string) => {
-  const org = modelId.split('/')[0];
-  return `https://huggingface.co/api/avatars/${org}`;
-};
-
-const MODEL_OPTIONS: ModelOption[] = [
-  {
-    id: 'kimi-k2.6',
-    name: 'Kimi K2.6',
-    description: 'Novita',
-    modelPath: 'moonshotai/Kimi-K2.6',
-    avatarUrl: getHfAvatarUrl('moonshotai/Kimi-K2.6'),
-    recommended: true,
-  },
-  {
-    id: 'claude-opus',
-    name: 'Claude Opus 4.6',
-    description: 'Anthropic',
-    modelPath: 'anthropic/claude-opus-4-6',
-    avatarUrl: 'https://huggingface.co/api/avatars/Anthropic',
-    recommended: true,
-  },
-  {
-    id: 'minimax-m2.7',
-    name: 'MiniMax M2.7',
-    description: 'Novita',
-    modelPath: 'MiniMaxAI/MiniMax-M2.7',
-    avatarUrl: getHfAvatarUrl('MiniMaxAI/MiniMax-M2.7'),
-  },
-  {
-    id: 'glm-5.1',
-    name: 'GLM 5.1',
-    description: 'Together',
-    modelPath: 'zai-org/GLM-5.1',
-    avatarUrl: getHfAvatarUrl('zai-org/GLM-5.1'),
-  },
-];
-
-const findModelByPath = (path: string): ModelOption | undefined => {
-  return MODEL_OPTIONS.find(m => m.modelPath === path || path?.includes(m.id));
-};
+import { useState, useCallback, useEffect, useRef, KeyboardEvent } from "react";
+import {
+  Box,
+  TextField,
+  IconButton,
+  CircularProgress,
+  Typography,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  Chip,
+  ListSubheader,
+} from "@mui/material";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
+import StopIcon from "@mui/icons-material/Stop";
+import { useUserQuota } from "@/hooks/useUserQuota";
+import { useModelCatalog } from "@/hooks/useModelCatalog";
+import type { ModelOption, ProviderOption } from "@/hooks/useModelCatalog";
+import ClaudeCapDialog from "@/components/ClaudeCapDialog";
+import { useAgentStore } from "@/store/agentStore";
+import { FIRST_FREE_MODEL_PATH } from "@/utils/model";
+import CustomModelDialog from "@/components/Chat/CustomModelDialog";
 
 interface ChatInputProps {
   sessionId?: string;
@@ -70,45 +32,43 @@ interface ChatInputProps {
   placeholder?: string;
 }
 
-const isClaudeModel = (m: ModelOption) => m.modelPath.startsWith('anthropic/');
-const firstFreeModel = () => MODEL_OPTIONS.find(m => !isClaudeModel(m)) ?? MODEL_OPTIONS[0];
+const OPENAI_COMPAT_PROVIDER = "openai_compat";
 
-export default function ChatInput({ sessionId, onSend, onStop, isProcessing = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
-  const [input, setInput] = useState('');
+const isClaudePath = (modelPath: string) => modelPath.startsWith("anthropic/");
+
+const firstFreeModel = (models: ModelOption[]) => {
+  const byPath = models.find((m) => m.id === FIRST_FREE_MODEL_PATH);
+  if (byPath) return byPath;
+  return models.find((m) => !isClaudePath(m.id));
+};
+
+export default function ChatInput({
+  sessionId,
+  onSend,
+  onStop,
+  isProcessing = false,
+  disabled = false,
+  placeholder = "Ask anything...",
+}: ChatInputProps) {
+  const [input, setInput] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>(MODEL_OPTIONS[0].id);
+  const {
+    modelOptions,
+    selectedModelPath,
+    selectedModel,
+    switchModel,
+    groups,
+  } = useModelCatalog(sessionId);
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
+  const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [customPrefix, setCustomPrefix] = useState("openai-compat/");
   const { quota, refresh: refreshQuota } = useUserQuota();
-  // The daily-cap dialog is triggered from two places: (a) a 429 returned
-  // from the chat transport when the user tries to send on Opus over cap —
-  // surfaced via the agent-store flag — and (b) nothing else right now
-  // (switching models is free). Keeping the open state in the store means
-  // the hook layer can flip it without threading props through.
   const claudeQuotaExhausted = useAgentStore((s) => s.claudeQuotaExhausted);
-  const setClaudeQuotaExhausted = useAgentStore((s) => s.setClaudeQuotaExhausted);
-  const lastSentRef = useRef<string>('');
+  const setClaudeQuotaExhausted = useAgentStore(
+    (s) => s.setClaudeQuotaExhausted,
+  );
+  const lastSentRef = useRef<string>("");
 
-  // Model is per-session: fetch this tab's current model every time the
-  // session changes. Other tabs keep their own selections independently.
-  useEffect(() => {
-    if (!sessionId) return;
-    let cancelled = false;
-    apiFetch(`/api/session/${sessionId}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (cancelled) return;
-        if (data?.model) {
-          const model = findModelByPath(data.model);
-          if (model) setSelectedModelId(model.id);
-        }
-      })
-      .catch(() => { /* ignore */ });
-    return () => { cancelled = true; };
-  }, [sessionId]);
-
-  const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId) || MODEL_OPTIONS[0];
-
-  // Auto-focus the textarea when the session becomes ready
   useEffect(() => {
     if (!disabled && !isProcessing && inputRef.current) {
       inputRef.current.focus();
@@ -119,33 +79,28 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
     if (input.trim() && !disabled) {
       lastSentRef.current = input;
       onSend(input);
-      setInput('');
+      setInput("");
     }
   }, [input, disabled, onSend]);
 
-  // When the chat transport reports a Claude-quota 429, restore the typed
-  // text so the user doesn't lose their message.
   useEffect(() => {
     if (claudeQuotaExhausted && lastSentRef.current) {
       setInput(lastSentRef.current);
     }
   }, [claudeQuotaExhausted]);
 
-  // Refresh the quota display whenever the session changes (user might
-  // have started another tab that spent quota).
   useEffect(() => {
     if (sessionId) refreshQuota();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, refreshQuota]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend]
+    [handleSend],
   );
 
   const handleModelClick = (event: React.MouseEvent<HTMLElement>) => {
@@ -158,51 +113,59 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
 
   const handleSelectModel = async (model: ModelOption) => {
     handleModelClose();
-    if (!sessionId) return;
     try {
-      const res = await apiFetch(`/api/session/${sessionId}/model`, {
-        method: 'POST',
-        body: JSON.stringify({ model: model.modelPath }),
-      });
-      if (res.ok) setSelectedModelId(model.id);
-    } catch { /* ignore */ }
+      await switchModel(model.id, model);
+    } catch {
+      // ignore
+    }
   };
 
-  // Dialog close: just clear the flag. The typed text is already restored.
+  const handleOpenCustomModal = (provider: ProviderOption) => {
+    handleModelClose();
+    if (!sessionId || !provider.prefix) return;
+    setCustomPrefix(provider.prefix);
+    setCustomModalOpen(true);
+  };
+
+  const handleCustomSubmit = async (modelId: string) => {
+    const full = `${customPrefix}${modelId}`;
+    const info: ModelOption = {
+      id: full,
+      label: modelId,
+      description: "Custom OpenAI-compatible model",
+      provider: OPENAI_COMPAT_PROVIDER,
+      providerLabel: "OpenAI-Compatible",
+    };
+    await switchModel(full, info);
+    setCustomModalOpen(false);
+  };
+
   const handleCapDialogClose = useCallback(() => {
     setClaudeQuotaExhausted(false);
   }, [setClaudeQuotaExhausted]);
 
-  // "Use a free model" — switch the current session to Kimi (or the first
-  // non-Anthropic option) and auto-retry the send that tripped the cap.
   const handleUseFreeModel = useCallback(async () => {
     setClaudeQuotaExhausted(false);
     if (!sessionId) return;
-    const free = MODEL_OPTIONS.find(m => m.modelPath === FIRST_FREE_MODEL_PATH)
-      ?? firstFreeModel();
+    const free = firstFreeModel(modelOptions);
+    if (!free) return;
     try {
-      const res = await apiFetch(`/api/session/${sessionId}/model`, {
-        method: 'POST',
-        body: JSON.stringify({ model: free.modelPath }),
-      });
-      if (res.ok) {
-        setSelectedModelId(free.id);
-        const retryText = lastSentRef.current;
-        if (retryText) {
-          onSend(retryText);
-          setInput('');
-          lastSentRef.current = '';
-        }
+      await switchModel(free.id, free);
+      const retryText = lastSentRef.current;
+      if (retryText) {
+        onSend(retryText);
+        setInput("");
+        lastSentRef.current = "";
       }
-    } catch { /* ignore */ }
-  }, [sessionId, onSend, setClaudeQuotaExhausted]);
+    } catch {
+      // ignore
+    }
+  }, [sessionId, modelOptions, onSend, setClaudeQuotaExhausted, switchModel]);
 
-  // Hide the chip until the user has actually burned quota — an unused
-  // Opus session shouldn't populate a counter.
   const claudeChip = (() => {
     if (!quota || quota.claudeUsedToday === 0) return null;
-    if (quota.plan === 'free') {
-      return quota.claudeRemaining > 0 ? 'Free today' : 'Pro only';
+    if (quota.plan === "free") {
+      return quota.claudeRemaining > 0 ? "Free today" : "Pro only";
     }
     return `${quota.claudeUsedToday}/${quota.claudeDailyCap} today`;
   })();
@@ -212,26 +175,33 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
       sx={{
         pb: { xs: 2, md: 4 },
         pt: { xs: 1, md: 2 },
-        position: 'relative',
+        position: "relative",
         zIndex: 10,
       }}
     >
-      <Box sx={{ maxWidth: '880px', mx: 'auto', width: '100%', px: { xs: 0, sm: 1, md: 2 } }}>
+      <Box
+        sx={{
+          maxWidth: "880px",
+          mx: "auto",
+          width: "100%",
+          px: { xs: 0, sm: 1, md: 2 },
+        }}
+      >
         <Box
           className="composer"
           sx={{
-            display: 'flex',
-            gap: '10px',
-            alignItems: 'flex-start',
-            bgcolor: 'var(--composer-bg)',
-            borderRadius: 'var(--radius-md)',
-            p: '12px',
-            border: '1px solid var(--border)',
-            transition: 'box-shadow 0.2s ease, border-color 0.2s ease',
-            '&:focus-within': {
-                borderColor: 'var(--accent-yellow)',
-                boxShadow: 'var(--focus)',
-            }
+            display: "flex",
+            gap: "10px",
+            alignItems: "flex-start",
+            bgcolor: "var(--composer-bg)",
+            borderRadius: "var(--radius-md)",
+            p: "12px",
+            border: "1px solid var(--border)",
+            transition: "box-shadow 0.2s ease, border-color 0.2s ease",
+            "&:focus-within": {
+              borderColor: "var(--accent-yellow)",
+              boxShadow: "var(--focus)",
+            },
           }}
         >
           <TextField
@@ -246,27 +216,27 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
             variant="standard"
             inputRef={inputRef}
             InputProps={{
-                disableUnderline: true,
-                sx: {
-                    color: 'var(--text)',
-                    fontSize: '15px',
-                    fontFamily: 'inherit',
-                    padding: 0,
-                    lineHeight: 1.5,
-                    minHeight: { xs: '44px', md: '56px' },
-                    alignItems: 'flex-start',
-                }
+              disableUnderline: true,
+              sx: {
+                color: "var(--text)",
+                fontSize: "15px",
+                fontFamily: "inherit",
+                padding: 0,
+                lineHeight: 1.5,
+                minHeight: { xs: "44px", md: "56px" },
+                alignItems: "flex-start",
+              },
             }}
             sx={{
-                flex: 1,
-                '& .MuiInputBase-root': {
-                    p: 0,
-                    backgroundColor: 'transparent',
-                },
-                '& textarea': {
-                    resize: 'none',
-                    padding: '0 !important',
-                }
+              flex: 1,
+              "& .MuiInputBase-root": {
+                p: 0,
+                backgroundColor: "transparent",
+              },
+              "& textarea": {
+                resize: "none",
+                padding: "0 !important",
+              },
             }}
           />
           {isProcessing ? (
@@ -275,18 +245,29 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
               sx={{
                 mt: 1,
                 p: 1.5,
-                borderRadius: '10px',
-                color: 'var(--muted-text)',
-                transition: 'all 0.2s',
-                position: 'relative',
-                '&:hover': {
-                  bgcolor: 'var(--hover-bg)',
-                  color: 'var(--accent-red)',
+                borderRadius: "10px",
+                color: "var(--muted-text)",
+                transition: "all 0.2s",
+                position: "relative",
+                "&:hover": {
+                  bgcolor: "var(--hover-bg)",
+                  color: "var(--accent-red)",
                 },
               }}
             >
-              <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <CircularProgress size={28} thickness={3} sx={{ color: 'inherit', position: 'absolute' }} />
+              <Box
+                sx={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <CircularProgress
+                  size={28}
+                  thickness={3}
+                  sx={{ color: "inherit", position: "absolute" }}
+                />
                 <StopIcon sx={{ fontSize: 16 }} />
               </Box>
             </IconButton>
@@ -297,14 +278,14 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
               sx={{
                 mt: 1,
                 p: 1,
-                borderRadius: '10px',
-                color: 'var(--muted-text)',
-                transition: 'all 0.2s',
-                '&:hover': {
-                  color: 'var(--accent-yellow)',
-                  bgcolor: 'var(--hover-bg)',
+                borderRadius: "10px",
+                color: "var(--muted-text)",
+                transition: "all 0.2s",
+                "&:hover": {
+                  color: "var(--accent-yellow)",
+                  bgcolor: "var(--hover-bg)",
                 },
-                '&.Mui-disabled': {
+                "&.Mui-disabled": {
                   opacity: 0.3,
                 },
               }}
@@ -314,124 +295,229 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
           )}
         </Box>
 
-        {/* Powered By Badge */}
         <Box
           onClick={handleModelClick}
           sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             mt: 1.5,
             gap: 0.8,
             opacity: 0.6,
-            cursor: 'pointer',
-            transition: 'opacity 0.2s',
-            '&:hover': {
-              opacity: 1
-            }
+            cursor: "pointer",
+            transition: "opacity 0.2s",
+            "&:hover": {
+              opacity: 1,
+            },
           }}
         >
-          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              fontSize: "10px",
+              color: "var(--muted-text)",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              fontWeight: 500,
+            }}
+          >
             powered by
           </Typography>
-          <img
-            src={selectedModel.avatarUrl}
-            alt={selectedModel.name}
-            style={{ height: '14px', width: '14px', objectFit: 'contain', borderRadius: '2px' }}
-          />
-          <Typography variant="caption" sx={{ fontSize: '10px', color: 'var(--text)', fontWeight: 600, letterSpacing: '0.02em' }}>
-            {selectedModel.name}
+          {selectedModel?.avatarUrl && (
+            <img
+              src={selectedModel.avatarUrl}
+              alt={selectedModel.label}
+              style={{
+                height: "14px",
+                width: "14px",
+                objectFit: "contain",
+                borderRadius: "2px",
+              }}
+            />
+          )}
+          <Typography
+            variant="caption"
+            sx={{
+              fontSize: "10px",
+              color: "var(--text)",
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+            }}
+          >
+            {selectedModel?.label || "Model"}
           </Typography>
-          <ArrowDropDownIcon sx={{ fontSize: '14px', color: 'var(--muted-text)' }} />
+          <ArrowDropDownIcon
+            sx={{ fontSize: "14px", color: "var(--muted-text)" }}
+          />
         </Box>
 
-        {/* Model Selection Menu */}
         <Menu
           anchorEl={modelAnchorEl}
           open={Boolean(modelAnchorEl)}
           onClose={handleModelClose}
           anchorOrigin={{
-            vertical: 'top',
-            horizontal: 'center',
+            vertical: "top",
+            horizontal: "center",
           }}
           transformOrigin={{
-            vertical: 'bottom',
-            horizontal: 'center',
+            vertical: "bottom",
+            horizontal: "center",
           }}
           slotProps={{
             paper: {
               sx: {
-                bgcolor: 'var(--panel)',
-                border: '1px solid var(--divider)',
+                bgcolor: "var(--panel)",
+                border: "1px solid var(--divider)",
                 mb: 1,
-                maxHeight: '400px',
-              }
-            }
+                maxHeight: "400px",
+                minWidth: 360,
+              },
+            },
           }}
         >
-          {MODEL_OPTIONS.map((model) => (
-            <MenuItem
-              key={model.id}
-              onClick={() => handleSelectModel(model)}
-              selected={selectedModelId === model.id}
-              sx={{
-                py: 1.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(255,255,255,0.05)',
-                }
-              }}
-            >
-              <ListItemIcon>
-                <img
-                  src={model.avatarUrl}
-                  alt={model.name}
-                  style={{ width: 24, height: 24, borderRadius: '4px', objectFit: 'cover' }}
-                />
-              </ListItemIcon>
-              <ListItemText
-                primary={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    {model.name}
-                    {model.recommended && (
-                      <Chip
-                        label="Recommended"
-                        size="small"
-                        sx={{
-                          height: '18px',
-                          fontSize: '10px',
-                          bgcolor: 'var(--accent-yellow)',
-                          color: '#000',
-                          fontWeight: 600,
-                        }}
-                      />
-                    )}
-                    {isClaudeModel(model) && claudeChip && (
-                      <Chip
-                        label={claudeChip}
-                        size="small"
-                        sx={{
-                          height: '18px',
-                          fontSize: '10px',
-                          bgcolor: 'rgba(255,255,255,0.08)',
-                          color: 'var(--muted-text)',
-                          fontWeight: 600,
-                        }}
-                      />
-                    )}
-                  </Box>
-                }
-                secondary={model.description}
-                secondaryTypographyProps={{
-                  sx: { fontSize: '12px', color: 'var(--muted-text)' }
+          {groups.map(({ provider, models }) => (
+            <Box key={provider.id}>
+              <ListSubheader
+                disableSticky
+                sx={{
+                  bgcolor: "var(--panel)",
+                  color: "var(--muted-text)",
+                  fontSize: "11px",
+                  lineHeight: "28px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
                 }}
-              />
-            </MenuItem>
+              >
+                {provider.label}
+              </ListSubheader>
+
+              {models.map((model) => (
+                <MenuItem
+                  key={model.id}
+                  onClick={() => void handleSelectModel(model)}
+                  disabled={!sessionId}
+                  selected={selectedModelPath === model.id}
+                  sx={{
+                    py: 1.5,
+                    "&.Mui-selected": {
+                      bgcolor: "rgba(255,255,255,0.05)",
+                    },
+                  }}
+                >
+                  <ListItemIcon>
+                    {model.avatarUrl ? (
+                      <img
+                        src={model.avatarUrl}
+                        alt={model.label}
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: "4px",
+                          objectFit: "cover",
+                        }}
+                      />
+                    ) : (
+                      <Box
+                        sx={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: "4px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          bgcolor: "rgba(255,255,255,0.06)",
+                          color: "var(--muted-text)",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {provider.label.slice(0, 2)}
+                      </Box>
+                    )}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={
+                      <Box
+                        sx={{ display: "flex", alignItems: "center", gap: 1 }}
+                      >
+                        {model.label}
+                        {model.recommended && (
+                          <Chip
+                            label="Recommended"
+                            size="small"
+                            sx={{
+                              height: "18px",
+                              fontSize: "10px",
+                              bgcolor: "var(--accent-yellow)",
+                              color: "#000",
+                              fontWeight: 600,
+                            }}
+                          />
+                        )}
+                        {isClaudePath(model.id) && claudeChip && (
+                          <Chip
+                            label={claudeChip}
+                            size="small"
+                            sx={{
+                              height: "18px",
+                              fontSize: "10px",
+                              bgcolor: "rgba(255,255,255,0.08)",
+                              color: "var(--muted-text)",
+                              fontWeight: 600,
+                            }}
+                          />
+                        )}
+                      </Box>
+                    }
+                    secondary={model.description}
+                    secondaryTypographyProps={{
+                      sx: { fontSize: "12px", color: "var(--muted-text)" },
+                    }}
+                  />
+                </MenuItem>
+              ))}
+
+              {provider.id === OPENAI_COMPAT_PROVIDER &&
+                provider.supportsCustomModel && (
+                  <MenuItem
+                    onClick={() => handleOpenCustomModal(provider)}
+                    disabled={!sessionId}
+                    sx={{ py: 1.5 }}
+                  >
+                    <ListItemText
+                      primary="Custom model…"
+                      secondary={
+                        provider.customModelHint ||
+                        "Use openai-compat/<model-id>"
+                      }
+                      secondaryTypographyProps={{
+                        sx: { fontSize: "12px", color: "var(--muted-text)" },
+                      }}
+                    />
+                  </MenuItem>
+                )}
+            </Box>
           ))}
+          {!sessionId && (
+            <Box sx={{ px: 2, py: 1.5 }}>
+              <Typography sx={{ color: "var(--muted-text)", fontSize: "12px" }}>
+                Start a session to switch models.
+              </Typography>
+            </Box>
+          )}
         </Menu>
+
+        <CustomModelDialog
+          open={customModalOpen}
+          prefix={customPrefix}
+          onClose={() => setCustomModalOpen(false)}
+          onSubmit={handleCustomSubmit}
+        />
 
         <ClaudeCapDialog
           open={claudeQuotaExhausted}
-          plan={quota?.plan ?? 'free'}
+          plan={quota?.plan ?? "free"}
           cap={quota?.claudeDailyCap ?? 1}
           onClose={handleCapDialogClose}
           onUseFreeModel={handleUseFreeModel}
