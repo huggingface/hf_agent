@@ -45,7 +45,10 @@ _EFFORT_CASCADE: dict[str, list[str]] = {
 }
 
 _PROBE_TIMEOUT = 15.0
-_PROBE_MAX_TOKENS = 16
+# Keep the probe cheap, but high enough that frontier reasoning models can
+# finish a trivial reply instead of tripping a false "output limit reached"
+# error during capability detection.
+_PROBE_MAX_TOKENS = 64
 
 
 class ProbeInconclusive(Exception):
