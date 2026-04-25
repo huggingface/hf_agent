@@ -806,7 +806,7 @@ async def _handle_slash_command(
     return None
 
 
-async def main():
+async def main(model: str | None = None):
     """Interactive chat with the agent"""
 
     # Clear screen
@@ -828,7 +828,16 @@ async def main():
     except Exception:
         pass
 
-    print_banner(hf_user=hf_user)
+    # Load config + apply CLI --model override BEFORE the banner so the
+    # "Model:" line reflects the actual model that will be used. Mirrors
+    # headless_main's behavior so `ml-intern --model X` works the same way
+    # whether or not a prompt is supplied.
+    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
+    config = load_config(config_path)
+    if model:
+        config.model_name = model
+
+    print_banner(model=config.model_name, hf_user=hf_user)
 
     # Pre-warm the HF router catalog in the background so /model switches
     # don't block on a network fetch.
@@ -843,10 +852,6 @@ async def main():
     turn_complete_event = asyncio.Event()
     turn_complete_event.set()
     ready_event = asyncio.Event()
-
-    # Start agent loop in background
-    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
-    config = load_config(config_path)
 
     # Create tool router with local mode
     tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
@@ -1242,7 +1247,7 @@ def cli():
                 max_iter = 10_000  # effectively unlimited
             asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
         else:
-            asyncio.run(main())
+            asyncio.run(main(model=args.model))
     except KeyboardInterrupt:
         print("\n\nGoodbye!")
 
