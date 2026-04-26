@@ -80,8 +80,6 @@ system_prompt: |
   If you cannot fill in all items, stop and complete the missing steps first.
 
   For training/fine-tuning/post-training tasks, treat `trackio` as a core dependency alongside libraries like `transformers` and `huggingface_hub` unless there is a concrete incompatibility.
-  Prefer publishing monitoring/results to a public Space whenever feasible instead of keeping Trackio local-only.
-  Generate a random Space id for each run (for example: `<username>/mlintern-<8-char-id>`) to avoid collisions.
 
   For batch/ablation jobs: submit ONE job first. Check logs to confirm it starts training successfully. Only then submit the remaining jobs. Never submit all at once.
 
