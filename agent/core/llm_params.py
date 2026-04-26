@@ -80,13 +80,7 @@ _VERTEX_AI_EFFORTS = {"minimal", "low", "medium", "high"}
 _HF_EFFORTS = {"low", "medium", "high"}
 
 
-def _canonical_litellm_model_name(model_name: str) -> str:
-    """Map public Google model aliases to LiteLLM provider prefixes."""
-    if model_name.startswith("google/"):
-        return "gemini/" + model_name.removeprefix("google/")
-    if model_name.startswith("google-geap/"):
-        return "vertex_ai/" + model_name.removeprefix("google-geap/")
-    return model_name
+
 
 
 class UnsupportedEffortError(ValueError):
@@ -155,10 +149,10 @@ def _resolve_llm_params(
       2. session.hf_token — the user's own token (CLI / OAuth / cache file).
       3. HF_TOKEN env — belt-and-suspenders fallback for CLI users.
     """
-    litellm_model_name = _canonical_litellm_model_name(model_name)
 
-    if litellm_model_name.startswith("anthropic/"):
-        params: dict = {"model": litellm_model_name}
+
+    if model_name.startswith("anthropic/"):
+        params: dict = {"model": model_name}
         if reasoning_effort:
             level = reasoning_effort
             if level == "minimal":
@@ -180,16 +174,16 @@ def _resolve_llm_params(
                 params["output_config"] = {"effort": level}
         return params
 
-    if litellm_model_name.startswith("bedrock/"):
+    if model_name.startswith("bedrock/"):
         # LiteLLM routes ``bedrock/...`` through the Converse adapter, which
         # picks up AWS credentials from the standard env vars
         # (``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` / ``AWS_REGION``).
         # The Anthropic thinking/effort shape is not forwarded through Converse
         # the same way, so we leave it off for now.
-        return {"model": litellm_model_name}
+        return {"model": model_name}
 
-    if litellm_model_name.startswith("openai/"):
-        params = {"model": litellm_model_name}
+    if model_name.startswith("openai/"):
+        params = {"model": model_name}
         if reasoning_effort:
             if reasoning_effort not in _OPENAI_EFFORTS:
                 if strict:
@@ -200,8 +194,9 @@ def _resolve_llm_params(
                 params["reasoning_effort"] = reasoning_effort
         return params
 
-    if litellm_model_name.startswith("gemini/"):
-        params = {"model": litellm_model_name}
+    if model_name.startswith("google/"):
+        litellm_model = "gemini/" + model_name.removeprefix("google/")
+        params = {"model": litellm_model}
         if reasoning_effort:
             if reasoning_effort not in _GEMINI_EFFORTS:
                 if strict:
@@ -212,8 +207,9 @@ def _resolve_llm_params(
                 params["reasoning_effort"] = reasoning_effort
         return params
 
-    if litellm_model_name.startswith("vertex_ai/"):
-        params = {"model": litellm_model_name}
+    if model_name.startswith("google-geap/"):
+        litellm_model = "vertex_ai/" + model_name.removeprefix("google-geap/")
+        params = {"model": litellm_model}
         if reasoning_effort:
             if reasoning_effort not in _VERTEX_AI_EFFORTS:
                 if strict:
@@ -224,7 +220,7 @@ def _resolve_llm_params(
                 params["reasoning_effort"] = reasoning_effort
         return params
 
-    hf_model = litellm_model_name.removeprefix("huggingface/")
+    hf_model = model_name.removeprefix("huggingface/")
     api_key = (
         os.environ.get("INFERENCE_TOKEN")
         or session_hf_token

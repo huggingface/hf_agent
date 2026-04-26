@@ -130,27 +130,8 @@ AVAILABLE_MODELS = [
 ]
 
 
-AVAILABLE_MODEL_IDS = {m["id"] for m in AVAILABLE_MODELS}
-GOOGLE_DIRECT_PROVIDER_PREFIXES = ("google/", "google-geap/")
-GOOGLE_DIRECT_MODEL_FAMILIES = ("gemini", "gemma")
 
 
-def _is_known_or_direct_model(model_id: object) -> bool:
-    """Accept curated UI models plus direct Google LiteLLM provider model ids.
-
-    The browser selector is intentionally curated, but direct-provider users
-    should not be blocked from newer Google AI Studio / Vertex AI preview
-    models by this server-side list.
-    """
-    if not isinstance(model_id, str):
-        return False
-    if model_id in AVAILABLE_MODEL_IDS:
-        return True
-    for prefix in GOOGLE_DIRECT_PROVIDER_PREFIXES:
-        if model_id.startswith(prefix):
-            model_name = model_id.removeprefix(prefix)
-            return model_name.startswith(GOOGLE_DIRECT_MODEL_FAMILIES)
-    return False
 
 
 def _is_anthropic_model(model_id: str) -> bool:
@@ -394,7 +375,8 @@ async def create_session(
     if isinstance(body, dict):
         model = body.get("model")
 
-    if model and not _is_known_or_direct_model(model):
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model and model not in valid_ids:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
 
     # Opus is gated to HF staff (PR #63). Only fires when the resolved model
@@ -438,7 +420,8 @@ async def restore_session_summary(
         hf_token = os.environ.get("HF_TOKEN")
 
     model = body.get("model")
-    if model and not _is_known_or_direct_model(model):
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model and model not in valid_ids:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
 
     resolved_model = model or session_manager.config.model_name
@@ -496,7 +479,8 @@ async def set_session_model(
     model_id = body.get("model")
     if not model_id:
         raise HTTPException(status_code=400, detail="Missing 'model' field")
-    if not _is_known_or_direct_model(model_id):
+    valid_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if model_id not in valid_ids:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
     await _require_hf_for_anthropic(request, model_id)
     agent_session = session_manager.sessions.get(session_id)
