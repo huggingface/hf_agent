@@ -68,6 +68,13 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     the probe below covers "does this model exist".
     """
     if model_id.startswith(("anthropic/", "openai/", "azure/")):
+        import os
+        if model_id.startswith("azure/") and not os.environ.get("AZURE_API_BASE"):
+            console.print(
+                "[bold yellow]Warning:[/bold yellow] AZURE_API_BASE is not set. "
+                "Ensure AZURE_API_BASE, AZURE_API_KEY (or AZURE_AD_TOKEN), and "
+                "AZURE_API_VERSION are in your environment."
+            )
         return True
 
     from agent.core import hf_router_catalog as cat
