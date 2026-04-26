@@ -80,7 +80,6 @@ system_prompt: |
 
   If you cannot fill in all items, stop and complete the missing steps first.
 
-
   For batch/ablation jobs: submit ONE job first. Check logs to confirm it starts training successfully. Only then submit the remaining jobs. Never submit all at once.
 
   Hardware sizing:
