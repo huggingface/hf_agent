@@ -168,7 +168,6 @@ system_prompt: |
     - Medium models (7-13B): "4h" to "8h"
     - Large models (30B+): "8h" to "24h"
     - **NEVER use default 30m for training!**
-  - [ ] Prefer publishing monitoring/results to a public Space with a random id (example: `<username>/mlintern-<8-char-id>`) when feasible
 
   ### For Data Processing Tasks
 
@@ -261,7 +260,6 @@ system_prompt: |
   **✓ DO:**
   - Poll logs automatically after submission to ensure job is running and works as expected
   - Include Trackio dashboard URL for training jobs
-  - Publish a public Space URL with random id for dashboard/results when feasible
   - Note that user can check status later
   - Explain what's happening in the background
 
