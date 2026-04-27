@@ -415,9 +415,15 @@ def _extract_thinking_state(
     return thinking_blocks, reasoning_content
 
 
+def _should_replay_thinking_state(model_name: str | None) -> bool:
+    """Only Anthropic's native adapter accepts replayed thinking metadata."""
+    return bool(model_name and model_name.startswith("anthropic/"))
+
+
 def _assistant_message_from_result(
     llm_result: LLMResult,
     *,
+    model_name: str | None,
     tool_calls: list[ToolCall] | None = None,
 ) -> Message:
     """Build an assistant history message without dropping reasoning state."""
@@ -427,10 +433,11 @@ def _assistant_message_from_result(
     }
     if tool_calls is not None:
         kwargs["tool_calls"] = tool_calls
-    if llm_result.thinking_blocks:
-        kwargs["thinking_blocks"] = llm_result.thinking_blocks
-    if llm_result.reasoning_content:
-        kwargs["reasoning_content"] = llm_result.reasoning_content
+    if _should_replay_thinking_state(model_name):
+        if llm_result.thinking_blocks:
+            kwargs["thinking_blocks"] = llm_result.thinking_blocks
+        if llm_result.reasoning_content:
+            kwargs["reasoning_content"] = llm_result.reasoning_content
     return Message(**kwargs)
 
 
@@ -538,7 +545,7 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
     )
     thinking_blocks = None
     reasoning_content = None
-    if chunks:
+    if chunks and _should_replay_thinking_state(llm_params.get("model")):
         try:
             rebuilt = stream_chunk_builder(chunks, messages=messages)
             if rebuilt and getattr(rebuilt, "choices", None):
@@ -816,7 +823,10 @@ class Handlers:
                         "  • For other tools: reduce the size of your arguments or use bash."
                     )
                     if content:
-                        assistant_msg = _assistant_message_from_result(llm_result)
+                        assistant_msg = _assistant_message_from_result(
+                            llm_result,
+                            model_name=llm_params.get("model"),
+                        )
                         session.context_manager.add_message(assistant_msg, token_count)
                     session.context_manager.add_message(
                         Message(role="user", content=f"[SYSTEM: {truncation_hint}]")
@@ -872,7 +882,10 @@ class Handlers:
                         (content or "")[:500],
                     )
                     if content:
-                        assistant_msg = _assistant_message_from_result(llm_result)
+                        assistant_msg = _assistant_message_from_result(
+                            llm_result,
+                            model_name=llm_params.get("model"),
+                        )
                         session.context_manager.add_message(assistant_msg, token_count)
                         final_response = content
                     break
@@ -896,6 +909,7 @@ class Handlers:
                 # Add assistant message with all tool calls to context
                 assistant_msg = _assistant_message_from_result(
                     llm_result,
+                    model_name=llm_params.get("model"),
                     tool_calls=tool_calls,
                 )
                 session.context_manager.add_message(assistant_msg, token_count)
