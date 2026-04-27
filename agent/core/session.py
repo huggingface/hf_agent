@@ -84,6 +84,7 @@ class Session:
         stream: bool = True,
         notification_gateway: NotificationGateway | None = None,
         notification_destinations: list[str] | None = None,
+        defer_turn_complete_notification: bool = False,
         session_id: str | None = None,
         user_id: str | None = None,
     ):
@@ -113,6 +114,7 @@ class Session:
         self._running_job_ids: set[str] = set()  # HF job IDs currently executing
         self.notification_gateway = notification_gateway
         self.notification_destinations = list(notification_destinations or [])
+        self.defer_turn_complete_notification = defer_turn_complete_notification
 
         # Session trajectory logging
         self.logged_events: list[dict] = []
@@ -165,6 +167,21 @@ class Session:
         self.notification_destinations = deduped
 
     async def _send_auto_notification(self, event: Event) -> None:
+        await self._enqueue_auto_notification_requests(event)
+
+    async def send_deferred_turn_complete_notification(self, event: Event) -> None:
+        if event.event_type != "turn_complete":
+            return
+        await self._enqueue_auto_notification_requests(
+            event,
+            include_deferred_turn_complete=True,
+        )
+
+    async def _enqueue_auto_notification_requests(
+        self,
+        event: Event,
+        include_deferred_turn_complete: bool = False,
+    ) -> None:
         if self.notification_gateway is None:
             return
         if not self.notification_destinations:
@@ -174,6 +191,12 @@ class Session:
         if configured_auto_events == _LEGACY_AUTO_EVENT_TYPES:
             auto_events.add("turn_complete")
         if event.event_type not in auto_events:
+            return
+        if (
+            self.defer_turn_complete_notification
+            and event.event_type == "turn_complete"
+            and not include_deferred_turn_complete
+        ):
             return
 
         requests = self._build_auto_notification_requests(event)

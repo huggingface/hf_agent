@@ -1374,6 +1374,7 @@ async def submission_loop(
     stream: bool = True,
     notification_gateway: NotificationGateway | None = None,
     notification_destinations: list[str] | None = None,
+    defer_turn_complete_notification: bool = False,
 ) -> None:
     """
     Main agent loop - processes submissions and dispatches to handlers.
@@ -1386,6 +1387,7 @@ async def submission_loop(
         user_id=user_id, local_mode=local_mode, stream=stream,
         notification_gateway=notification_gateway,
         notification_destinations=notification_destinations,
+        defer_turn_complete_notification=defer_turn_complete_notification,
     )
     if session_holder is not None:
         session_holder[0] = session

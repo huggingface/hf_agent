@@ -339,6 +339,52 @@ async def test_turn_complete_auto_notification_includes_final_response_summary()
 
 
 @pytest.mark.asyncio
+async def test_turn_complete_auto_notification_can_be_deferred():
+    config = Config.model_validate(
+        {
+            "model_name": "moonshotai/Kimi-K2.6",
+            "messaging": {
+                "enabled": True,
+                "destinations": {
+                    "slack.ops": {
+                        "provider": "slack",
+                        "token": "xoxb-test",
+                        "channel": "C123",
+                        "allow_auto_events": True,
+                    }
+                },
+            },
+        }
+    )
+    gateway = RecordingGateway()
+    session = Session(
+        asyncio.Queue(),
+        config=config,
+        tool_router=DummyToolRouter(),
+        context_manager=SimpleNamespace(items=[]),
+        notification_gateway=gateway,
+        notification_destinations=["slack.ops"],
+        defer_turn_complete_notification=True,
+        session_id="sess-deferred",
+    )
+    event = Event(
+        event_type="turn_complete",
+        data={"final_response": "Finished after the CLI drained the stream."},
+    )
+
+    await session.send_event(event)
+    assert gateway.enqueued == []
+
+    await session.send_deferred_turn_complete_notification(event)
+
+    assert len(gateway.enqueued) == 1
+    request = gateway.enqueued[0]
+    assert request.destination == "slack.ops"
+    assert request.event_type == "turn_complete"
+    assert "Finished after the CLI drained the stream." in request.message
+
+
+@pytest.mark.asyncio
 async def test_turn_complete_can_be_disabled_by_custom_auto_event_config():
     config = Config.model_validate(
         {

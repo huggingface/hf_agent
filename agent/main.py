@@ -354,6 +354,9 @@ async def event_listener(
                 stream_buf.discard()
                 print_turn_complete()
                 print_plan()
+                session = session_holder[0] if session_holder else None
+                if session is not None:
+                    await session.send_deferred_turn_complete_notification(event)
                 turn_complete_event.set()
             elif event.event_type == "interrupted":
                 shimmer.stop()
@@ -885,6 +888,7 @@ async def main():
             stream=True,
             notification_gateway=notification_gateway,
             notification_destinations=config.messaging.default_auto_destinations(),
+            defer_turn_complete_notification=True,
         )
     )
 
@@ -1104,6 +1108,7 @@ async def headless_main(
             stream=stream,
             notification_gateway=notification_gateway,
             notification_destinations=config.messaging.default_auto_destinations(),
+            defer_turn_complete_notification=True,
         )
     )
 
@@ -1229,6 +1234,10 @@ async def headless_main(
             stream_buf.discard()
             history_size = event.data.get("history_size", "?") if event.data else "?"
             print(f"\n--- Agent {event.event_type} (history_size={history_size}) ---", file=sys.stderr)
+            if event.event_type == "turn_complete":
+                session = session_holder[0] if session_holder else None
+                if session is not None:
+                    await session.send_deferred_turn_complete_notification(event)
             break
 
     # Shutdown
