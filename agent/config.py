@@ -32,7 +32,7 @@ class Config(BaseModel):
     # 0 = disabled. Consumed by agent.core.telemetry.HeartbeatSaver.
     heartbeat_interval_s: int = 60
     yolo_mode: bool = False  # Auto-approve all tool calls without confirmation
-    max_iterations: int = 300  # Max LLM calls per agent turn (-1 = unlimited)
+    max_iterations: int = 40  # Max LLM calls per agent turn (-1 = unlimited)
 
     # Permission control parameters
     confirm_cpu_jobs: bool = True

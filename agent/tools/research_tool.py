@@ -301,7 +301,7 @@ async def research_handler(
     await _log("Starting research sub-agent...")
 
     # Run the research loop — context budget is the real limiter
-    max_iterations = 60
+    max_iterations = 20
     for _iteration in range(max_iterations):
         # ── Doom-loop detection ──
         doom_prompt = check_for_doom_loop(messages)
