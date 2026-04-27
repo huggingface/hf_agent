@@ -18,7 +18,6 @@ from agent.messaging.models import NotificationRequest
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_TOKENS = 200_000
-_LEGACY_AUTO_EVENT_TYPES = {"approval_required", "error"}
 _TURN_COMPLETE_NOTIFICATION_CHARS = 39000
 
 
@@ -187,10 +186,7 @@ class Session:
             return
         if not self.notification_destinations:
             return
-        configured_auto_events = set(self.config.messaging.auto_event_types)
-        auto_events = set(configured_auto_events)
-        if configured_auto_events == _LEGACY_AUTO_EVENT_TYPES:
-            auto_events.add("turn_complete")
+        auto_events = set(self.config.messaging.auto_event_types)
         if event.event_type not in auto_events:
             return
         if (
