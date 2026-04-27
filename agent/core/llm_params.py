@@ -1,11 +1,22 @@
 """LiteLLM kwargs resolution for the model ids this agent accepts."""
 
+from agent.core.hf_tokens import resolve_hf_router_token
 from agent.core.provider_adapters import (
     UnsupportedEffortError,
     resolve_adapter,
 )
 
-__all__ = ["UnsupportedEffortError", "_resolve_llm_params"]
+
+def _resolve_hf_router_token(session_hf_token: str | None = None) -> str | None:
+    """Backward-compatible private wrapper used by tests and older imports."""
+    return resolve_hf_router_token(session_hf_token)
+
+
+__all__ = [
+    "UnsupportedEffortError",
+    "_resolve_hf_router_token",
+    "_resolve_llm_params",
+]
 
 
 def _patch_litellm_effort_validation() -> None:
@@ -63,7 +74,8 @@ def _resolve_llm_params(
       1. INFERENCE_TOKEN env — shared key on the hosted Space (inference is
          free for users, billed to the Space owner via ``X-HF-Bill-To``).
       2. session.hf_token — the user's own token (CLI / OAuth / cache file).
-      3. HF_TOKEN env — belt-and-suspenders fallback for CLI users.
+      3. huggingface_hub cache — ``HF_TOKEN`` / ``HUGGING_FACE_HUB_TOKEN`` /
+         local ``hf auth login`` cache.
     """
     adapter = resolve_adapter(model_name)
     if adapter is None:

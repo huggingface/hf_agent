@@ -1,8 +1,9 @@
 """Provider adapters for runtime params and model-name validation."""
 
-import os
 from dataclasses import dataclass
 from typing import Any, ClassVar
+
+from agent.core.hf_tokens import get_hf_bill_to, resolve_hf_router_token
 
 
 class UnsupportedEffortError(ValueError):
@@ -161,8 +162,7 @@ class HfRouterAdapter(ProviderAdapter):
         strict: bool = False,
     ) -> dict:
         hf_model = model_name.removeprefix("huggingface/")
-        inference_token = os.environ.get("INFERENCE_TOKEN")
-        api_key = inference_token or session_hf_token or os.environ.get("HF_TOKEN")
+        api_key = resolve_hf_router_token(session_hf_token)
 
         params: dict[str, Any] = {
             "model": f"openai/{hf_model}",
@@ -170,8 +170,7 @@ class HfRouterAdapter(ProviderAdapter):
             "api_key": api_key,
         }
 
-        if inference_token:
-            bill_to = os.environ.get("HF_BILL_TO", "smolagents")
+        if bill_to := get_hf_bill_to():
             params["extra_headers"] = {"X-HF-Bill-To": bill_to}
 
         if reasoning_effort:
