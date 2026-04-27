@@ -846,7 +846,7 @@ async def main():
     if not hf_token:
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
-    config = load_config(CLI_CONFIG_PATH)
+    config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
 
     # Resolve username for banner
     hf_user = _get_hf_user(hf_token)
@@ -1072,7 +1072,7 @@ async def headless_main(
 
     print(f"HF token loaded", file=sys.stderr)
 
-    config = load_config(CLI_CONFIG_PATH)
+    config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
     config.yolo_mode = True  # Auto-approve everything in headless mode
     notification_gateway = NotificationGateway(config.messaging)
     await notification_gateway.start()

@@ -7,7 +7,7 @@
   "auto_file_upload": true,
   "messaging": {
     "enabled": false,
-    "auto_event_types": ["approval_required", "error"],
+    "auto_event_types": ["approval_required", "error", "turn_complete"],
     "destinations": {}
   },
   "mcpServers": {
