@@ -79,7 +79,14 @@ class NotificationGateway:
                 error=f"Unknown destination '{request.destination}'",
             )
 
-        provider = self._providers[destination.provider]
+        provider = self._providers.get(destination.provider)
+        if provider is None:
+            return NotificationResult(
+                destination=request.destination,
+                ok=False,
+                provider=destination.provider,
+                error=f"No provider implementation for '{destination.provider}'",
+            )
         return await self._send_with_retries(provider, request.destination, destination, request)
 
     async def send_many(

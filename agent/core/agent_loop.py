@@ -34,7 +34,6 @@ ToolCall = ChatCompletionMessageToolCall
 
 _MALFORMED_TOOL_PREFIX = "ERROR: Tool call to '"
 _MALFORMED_TOOL_SUFFIX = "' had malformed JSON arguments"
-_TURN_COMPLETE_PREVIEW_CHARS = 39000
 
 
 def _malformed_tool_name(message: Message) -> str | None:
@@ -1127,17 +1126,14 @@ class Handlers:
             await _cleanup_on_cancel(session)
             await session.send_event(Event(event_type="interrupted"))
         elif not errored:
-            final_response_preview = (
-                final_response[:_TURN_COMPLETE_PREVIEW_CHARS]
-                if isinstance(final_response, str)
-                else None
-            )
             await session.send_event(
                 Event(
                     event_type="turn_complete",
                     data={
                         "history_size": len(session.context_manager.items),
-                        "final_response": final_response_preview,
+                        "final_response": final_response
+                        if isinstance(final_response, str)
+                        else None,
                     },
                 )
             )

@@ -148,7 +148,7 @@ class Session:
                 "data": event.data,
             }
         )
-        await self._send_auto_notification(event)
+        await self._enqueue_auto_notification_requests(event)
 
         # Mid-turn heartbeat flush (owned by telemetry module).
         from agent.core.telemetry import HeartbeatSaver
@@ -164,9 +164,6 @@ class Session:
                 deduped.append(destination)
                 seen.add(destination)
         self.notification_destinations = deduped
-
-    async def _send_auto_notification(self, event: Event) -> None:
-        await self._enqueue_auto_notification_requests(event)
 
     async def send_deferred_turn_complete_notification(self, event: Event) -> None:
         if event.event_type != "turn_complete":
