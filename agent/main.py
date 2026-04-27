@@ -811,7 +811,7 @@ async def _handle_slash_command(
     return None
 
 
-async def main():
+async def main(model: str | None = None):
     """Interactive chat with the agent"""
 
     # Clear screen
@@ -826,6 +826,8 @@ async def main():
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
     config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
+    if model:
+        config.model_name = model
 
     # Resolve username for banner
     hf_user = _get_hf_user(hf_token)
@@ -1262,7 +1264,7 @@ def cli():
                 max_iter = 10_000  # effectively unlimited
             asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
         else:
-            asyncio.run(main())
+            asyncio.run(main(model=args.model))
     except KeyboardInterrupt:
         print("\n\nGoodbye!")
 
