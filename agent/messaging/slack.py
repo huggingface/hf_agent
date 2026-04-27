@@ -1,4 +1,5 @@
 import json
+import re
 
 import httpx
 
@@ -21,6 +22,94 @@ _SEVERITY_PREFIX = {
 }
 
 
+def _format_slack_mrkdwn(content: str) -> str:
+    """Convert common Markdown constructs to Slack's mrkdwn syntax."""
+    if not content:
+        return content
+
+    placeholders: dict[str, str] = {}
+    placeholder_index = 0
+
+    def placeholder(value: str) -> str:
+        nonlocal placeholder_index
+        key = f"\x00SLACK{placeholder_index}\x00"
+        placeholder_index += 1
+        placeholders[key] = value
+        return key
+
+    text = content
+
+    # Protect code before any formatting conversion. Slack's mrkdwn ignores
+    # formatting inside backticks, so these regions should stay byte-for-byte.
+    text = re.sub(
+        r"(```(?:[^\n]*\n)?[\s\S]*?```)",
+        lambda match: placeholder(match.group(0)),
+        text,
+    )
+    text = re.sub(r"(`[^`\n]+`)", lambda match: placeholder(match.group(0)), text)
+
+    def convert_markdown_link(match: re.Match[str]) -> str:
+        label = match.group(1)
+        url = match.group(2).strip()
+        if url.startswith("<") and url.endswith(">"):
+            url = url[1:-1].strip()
+        return placeholder(f"<{url}|{label}>")
+
+    text = re.sub(
+        r"\[([^\]]+)\]\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
+        convert_markdown_link,
+        text,
+    )
+
+    # Preserve existing Slack entities and manual mrkdwn links before escaping.
+    text = re.sub(
+        r"(<(?:[@#!]|(?:https?|mailto|tel):)[^>\n]+>)",
+        lambda match: placeholder(match.group(1)),
+        text,
+    )
+    text = re.sub(
+        r"^(>+\s)",
+        lambda match: placeholder(match.group(0)),
+        text,
+        flags=re.MULTILINE,
+    )
+
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def convert_header(match: re.Match[str]) -> str:
+        header = match.group(1).strip()
+        header = re.sub(r"\*\*(.+?)\*\*", r"\1", header)
+        return placeholder(f"*{header}*")
+
+    text = re.sub(r"^#{1,6}\s+(.+)$", convert_header, text, flags=re.MULTILINE)
+    text = re.sub(
+        r"\*\*\*(.+?)\*\*\*",
+        lambda match: placeholder(f"*_{match.group(1)}_*"),
+        text,
+    )
+    text = re.sub(
+        r"\*\*(.+?)\*\*",
+        lambda match: placeholder(f"*{match.group(1)}*"),
+        text,
+    )
+    text = re.sub(
+        r"(?<!\*)\*([^*\n]+)\*(?!\*)",
+        lambda match: placeholder(f"_{match.group(1)}_"),
+        text,
+    )
+    text = re.sub(
+        r"~~(.+?)~~",
+        lambda match: placeholder(f"~{match.group(1)}~"),
+        text,
+    )
+
+    for key in reversed(placeholders):
+        text = text.replace(key, placeholders[key])
+
+    return text
+
+
 def _format_text(request: NotificationRequest) -> str:
     lines: list[str] = []
     prefix = _SEVERITY_PREFIX[request.severity]
@@ -31,7 +120,7 @@ def _format_text(request: NotificationRequest) -> str:
     lines.append(request.message)
     for key, value in request.metadata.items():
         lines.append(f"{key}: {value}")
-    return "\n".join(lines)
+    return _format_slack_mrkdwn("\n".join(lines))
 
 
 class SlackProvider(NotificationProvider):
@@ -47,6 +136,7 @@ class SlackProvider(NotificationProvider):
         payload = {
             "channel": destination.channel,
             "text": _format_text(request),
+            "mrkdwn": True,
             "unfurl_links": False,
             "unfurl_media": False,
         }

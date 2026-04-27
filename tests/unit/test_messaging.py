@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ from agent.config import Config
 from agent.core.session import Event, Session
 from agent.messaging.gateway import NotificationGateway
 from agent.messaging.models import NotificationRequest, NotificationResult
-from agent.messaging.slack import SlackProvider
+from agent.messaging.slack import SlackProvider, _format_slack_mrkdwn
 from agent.tools.notify_tool import notify_handler
 from backend.session_manager import AgentSession, SessionManager
 
@@ -147,6 +148,25 @@ def test_messaging_config_default_auto_destinations_empty_when_disabled():
     assert config.messaging.default_auto_destinations() == []
 
 
+def test_slack_mrkdwn_formatter_converts_common_markdown():
+    formatted = _format_slack_mrkdwn(
+        "# Result\n"
+        "**Done** with *details* and ~~old text~~.\n"
+        "See [PR](https://github.com/huggingface/ml-intern/pull/116).\n"
+        "Keep `**literal**` and ```python\nx < 3\n``` untouched.\n"
+        "Escape <raw> & text."
+    )
+
+    assert "*Result*" in formatted
+    assert "*Done*" in formatted
+    assert "_details_" in formatted
+    assert "~old text~" in formatted
+    assert "<https://github.com/huggingface/ml-intern/pull/116|PR>" in formatted
+    assert "`**literal**`" in formatted
+    assert "```python\nx < 3\n```" in formatted
+    assert "Escape &lt;raw&gt; &amp; text." in formatted
+
+
 @pytest.mark.asyncio
 async def test_slack_provider_formats_and_sends_payload():
     seen: dict[str, object] = {}
@@ -166,7 +186,7 @@ async def test_slack_provider_formats_and_sends_payload():
             NotificationRequest(
                 destination="slack.ops",
                 title="Approval required",
-                message="A run is waiting.",
+                message="A **run** is waiting. See [details](https://example.com).",
                 severity="warning",
                 metadata={"session_id": "sess-1"},
             ),
@@ -176,8 +196,14 @@ async def test_slack_provider_formats_and_sends_payload():
     assert result.external_id == "123.456"
     assert seen["auth"] == "Bearer xoxb-test"
     assert seen["content_type"].startswith("application/json")
-    assert '"channel": "C123"' in seen["json"]
-    assert "[WARNING] Approval required\\nA run is waiting.\\nsession_id: sess-1" in seen["json"]
+    payload = json.loads(str(seen["json"]))
+    assert payload["channel"] == "C123"
+    assert payload["mrkdwn"] is True
+    assert payload["text"] == (
+        "[WARNING] Approval required\n"
+        "A *run* is waiting. See <https://example.com|details>.\n"
+        "session_id: sess-1"
+    )
 
 
 @pytest.mark.asyncio
