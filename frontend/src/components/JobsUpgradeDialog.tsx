@@ -1,23 +1,17 @@
-import {
-  Box,
-  Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Typography,
-} from '@mui/material';
+import { Box, Button, Typography } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import ReplayIcon from '@mui/icons-material/Replay';
+import CloseIcon from '@mui/icons-material/Close';
 
 const HF_BILLING_URL = 'https://huggingface.co/settings/billing';
-const HF_ORANGE = '#FF9D00';
 
 interface JobsUpgradeDialogProps {
   open: boolean;
   message: string;
-  /** True after the user clicked "Add credits" — switches the dialog into retry mode. */
+  /** True after the user clicked "Add credits" — the visibility-change auto-retry
+   *  in the parent uses this; it is unused inside the screen itself, which always
+   *  shows both actions ("Add credits" and "I've added credits"). */
   awaitingTopUp: boolean;
   onUpgrade: () => void;
   onRetry: () => void;
@@ -32,101 +26,140 @@ export default function JobsUpgradeDialog({
   onRetry,
   onClose,
 }: JobsUpgradeDialogProps) {
+  if (!open) return null;
+
+  const primarySx = {
+    bgcolor: 'var(--text)',
+    color: 'var(--bg)',
+    fontWeight: 700,
+    fontSize: '0.85rem',
+    textTransform: 'none' as const,
+    px: 2.5,
+    py: 1,
+    borderRadius: '10px',
+    boxShadow: 'none',
+    '&:hover': { bgcolor: 'var(--text)', opacity: 0.9, boxShadow: 'none' },
+  };
+
+  const secondarySx = {
+    bgcolor: 'transparent',
+    color: 'var(--text)',
+    fontWeight: 600,
+    fontSize: '0.85rem',
+    textTransform: 'none' as const,
+    px: 2.5,
+    py: 1,
+    borderRadius: '10px',
+    border: '1px solid var(--border-hover)',
+    '&:hover': { bgcolor: 'var(--hover-bg)', borderColor: 'var(--border-hover)' },
+  };
+
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      slotProps={{
-        backdrop: {
-          sx: { backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' },
-        },
+    <Box
+      sx={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1300,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.55)',
+        backdropFilter: 'blur(8px)',
+        px: 2,
       }}
-      PaperProps={{
-        sx: {
-          bgcolor: 'var(--panel)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          boxShadow: '0 30px 80px rgba(0,0,0,0.45), var(--shadow-1)',
-          maxWidth: 460,
-          width: '100%',
-          mx: 2,
-          overflow: 'hidden',
-        },
-      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="jobs-billing-title"
     >
       <Box
         sx={{
-          height: 4,
-          background: `linear-gradient(90deg, ${HF_ORANGE} 0%, #FFC560 50%, ${HF_ORANGE} 100%)`,
-        }}
-      />
-
-      <DialogTitle
-        sx={{
+          position: 'relative',
+          width: '100%',
+          maxWidth: 480,
+          bgcolor: 'var(--panel)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-1)',
+          px: 4,
+          py: 4,
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          gap: 1.25,
-          color: 'var(--text)',
-          fontWeight: 800,
-          fontSize: '1.05rem',
-          pt: 2.5,
-          pb: 0.5,
-          px: 3,
-          letterSpacing: '-0.01em',
+          textAlign: 'center',
         }}
       >
+        <Button
+          onClick={onClose}
+          aria-label="Close"
+          sx={{
+            position: 'absolute',
+            top: 10,
+            right: 10,
+            minWidth: 0,
+            width: 28,
+            height: 28,
+            borderRadius: '8px',
+            color: 'var(--muted-text)',
+            '&:hover': { bgcolor: 'var(--hover-bg)', color: 'var(--text)' },
+          }}
+        >
+          <CloseIcon sx={{ fontSize: 16 }} />
+        </Button>
+
         <Box
           sx={{
-            width: 32,
-            height: 32,
-            borderRadius: '10px',
-            bgcolor: 'rgba(255, 157, 0, 0.15)',
-            color: HF_ORANGE,
+            width: 44,
+            height: 44,
+            borderRadius: '12px',
+            bgcolor: 'var(--surface)',
+            border: '1px solid var(--border)',
+            color: 'var(--muted-text)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            mb: 2,
           }}
         >
-          <CreditCardIcon sx={{ fontSize: 18 }} />
+          <CreditCardIcon sx={{ fontSize: 22 }} />
         </Box>
-        {awaitingTopUp ? 'Topped up?' : 'Top up to launch'}
-      </DialogTitle>
-      <DialogContent sx={{ px: 3, pt: 1.25, pb: 0 }}>
+
+        <Typography
+          id="jobs-billing-title"
+          sx={{
+            color: 'var(--text)',
+            fontWeight: 700,
+            fontSize: '1.05rem',
+            letterSpacing: '-0.01em',
+            mb: 1,
+          }}
+        >
+          {awaitingTopUp ? 'Resume when you’re ready' : 'Add credits to launch this job'}
+        </Typography>
+
         <Typography
           sx={{
             color: 'var(--muted-text)',
             fontSize: '0.85rem',
             lineHeight: 1.6,
-            mb: 1.5,
+            mb: 3,
+            maxWidth: 380,
           }}
         >
           {awaitingTopUp
-            ? "We'll auto-retry the job as soon as you switch back from the billing tab. Or hit the button below now."
+            ? 'Once your top-up is through, click below to resume — the agent will pick the run back up where it left off.'
             : message ||
-              'Hugging Face Jobs need credits on the namespace running them. Add some, then re-run the same job — the agent will pick it back up.'}
+              'Hugging Face Jobs need credits on the namespace running them. Add some, then resume — the agent waits here in the meantime.'}
         </Typography>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2.5, pt: 2.5, gap: 1 }}>
-        {awaitingTopUp ? (
-          <Button
-            onClick={onRetry}
-            startIcon={<ReplayIcon sx={{ fontSize: 16 }} />}
-            variant="contained"
-            size="small"
-            sx={{
-              fontSize: '0.82rem',
-              px: 2.5,
-              bgcolor: HF_ORANGE,
-              color: '#000',
-              textTransform: 'none',
-              fontWeight: 700,
-              boxShadow: '0 6px 18px rgba(255, 157, 0, 0.35)',
-              '&:hover': { bgcolor: '#FFB340', boxShadow: '0 8px 22px rgba(255, 157, 0, 0.45)' },
-            }}
-          >
-            Retry now
-          </Button>
-        ) : (
+
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: 1.25,
+            width: '100%',
+            justifyContent: 'center',
+          }}
+        >
           <Button
             component="a"
             href={HF_BILLING_URL}
@@ -135,35 +168,20 @@ export default function JobsUpgradeDialog({
             onClick={onUpgrade}
             startIcon={<OpenInNewIcon sx={{ fontSize: 16 }} />}
             variant="contained"
-            size="small"
-            sx={{
-              fontSize: '0.82rem',
-              px: 2.5,
-              bgcolor: HF_ORANGE,
-              color: '#000',
-              textTransform: 'none',
-              fontWeight: 700,
-              boxShadow: '0 6px 18px rgba(255, 157, 0, 0.35)',
-              '&:hover': { bgcolor: '#FFB340', boxShadow: '0 8px 22px rgba(255, 157, 0, 0.45)' },
-            }}
+            sx={primarySx}
           >
             Add credits
           </Button>
-        )}
-        <Button
-          onClick={onClose}
-          size="small"
-          sx={{
-            color: 'var(--muted-text)',
-            fontSize: '0.82rem',
-            px: 2,
-            textTransform: 'none',
-            '&:hover': { bgcolor: 'var(--hover-bg)' },
-          }}
-        >
-          Close
-        </Button>
-      </DialogActions>
-    </Dialog>
+          <Button
+            onClick={onRetry}
+            startIcon={<ReplayIcon sx={{ fontSize: 16 }} />}
+            variant="outlined"
+            sx={secondarySx}
+          >
+            I’ve added credits
+          </Button>
+        </Box>
+      </Box>
+    </Box>
   );
 }
