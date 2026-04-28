@@ -45,8 +45,9 @@ class Config(BaseModel):
     # → …) and caches per-model what the provider actually accepted in
     # ``Session.model_effective_effort``. Default ``max`` because we'd rather
     # burn tokens thinking than ship a wrong ML recipe; the cascade lands on
-    # whichever level the model supports (``high`` for GPT-5 / HF router,
-    # ``xhigh`` or ``max`` for Anthropic 4.6 / 4.7). ``None`` = thinking off.
+    # whichever level the model supports (``high`` for GPT-5.5, Gemini, and
+    # HF router, ``xhigh`` or ``max`` for Anthropic 4.6 / 4.7).
+    # ``None`` = thinking off.
     # Valid values: None | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
     reasoning_effort: str | None = "max"
     messaging: MessagingConfig = MessagingConfig()

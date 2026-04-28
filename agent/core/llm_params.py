@@ -71,12 +71,14 @@ _patch_litellm_effort_validation()
 
 # Effort levels accepted on the wire.
 #   Anthropic (4.6+):  low | medium | high | xhigh | max   (output_config.effort)
+#   Gemini direct:     minimal | low | medium | high        (reasoning_effort top-level)
 #   OpenAI direct:     minimal | low | medium | high | xhigh (reasoning_effort top-level)
 #   HF router:         low | medium | high                 (extra_body.reasoning_effort)
 #
 # We validate *shape* here and let the probe cascade walk down on rejection;
 # we deliberately do NOT maintain a per-model capability table.
 _ANTHROPIC_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+_GEMINI_EFFORTS = {"minimal", "low", "medium", "high"}
 _OPENAI_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
 _HF_EFFORTS = {"low", "medium", "high"}
 
@@ -111,8 +113,12 @@ def _resolve_llm_params(
       will reject this; the probe's cascade catches that and falls back
       to no thinking.
 
+    • ``gemini/<model>`` — ``reasoning_effort`` forwarded as a top-level
+      kwarg; LiteLLM maps it to Gemini 3 thinking levels and uses
+      ``GEMINI_API_KEY``.
+
     • ``openai/<model>`` — ``reasoning_effort`` forwarded as a top-level
-      kwarg (GPT-5 / o-series). LiteLLM uses the user's ``OPENAI_API_KEY``.
+      kwarg (GPT-5 / o-series). LiteLLM uses ``OPENAI_API_KEY``.
 
     • Anything else is treated as a HuggingFace router id. We hit the
       auto-routing OpenAI-compatible endpoint at
@@ -167,6 +173,18 @@ def _resolve_llm_params(
         # The Anthropic thinking/effort shape is not forwarded through Converse
         # the same way, so we leave it off for now.
         return {"model": model_name}
+
+    if model_name.startswith("gemini/"):
+        params = {"model": model_name}
+        if reasoning_effort:
+            if reasoning_effort not in _GEMINI_EFFORTS:
+                if strict:
+                    raise UnsupportedEffortError(
+                        f"Gemini doesn't accept effort={reasoning_effort!r}"
+                    )
+            else:
+                params["reasoning_effort"] = reasoning_effort
+        return params
 
     if model_name.startswith("openai/"):
         params = {"model": model_name}

@@ -43,6 +43,20 @@ const MODEL_OPTIONS: ModelOption[] = [
     recommended: true,
   },
   {
+    id: 'gpt-5.5-high',
+    name: 'GPT-5.5 (high)',
+    description: 'OpenAI',
+    modelPath: 'openai/gpt-5.5',
+    avatarUrl: 'https://huggingface.co/api/avatars/openai',
+  },
+  {
+    id: 'gemini-3.1-pro',
+    name: 'Gemini 3.1 Pro',
+    description: 'Google AI Studio',
+    modelPath: 'gemini/gemini-3.1-pro-preview',
+    avatarUrl: 'https://huggingface.co/api/avatars/google',
+  },
+  {
     id: 'minimax-m2.7',
     name: 'MiniMax M2.7',
     description: 'Novita',

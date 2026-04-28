@@ -16,15 +16,17 @@ glues it to CLI output + session state.
 from __future__ import annotations
 
 from agent.core.effort_probe import ProbeInconclusive, probe_effort
+from agent.core.model_defaults import preferred_reasoning_effort
 
 
 # Suggested models shown by `/model` (not a gate). Users can paste any HF
-# model id (e.g. "MiniMaxAI/MiniMax-M2.7") or an `anthropic/` / `openai/`
-# prefix for direct API access. For HF ids, append ":fastest" /
+# model id (e.g. "MiniMaxAI/MiniMax-M2.7") or an `anthropic/` / `gemini/` /
+# `openai/` prefix for direct API access. For HF ids, append ":fastest" /
 # ":cheapest" / ":preferred" / ":<provider>" to override the default
 # routing policy (auto = fastest with failover).
 SUGGESTED_MODELS = [
-    {"id": "openai/gpt-5.5", "label": "GPT-5.5"},
+    {"id": "openai/gpt-5.5", "label": "GPT-5.5 (high)"},
+    {"id": "gemini/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro"},
     {"id": "openai/gpt-5.4", "label": "GPT-5.4"},
     {"id": "anthropic/claude-opus-4-7", "label": "Claude Opus 4.7"},
     {"id": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6"},
@@ -63,10 +65,10 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     proceed with the switch, ``False`` to indicate a hard problem the user
     should notice before we fire the effort probe.
 
-    Anthropic / OpenAI ids return ``True`` without printing anything —
-    the probe below covers "does this model exist".
+    Anthropic / Gemini / OpenAI ids return ``True`` without printing anything
+    — the probe below covers "does this model exist".
     """
-    if model_id.startswith(("anthropic/", "openai/")):
+    if model_id.startswith(("anthropic/", "gemini/", "openai/")):
         return True
 
     from agent.core import hf_router_catalog as cat
@@ -139,7 +141,7 @@ def print_model_listing(config, console) -> None:
     console.print(
         "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M2.7').\n"
         "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"
-        "Use 'anthropic/<model>' or 'openai/<model>' for direct API access.[/dim]"
+        "Use 'anthropic/<model>', 'gemini/<model>', or 'openai/<model>' for direct API access.[/dim]"
     )
 
 
@@ -149,6 +151,7 @@ def print_invalid_id(arg: str, console) -> None:
         "[dim]Expected:\n"
         "  • <org>/<model>[:tag]    (HF router — paste from huggingface.co)\n"
         "  • anthropic/<model>\n"
+        "  • gemini/<model>\n"
         "  • openai/<model>[/dim]"
     )
 
@@ -174,7 +177,7 @@ async def probe_and_switch_model(
     Transient errors (5xx, timeout) complete the switch with a yellow
     warning; the next real call re-surfaces the error if it's persistent.
     """
-    preference = config.reasoning_effort
+    preference = preferred_reasoning_effort(model_id, config.reasoning_effort)
     if not _print_hf_routing_info(model_id, console):
         return
 

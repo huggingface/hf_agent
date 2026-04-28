@@ -14,6 +14,7 @@ from agent.config import Config
 from agent.context_manager.manager import ContextManager
 from agent.messaging.gateway import NotificationGateway
 from agent.messaging.models import NotificationRequest
+from agent.core.model_defaults import preferred_reasoning_effort
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +322,7 @@ class Session:
         """
         if model_name in self.model_effective_effort:
             return self.model_effective_effort[model_name]
-        return self.config.reasoning_effort
+        return preferred_reasoning_effort(model_name, self.config.reasoning_effort)
 
     def increment_turn(self) -> None:
         """Increment turn counter (called after each user interaction)"""
