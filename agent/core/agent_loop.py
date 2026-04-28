@@ -322,6 +322,18 @@ def _friendly_error_message(error: Exception) -> str | None:
             "at your model provider's dashboard."
         )
 
+    if (
+        "resource_exhausted" in err_str
+        or "quota exceeded" in err_str
+        or "rate limit" in err_str
+        or "too many requests" in err_str
+        or "429" in err_str
+    ):
+        return (
+            "Provider quota or rate limit exhausted. Please check the model's "
+            "quota and billing settings at your provider dashboard, then retry."
+        )
+
     if "not supported by provider" in err_str or "no provider supports" in err_str:
         return (
             "The model isn't served by the provider you pinned.\n\n"
@@ -1215,10 +1227,11 @@ class Handlers:
 
             except Exception as e:
                 import traceback
+                from agent.core.redact import scrub_string
 
                 error_msg = _friendly_error_message(e)
                 if error_msg is None:
-                    error_msg = str(e) + "\n" + traceback.format_exc()
+                    error_msg = scrub_string(str(e) + "\n" + traceback.format_exc())
 
                 await session.send_event(
                     Event(
