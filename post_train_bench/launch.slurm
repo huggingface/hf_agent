@@ -29,6 +29,7 @@ if [ -z "${REPO_ROOT:-}" ]; then
     REPO_ROOT="${RUN_ROOT}/source_snapshot"
 fi
 export RUN_ROOT
+export REPO_ROOT
 export RUN_ID="${RUN_ID:-$(basename "$RUN_ROOT")}"
 
 mkdir -p "${RUN_ROOT}/slurm"
