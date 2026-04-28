@@ -1,5 +1,5 @@
 {
-  "model_name": "${ML_INTERN_AGENT_MODEL}",
+  "model_name": "${ML_INTERN_AGENT_MODEL:-anthropic/claude-opus-4-6}",
   "save_sessions": true,
   "upload_sessions": false,
   "auto_save_interval": 1,

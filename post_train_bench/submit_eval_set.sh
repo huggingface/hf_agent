@@ -4,11 +4,9 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ML_INTERN_AGENT_MODEL=anthropic/claude-opus-4-6 \
-    bash post_train_bench/submit_eval_set.sh smoke
+  bash post_train_bench/submit_eval_set.sh smoke
 
-  ML_INTERN_AGENT_MODEL=anthropic/claude-opus-4-6 \
-    bash post_train_bench/submit_eval_set.sh full --dry-run
+  bash post_train_bench/submit_eval_set.sh full --dry-run
 
 Modes:
   smoke  Submit one short validation job.
@@ -18,7 +16,8 @@ Options:
   --dry-run  Create metadata and matrix, print the sbatch command, do not submit.
 
 Environment:
-  ML_INTERN_AGENT_MODEL        Required intern model, used literally in runs/<model>/<run_id>.
+  ML_INTERN_AGENT_MODEL        Intern model, used literally in runs/<model>/<run_id>.
+                               Default: anthropic/claude-opus-4-6
   POST_TRAIN_BENCH_DIR         Default: scratch/PostTrainBench
   POST_TRAIN_BENCH_DOCKER_IMAGE
                                Default: registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest
@@ -48,10 +47,7 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
-if [ -z "${ML_INTERN_AGENT_MODEL:-}" ]; then
-    echo "ML_INTERN_AGENT_MODEL is required" >&2
-    exit 2
-fi
+export ML_INTERN_AGENT_MODEL="${ML_INTERN_AGENT_MODEL:-anthropic/claude-opus-4-6}"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"

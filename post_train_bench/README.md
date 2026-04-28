@@ -21,7 +21,8 @@ YYYY-MM-DD_HH-MM_{short_commit}
 
 ## Prerequisites
 
-- The PostTrainBench repo exists at `scratch/PostTrainBench`.
+- A local PostTrainBench checkout is available. The default path is
+  `scratch/PostTrainBench`; override it with `POST_TRAIN_BENCH_DIR`.
 - Slurm with Pyxis container support is available.
 - The current checkout contains the `ml-intern` commit you want to evaluate.
 - Required tokens are exported:
@@ -30,7 +31,7 @@ YYYY-MM-DD_HH-MM_{short_commit}
 export HF_TOKEN=hf_...
 export ANTHROPIC_API_KEY=sk-ant-...   # or the provider key for ML_INTERN_AGENT_MODEL
 export OPENAI_API_KEY=sk-...          # used by Arena/Health evals and optional judge
-export ML_INTERN_AGENT_MODEL=anthropic/claude-opus-4-6
+export ML_INTERN_AGENT_MODEL=anthropic/claude-opus-4-6  # optional; this is the default
 ```
 
 The default Docker image is:
@@ -131,6 +132,8 @@ installs it at runtime.
 ## Notes
 
 - `post_train_bench/runs/` is ignored by Git.
+- If `ML_INTERN_AGENT_MODEL` is unset, the runner uses
+  `anthropic/claude-opus-4-6`.
 - The run metadata records whether the source worktree was dirty at submission
   time. Commit intended changes before running official evaluations.
 - The optional judge writes `judge not run: ...` if `OPENAI_API_KEY` is not set
