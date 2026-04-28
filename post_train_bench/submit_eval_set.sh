@@ -95,6 +95,7 @@ rows = [{
     "model_to_train": "Qwen/Qwen3-1.7B-Base",
     "num_hours": "0.083",
     "duration_minutes": 5,
+    "eval_limit": 8,
 }]
 Path(sys.argv[1]).write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 PY

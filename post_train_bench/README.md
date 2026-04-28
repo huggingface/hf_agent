@@ -62,9 +62,9 @@ The smoke mode is meant to validate the Slurm, Docker, agent launch, artifact
 collection, judge, and evaluation plumbing quickly. It is not a faithful
 quality estimate; use the full matrix for leaderboard runs.
 
-Smoke uses a 5-minute solve budget and requests a 1-hour Slurm allocation by
-default so the judge, evaluation, and artifact collection have room to finish.
-Override the scheduler allocation with:
+Smoke uses a 5-minute solve budget, evaluates 8 GSM8K samples, and requests a
+1-hour Slurm allocation by default so the judge, evaluation, and artifact
+collection have room to finish. Override the scheduler allocation with:
 
 ```bash
 export POST_TRAIN_BENCH_SLURM_TIME=00:30:00

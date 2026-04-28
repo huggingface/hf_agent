@@ -52,10 +52,12 @@ rows = [json.loads(line) for line in matrix_path.read_text().splitlines() if lin
 row = rows[task_id]
 num_hours = str(row["num_hours"])
 duration_minutes = int(row.get("duration_minutes", round(float(num_hours) * 60)))
+eval_limit = int(row.get("eval_limit", -1))
 print(row["benchmark"])
 print(row["model_to_train"])
 print(num_hours)
 print(duration_minutes)
+print(eval_limit)
 PY
 )
 
@@ -63,6 +65,7 @@ BENCHMARK="${ROW[0]}"
 MODEL_TO_TRAIN="${ROW[1]}"
 NUM_HOURS="${ROW[2]}"
 DURATION_MINUTES="${ROW[3]}"
+EVAL_LIMIT="${ROW[4]}"
 
 PTB_SLURM_NAME="$(
     python - "$ML_INTERN_AGENT_MODEL" "$MODEL_TO_TRAIN" "$BENCHMARK" <<'PY'
@@ -83,4 +86,5 @@ bash post_train_bench/run_task_docker.sh \
     "${MODEL_TO_TRAIN}" \
     "${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}" \
     "${NUM_HOURS}" \
-    "${DURATION_MINUTES}"
+    "${DURATION_MINUTES}" \
+    "${EVAL_LIMIT}"

@@ -6,6 +6,7 @@ MODEL_TO_TRAIN="$2"
 TASK_RUN_ID="$3"
 NUM_HOURS="$4"
 DURATION_MINUTES="${5:-}"
+EVAL_LIMIT="${6:--1}"
 
 if [ -z "${RUN_ROOT:-}" ] || [ -z "${REPO_ROOT:-}" ] || [ -z "${PTB_DIR:-}" ]; then
     echo "RUN_ROOT, REPO_ROOT, and PTB_DIR must be exported" >&2
@@ -58,6 +59,7 @@ echo "agent_model=$ML_INTERN_AGENT_MODEL"
 echo "task_run_id=$TASK_RUN_ID"
 echo "num_hours=$NUM_HOURS"
 echo "duration_minutes=$DURATION_MINUTES"
+echo "eval_limit=$EVAL_LIMIT"
 echo "docker_image=$DOCKER_IMAGE"
 
 cp "$PTB_DIR/src/eval/tasks/${BENCHMARK}/evaluate.py" "$JOB_DIR/task/"
@@ -208,7 +210,7 @@ run_evaluation() {
         python evaluate.py \
             --model-path /result/final_model \
             --templates-dir ../../../../src/eval/templates \
-            --limit -1 \
+            --limit ${EVAL_LIMIT} \
             ${max_tokens_arg} \
             --json-output-file /result/metrics.json
     " > "$EVAL_DIR/final_eval_${eval_num}.txt" 2>&1
