@@ -69,10 +69,11 @@ EVAL_LIMIT="${ROW[4]}"
 
 PTB_SLURM_NAME="$(
     python - "$ML_INTERN_AGENT_MODEL" "$MODEL_TO_TRAIN" "$BENCHMARK" <<'PY'
+import os
 import re
 import sys
 
-parts = sys.argv[1:]
+parts = [os.path.basename(part.rstrip("/")) for part in sys.argv[1:]]
 name = "ptb_" + "_".join(parts)
 name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
 print(name[:128])
