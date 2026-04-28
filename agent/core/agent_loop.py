@@ -1103,13 +1103,15 @@ class Handlers:
                         args: dict,
                         valid: bool,
                         err: str,
-                    ) -> tuple[ToolCall, str, dict, str, bool]:
+                    ) -> tuple[ToolCall, str, dict, str, bool, int]:
                         if not valid:
-                            return (tc, name, args, err, False)
+                            return (tc, name, args, err, False, 0)
+                        t0 = time.perf_counter()
                         out, ok = await session.tool_router.call_tool(
                             name, args, session=session, tool_call_id=tc.id
                         )
-                        return (tc, name, args, out, ok)
+                        duration_ms = int((time.perf_counter() - t0) * 1000)
+                        return (tc, name, args, out, ok, duration_ms)
 
                     gather_task = asyncio.ensure_future(asyncio.gather(
                         *[
@@ -1144,7 +1146,7 @@ class Handlers:
                     results = gather_task.result()
 
                     # 4. Record results and send outputs (order preserved)
-                    for tc, tool_name, tool_args, output, success in results:
+                    for tc, tool_name, tool_args, output, success, duration_ms in results:
                         tool_msg = Message(
                             role="tool",
                             content=output,
@@ -1161,6 +1163,19 @@ class Handlers:
                                     "tool_call_id": tc.id,
                                     "output": output,
                                     "success": success,
+                                },
+                            )
+                        )
+
+                        await session.send_event(
+                            Event(
+                                event_type="tool_state_change",
+                                data={
+                                    "tool_call_id": tc.id,
+                                    "tool": tool_name,
+                                    "state": "complete",
+                                    "success": success,
+                                    "duration_ms": duration_ms,
                                 },
                             )
                         )
@@ -1381,12 +1396,18 @@ class Handlers:
                     },
                 )
             )
+            
+            t0 = time.perf_counter()
+            try: 
+                output, success = await session.tool_router.call_tool(
+                    tool_name, tool_args, session=session, tool_call_id=tc.id
+                )
+            
+            except Exception as e:
+                output, success = f"Tool execution failed: {e}", False
+            duration_ms = int((time.perf_counter() - t0) * 1000)
 
-            output, success = await session.tool_router.call_tool(
-                tool_name, tool_args, session=session, tool_call_id=tc.id
-            )
-
-            return (tc, tool_name, output, success, was_edited)
+            return (tc, tool_name, output, success, was_edited, duration_ms)
 
         # Execute all approved tools concurrently (cancellable)
         if approved_tasks:
@@ -1432,7 +1453,7 @@ class Handlers:
                     logger.error(f"Tool execution error: {result}")
                     continue
 
-                tc, tool_name, output, success, was_edited = result
+                tc, tool_name, output, success, was_edited, duration_ms = result
 
                 if was_edited:
                     output = f"[Note: The user edited the script before execution. The output below reflects the user-modified version, not your original script.]\n\n{output}"
@@ -1456,6 +1477,18 @@ class Handlers:
                             "success": success,
                         },
                     )
+                )
+                await session.send_event(
+                    Event(
+                        event_type="tool_state_change",
+                        data={
+                            "tool_call_id": tc.id,
+                            "tool": tool_name,
+                            "state": "complete",
+                            "success": success,
+                            "duration_ms": duration_ms,  
+                        },
+                    )   
                 )
 
         # Process rejected tools
