@@ -13,8 +13,6 @@
   "disabled_tools": [
     "hf_jobs",
     "notify",
-    "hf_repo_files",
-    "hf_repo_git",
     "sandbox_create"
   ],
   "messaging": {
@@ -22,5 +20,10 @@
     "auto_event_types": ["approval_required", "error", "turn_complete"],
     "destinations": {}
   },
-  "mcpServers": {}
+  "mcpServers": {
+    "hf-mcp-server": {
+      "transport": "http",
+      "url": "https://huggingface.co/mcp?login"
+    }
+  }
 }
