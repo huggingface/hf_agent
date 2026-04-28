@@ -9,10 +9,12 @@ Inspired by claude-code's code-explorer agent pattern.
 
 import json
 import logging
+import time
 from typing import Any
 
 from litellm import Message, acompletion
 
+from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
 from agent.core.prompt_caching import with_prompt_caching
@@ -332,12 +334,21 @@ async def research_handler(
             ))
             try:
                 _msgs, _ = with_prompt_caching(messages, None, llm_params.get("model"))
+                _t0 = time.monotonic()
                 response = await acompletion(
                     messages=_msgs,
                     tools=None,  # no tools — force text response
                     stream=False,
                     timeout=120,
                     **llm_params,
+                )
+                await telemetry.record_llm_call(
+                    session,
+                    model=research_model,
+                    response=response,
+                    latency_ms=int((time.monotonic() - _t0) * 1000),
+                    finish_reason=response.choices[0].finish_reason if response.choices else None,
+                    kind="research",
                 )
                 content = response.choices[0].message.content or ""
                 return content or "Research context exhausted — no summary produced.", bool(content)
@@ -360,6 +371,7 @@ async def research_handler(
             _msgs, _tools = with_prompt_caching(
                 messages, tool_specs if tool_specs else None, llm_params.get("model")
             )
+            _t0 = time.monotonic()
             response = await acompletion(
                 messages=_msgs,
                 tools=_tools,
@@ -367,6 +379,14 @@ async def research_handler(
                 stream=False,
                 timeout=120,
                 **llm_params,
+            )
+            await telemetry.record_llm_call(
+                session,
+                model=research_model,
+                response=response,
+                latency_ms=int((time.monotonic() - _t0) * 1000),
+                finish_reason=response.choices[0].finish_reason if response.choices else None,
+                kind="research",
             )
         except Exception as e:
             logger.error("Research sub-agent LLM error: %s", e)
@@ -459,12 +479,21 @@ async def research_handler(
     ))
     try:
         _msgs, _ = with_prompt_caching(messages, None, llm_params.get("model"))
+        _t0 = time.monotonic()
         response = await acompletion(
             messages=_msgs,
             tools=None,
             stream=False,
             timeout=120,
             **llm_params,
+        )
+        await telemetry.record_llm_call(
+            session,
+            model=research_model,
+            response=response,
+            latency_ms=int((time.monotonic() - _t0) * 1000),
+            finish_reason=response.choices[0].finish_reason if response.choices else None,
+            kind="research",
         )
         content = response.choices[0].message.content or ""
         if content:
