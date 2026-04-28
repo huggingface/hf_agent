@@ -5,6 +5,7 @@ BENCHMARK="$1"
 MODEL_TO_TRAIN="$2"
 TASK_RUN_ID="$3"
 NUM_HOURS="$4"
+DURATION_MINUTES="${5:-}"
 
 if [ -z "${RUN_ROOT:-}" ] || [ -z "${REPO_ROOT:-}" ] || [ -z "${PTB_DIR:-}" ]; then
     echo "RUN_ROOT, REPO_ROOT, and PTB_DIR must be exported" >&2
@@ -17,6 +18,16 @@ fi
 
 DOCKER_IMAGE="${POST_TRAIN_BENCH_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest}"
 HF_HOME_HOST="${HF_HOME:-$HOME/.cache/huggingface}"
+
+if [ -z "$DURATION_MINUTES" ]; then
+    DURATION_MINUTES="$(python - "$NUM_HOURS" <<'PY'
+import math
+import sys
+print(max(1, math.ceil(float(sys.argv[1]) * 60)))
+PY
+)"
+fi
+DURATION_SECONDS="$((DURATION_MINUTES * 60))"
 
 safe_name() {
     python - "$1" <<'PY'
@@ -44,6 +55,7 @@ echo "model_to_train=$MODEL_TO_TRAIN"
 echo "agent_model=$ML_INTERN_AGENT_MODEL"
 echo "task_run_id=$TASK_RUN_ID"
 echo "num_hours=$NUM_HOURS"
+echo "duration_minutes=$DURATION_MINUTES"
 echo "docker_image=$DOCKER_IMAGE"
 
 cp "$PTB_DIR/src/eval/tasks/${BENCHMARK}/evaluate.py" "$JOB_DIR/task/"
@@ -69,7 +81,27 @@ PROMPT="$(
 printf '%s\n' "$PROMPT" > "$EVAL_DIR/prompt.txt"
 export PROMPT
 
-bash "$PTB_DIR/src/utils/create_timer.sh" "$NUM_HOURS" "$JOB_DIR/task/timer.sh"
+CREATION_DATE="$(date +%s)"
+cat > "$JOB_DIR/task/timer.sh" <<TIMER
+#!/bin/bash
+
+CREATION_DATE=${CREATION_DATE}
+DURATION_SECONDS=${DURATION_SECONDS}
+
+DEADLINE=\$((CREATION_DATE + DURATION_SECONDS))
+NOW=\$(date +%s)
+REMAINING=\$((DEADLINE - NOW))
+
+if [ \$REMAINING -le 0 ]; then
+    echo "Timer expired!"
+else
+    echo "Remaining time (hours:minutes)":
+    HOURS=\$((REMAINING / 3600))
+    MINUTES=\$(((REMAINING % 3600) / 60))
+    printf "%d:%02d\n" \$HOURS \$MINUTES
+fi
+TIMER
+chmod +x "$JOB_DIR/task/timer.sh"
 
 CONTAINER_MOUNTS="${REPO_ROOT}:/ml-intern-src,${PTB_DIR}:/posttrainbench,${JOB_DIR}:/workspace,${JOB_TMP}:/tmp,${HF_HOME_HOST}:/hf-cache,${EVAL_DIR}:/result"
 CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN,ANTHROPIC_API_KEY,OPENAI_API_KEY,GEMINI_API_KEY,INFERENCE_TOKEN,HF_BILL_TO,ML_INTERN_AGENT_MODEL,PROMPT"
@@ -92,7 +124,7 @@ echo "================================"
 
 START_TS="$(date --iso-8601=seconds)"
 set +e
-timeout --signal=TERM --kill-after=30s "$((NUM_HOURS * 60 + 5))m" \
+timeout --signal=TERM --kill-after=30s "$((DURATION_MINUTES + 5))m" \
     srun \
         --container-image="$DOCKER_IMAGE" \
         --container-mounts="$CONTAINER_MOUNTS" \

@@ -52,11 +52,15 @@ export POST_TRAIN_BENCH_DOCKER_IMAGE=registry.../posttrainbench:your-tag
 
 ## Smoke Test
 
-Submit one short GSM8K / Qwen3-1.7B job:
+Submit one 5-minute GSM8K / Qwen3-1.7B job:
 
 ```bash
 bash post_train_bench/submit_eval_set.sh smoke
 ```
+
+The smoke mode is meant to validate the Slurm, Docker, agent launch, artifact
+collection, judge, and evaluation plumbing quickly. It is not a faithful
+quality estimate; use the full matrix for leaderboard runs.
 
 To check paths and metadata without submitting:
 
