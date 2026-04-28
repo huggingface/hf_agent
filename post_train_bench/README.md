@@ -77,14 +77,52 @@ After completion, inspect:
 find post_train_bench/runs/${ML_INTERN_AGENT_MODEL} -maxdepth 4 -type f | sort
 ```
 
-Important files:
+## Run Layout
 
-- `run_metadata.json`: source commit, Docker image, matrix size, dirty status.
-- `matrix.jsonl`: benchmark/model rows for the Slurm array.
-- `results/.../solve_out.txt`: raw agent trace.
-- `results/.../task/session_logs/*.json`: local `ml-intern` trajectory logs.
-- `results/.../metrics.json`: per-run benchmark metrics.
-- `artifacts/.../manifest.json`: checksums and copied artifact summary.
+A completed run has this shape:
+
+```text
+post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
+|-- artifacts
+|   `-- {method}
+|       `-- {benchmark}_{model_to_train}_{slurm_array_task}
+|           |-- final_model/            # copied trained model, when produced
+|           |-- manifest.json           # checksums and copied artifact summary
+|           |-- metrics.json            # copied per-run benchmark metrics
+|           `-- session_logs/           # copied local ml-intern trajectories
+|-- env
+|   `-- submit_env.txt                  # submission-time environment snapshot
+|-- results
+|   `-- {method}
+|       `-- {benchmark}_{model_to_train}_{slurm_array_task}
+|           |-- contamination_judgement.txt
+|           |-- disallowed_model_judgement.txt
+|           |-- final_eval_*.txt        # raw evaluation attempts
+|           |-- final_model/            # model selected by the agent
+|           |-- judge_output.txt        # judge runner stdout/stderr
+|           |-- judge_prompt.txt        # prompt sent to the contamination judge
+|           |-- judge_raw_response.txt  # raw judge model response, if available
+|           |-- metrics.json            # benchmark score for this task
+|           |-- output.log              # runner stdout
+|           |-- error.log               # runner stderr
+|           |-- prompt.txt              # PostTrainBench prompt given to ml-intern
+|           |-- solve_out.txt           # raw ml-intern agent trace
+|           |-- task/                   # task workspace captured after solve
+|           |`-- time_taken.txt         # wall time for the solve phase
+|-- slurm
+|   |-- {job_id}_{array_id}.err         # Slurm wrapper stderr
+|   `-- {job_id}_{array_id}.out         # Slurm wrapper stdout
+|-- matrix.jsonl                        # benchmark/model rows for the array
+|-- run_metadata.json                   # commit, Docker image, run id, dirty flag
+|-- sbatch_command.txt                  # exact submission command
+`-- sbatch_output.txt                   # Slurm job id and release output
+```
+
+Use `tree -L 5` on a specific run directory when you need a quick sanity check:
+
+```bash
+tree -L 5 post_train_bench/runs/${ML_INTERN_AGENT_MODEL}/{RUN_ID}
+```
 
 ## Full Matrix
 
