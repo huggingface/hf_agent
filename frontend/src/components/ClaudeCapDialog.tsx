@@ -62,8 +62,8 @@ export default function ClaudeCapDialog({
           sx={{ color: 'var(--muted-text)', fontSize: '0.85rem', lineHeight: 1.6 }}
         >
           Opus costs an arm and a leg, so we unfortunately have to cap you at {cap}{' '}
-          {cap === 1 ? 'session' : 'sessions'} a day. Give Kimi, MiniMax, or GLM a spin —
-          they are genuinely good and we use them all the time.
+          {cap === 1 ? 'session' : 'sessions'} a day. Give Kimi, MiniMax, GLM,
+          or DeepSeek a spin — they are genuinely good and we use them all the time.
         </DialogContentText>
         <Box
           sx={{
