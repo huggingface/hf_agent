@@ -47,25 +47,11 @@ BEDROCK_CLAUDE_MODEL_ID = "bedrock/us.anthropic.claude-opus-4-6-v1"
 def _claude_picker_model_id() -> str:
     """Resolve the model sent by the Claude menu entry.
 
-    ``ML_INTERN_MODEL_ID`` controls the default session model and may point to
-    non-Claude HF Router models for local testing. Only reuse it for the Claude
-    picker when it is actually an Anthropic/Bedrock Claude model.
+    ``ML_INTERN_CLAUDE_MODEL_ID`` is intentionally scoped to switching the
+    Claude endpoint between production Bedrock and local Anthropic. Other
+    models are selected through the model switcher.
     """
-    default_model = session_manager.config.model_name
-    if "anthropic" in default_model:
-        return default_model
-    return BEDROCK_CLAUDE_MODEL_ID
-
-
-def _default_model_option(model_id: str) -> dict[str, Any]:
-    provider = "anthropic" if "anthropic" in model_id else "huggingface"
-    return {
-        "id": model_id,
-        "label": model_id.split("/")[-1],
-        "provider": provider,
-        "tier": "pro" if provider == "anthropic" else "free",
-        "recommended": True,
-    }
+    return session_manager.config.model_name or BEDROCK_CLAUDE_MODEL_ID
 
 
 def _available_models() -> list[dict[str, Any]]:
@@ -97,9 +83,6 @@ def _available_models() -> list[dict[str, Any]]:
             "tier": "free",
         },
     ]
-    default_model = session_manager.config.model_name
-    if default_model not in {model["id"] for model in models}:
-        models.insert(0, _default_model_option(default_model))
     return models
 
 
