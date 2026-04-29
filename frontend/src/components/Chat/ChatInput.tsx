@@ -92,6 +92,8 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
+  const modelOptionsRef = useRef<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
+  const sessionIdRef = useRef<string | undefined>(sessionId);
   const [selectedModelId, setSelectedModelId] = useState<string>(DEFAULT_MODEL_OPTIONS[0].id);
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
   const { quota, refresh: refreshQuota } = useUserQuota();
@@ -106,6 +108,14 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
   const setJobsUpgradeRequired = useAgentStore((s) => s.setJobsUpgradeRequired);
   const [awaitingTopUp, setAwaitingTopUp] = useState(false);
   const lastSentRef = useRef<string>('');
+
+  useEffect(() => {
+    modelOptionsRef.current = modelOptions;
+  }, [modelOptions]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,9 +133,12 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
             ? { ...option, modelPath: claude.id, name: claude.label ?? option.name }
             : option
         ));
+        modelOptionsRef.current = next;
         setModelOptions(next);
-        const current = data.current ? findModelByPath(data.current, next) : null;
-        if (current) setSelectedModelId(current.id);
+        if (!sessionIdRef.current) {
+          const current = data.current ? findModelByPath(data.current, next) : null;
+          if (current) setSelectedModelId(current.id);
+        }
       })
       .catch(() => { /* ignore */ });
     return () => { cancelled = true; };
@@ -141,13 +154,13 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
       .then((data) => {
         if (cancelled) return;
         if (data?.model) {
-          const model = findModelByPath(data.model, modelOptions);
+          const model = findModelByPath(data.model, modelOptionsRef.current);
           if (model) setSelectedModelId(model.id);
         }
       })
       .catch(() => { /* ignore */ });
     return () => { cancelled = true; };
-  }, [sessionId, modelOptions]);
+  }, [sessionId]);
 
   const selectedModel = modelOptions.find(m => m.id === selectedModelId) || modelOptions[0];
 
