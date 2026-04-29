@@ -57,6 +57,20 @@ AVAILABLE_MODELS = [
         "recommended": True,
     },
     {
+        "id": "openai/gpt-5.5",
+        "label": "GPT-5.5 (high)",
+        "provider": "openai",
+        "tier": "pro",
+        "reasoning_effort": "high",
+    },
+    {
+        "id": "gemini/gemini-3.1-pro-preview",
+        "label": "Gemini 3.1 Pro",
+        "provider": "gemini",
+        "tier": "pro",
+        "reasoning_effort": "high",
+    },
+    {
         "id": "MiniMaxAI/MiniMax-M2.7",
         "label": "MiniMax M2.7",
         "provider": "huggingface",
@@ -78,10 +92,9 @@ def _is_anthropic_model(model_id: str) -> bool:
 async def _require_hf_for_anthropic(request: Request, model_id: str) -> None:
     """403 if a non-``huggingface``-org user tries to select an Anthropic model.
 
-    Anthropic models are billed to the Space's ``ANTHROPIC_API_KEY``; every
-    other model in ``AVAILABLE_MODELS`` is routed through HF Router and
-    billed via ``X-HF-Bill-To``. The gate only fires for Anthropic so
-    non-HF users can still freely switch between the free models.
+    Anthropic models are billed to the Space's ``ANTHROPIC_API_KEY``. The
+    gate only fires for Anthropic so non-HF users can still freely switch
+    between ungated models.
 
     Pattern: https://github.com/huggingface/ml-intern/pull/63
     """

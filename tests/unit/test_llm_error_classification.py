@@ -16,6 +16,7 @@ from agent.core.agent_loop import (
     _MAX_LLM_RETRIES,
     _LLM_RATE_LIMIT_RETRY_DELAYS,
     _LLM_RETRY_DELAYS,
+    _friendly_error_message,
     _is_context_overflow_error,
     _is_rate_limit_error,
     _is_transient_error,
@@ -98,3 +99,17 @@ def test_rate_limit_total_budget_covers_bedrock_bucket_recovery():
     exceed the ~60s Bedrock TPM bucket recovery window."""
     assert len(_LLM_RATE_LIMIT_RETRY_DELAYS) == _MAX_LLM_RETRIES - 1
     assert sum(_LLM_RATE_LIMIT_RETRY_DELAYS) > 60
+
+
+def test_quota_error_gets_friendly_message_without_traceback():
+    err = Exception(
+        "litellm.RateLimitError: geminiException - "
+        '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED",'
+        '"message":"Quota exceeded for metric: requests"}}'
+    )
+
+    msg = _friendly_error_message(err)
+
+    assert msg is not None
+    assert "quota" in msg.lower()
+    assert "traceback" not in msg.lower()

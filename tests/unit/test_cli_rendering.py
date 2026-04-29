@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent.main as main_mod
+from agent.core.model_switcher import SUGGESTED_MODELS
 from agent.tools.research_tool import _get_research_model
 from agent.utils import terminal_display
 
@@ -24,6 +25,13 @@ def test_bedrock_anthropic_research_model_stays_on_bedrock():
 
 def test_non_anthropic_research_model_is_unchanged():
     assert _get_research_model("openai/gpt-5.4") == "openai/gpt-5.4"
+
+
+def test_cli_suggests_new_direct_models():
+    suggested = {m["id"]: m["label"] for m in SUGGESTED_MODELS}
+
+    assert suggested["openai/gpt-5.5"] == "GPT-5.5 (high)"
+    assert suggested["gemini/gemini-3.1-pro-preview"] == "Gemini 3.1 Pro"
 
 
 def test_subagent_display_does_not_spawn_background_redraw(monkeypatch):

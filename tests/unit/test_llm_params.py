@@ -4,6 +4,7 @@ from agent.core.llm_params import (
     _resolve_hf_router_token,
     _resolve_llm_params,
 )
+from agent.core.model_defaults import preferred_reasoning_effort
 
 
 def test_openai_xhigh_effort_is_forwarded():
@@ -28,6 +29,38 @@ def test_openai_max_effort_is_still_rejected():
         assert "OpenAI doesn't accept effort='max'" in str(exc)
     else:
         raise AssertionError("Expected UnsupportedEffortError for max effort")
+
+
+def test_model_default_caps_gpt55_max_to_high():
+    assert preferred_reasoning_effort("openai/gpt-5.5", "max") == "high"
+
+
+def test_model_default_does_not_override_explicit_gpt55_effort():
+    assert preferred_reasoning_effort("openai/gpt-5.5", "xhigh") == "xhigh"
+
+
+def test_gemini_high_effort_is_forwarded():
+    params = _resolve_llm_params(
+        "gemini/gemini-3.1-pro-preview",
+        reasoning_effort="high",
+        strict=True,
+    )
+
+    assert params["model"] == "gemini/gemini-3.1-pro-preview"
+    assert params["reasoning_effort"] == "high"
+
+
+def test_gemini_xhigh_effort_is_rejected():
+    try:
+        _resolve_llm_params(
+            "gemini/gemini-3.1-pro-preview",
+            reasoning_effort="xhigh",
+            strict=True,
+        )
+    except UnsupportedEffortError as exc:
+        assert "Gemini doesn't accept effort='xhigh'" in str(exc)
+    else:
+        raise AssertionError("Expected UnsupportedEffortError for xhigh effort")
 
 
 def test_hf_router_token_prefers_inference_token(monkeypatch):

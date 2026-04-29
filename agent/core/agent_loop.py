@@ -310,6 +310,7 @@ def _friendly_error_message(error: Exception) -> str | None:
             "Authentication failed — your API key is missing or invalid.\n\n"
             "To fix this, set the API key for your model provider:\n"
             "  • Anthropic:   export ANTHROPIC_API_KEY=sk-...\n"
+            "  • Gemini:      export GEMINI_API_KEY=...\n"
             "  • OpenAI:      export OPENAI_API_KEY=sk-...\n"
             "  • HF Router:   export HF_TOKEN=hf_...\n\n"
             "You can also add it to a .env file in the project root.\n"
@@ -320,6 +321,18 @@ def _friendly_error_message(error: Exception) -> str | None:
         return (
             "Insufficient API credits. Please check your account balance "
             "at your model provider's dashboard."
+        )
+
+    if (
+        "resource_exhausted" in err_str
+        or "quota exceeded" in err_str
+        or "rate limit" in err_str
+        or "too many requests" in err_str
+        or "429" in err_str
+    ):
+        return (
+            "Provider quota or rate limit exhausted. Please check the model's "
+            "quota and billing settings at your provider dashboard, then retry."
         )
 
     if "not supported by provider" in err_str or "no provider supports" in err_str:
@@ -1216,10 +1229,11 @@ class Handlers:
 
             except Exception as e:
                 import traceback
+                from agent.core.redact import scrub_string
 
                 error_msg = _friendly_error_message(e)
                 if error_msg is None:
-                    error_msg = str(e) + "\n" + traceback.format_exc()
+                    error_msg = scrub_string(str(e) + "\n" + traceback.format_exc())
 
                 await session.send_event(
                     Event(
