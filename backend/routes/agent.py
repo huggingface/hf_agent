@@ -49,11 +49,13 @@ GATED_MODEL_IDS = {
 
 
 def _claude_picker_model_id() -> str:
-    """Resolve the model sent by the Claude menu entry.
+    """Return the model ID used by the Claude option in the UI.
 
-    ``ML_INTERN_CLAUDE_MODEL_ID`` is intentionally scoped to switching the
-    Claude endpoint between production Bedrock and local Anthropic. Other
-    models are selected through the model switcher.
+    The frontend config sets ``session_manager.config.model_name`` from
+    ``ML_INTERN_CLAUDE_MODEL_ID`` when that env var is present, otherwise it
+    falls back to the production Bedrock Claude model. This function only
+    exposes that resolved config value for the Claude picker; non-Claude models
+    are listed separately in the model switcher.
     """
     return session_manager.config.model_name
 
@@ -107,12 +109,8 @@ async def _require_hf_for_gated_model(request: Request, model_id: str) -> None:
     """403 if a non-``huggingface``-org user tries to select a gated model.
 
     Gated models are deployed paid endpoints backed by service-owned
-    credentials. Direct ``anthropic/...`` is intentionally not covered here:
-    that path is for local development with a developer's own Anthropic key.
-    The gate only fires for deployed paid models so non-HF users can still
-    freely switch between the free models.
-
-    Pattern: https://github.com/huggingface/ml-intern/pull/63
+    credentials. The gate only fires for deployed paid models so non-HF users 
+    can still freely switch between the free models.
     """
     if not _is_gated_model(model_id):
         return
