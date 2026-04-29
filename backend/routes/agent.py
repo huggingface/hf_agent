@@ -41,6 +41,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
 
+BEDROCK_CLAUDE_MODEL_ID = "bedrock/us.anthropic.claude-opus-4-6-v1"
+
+
+def _default_claude_model_id() -> str:
+    default_model = session_manager.config.model_name
+    if "anthropic" in default_model:
+        return default_model
+    return BEDROCK_CLAUDE_MODEL_ID
+
+
+DEFAULT_CLAUDE_MODEL_ID = _default_claude_model_id()
+
 AVAILABLE_MODELS = [
     {
         "id": "moonshotai/Kimi-K2.6",
@@ -50,7 +62,7 @@ AVAILABLE_MODELS = [
         "recommended": True,
     },
     {
-        "id": "bedrock/us.anthropic.claude-opus-4-6-v1",
+        "id": DEFAULT_CLAUDE_MODEL_ID,
         "label": "Claude Opus 4.6",
         "provider": "anthropic",
         "tier": "pro",

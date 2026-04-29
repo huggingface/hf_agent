@@ -25,7 +25,7 @@ const getHfAvatarUrl = (modelId: string) => {
   return `https://huggingface.co/api/avatars/${org}`;
 };
 
-const MODEL_OPTIONS: ModelOption[] = [
+const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
   {
     id: 'kimi-k2.6',
     name: 'Kimi K2.6',
@@ -58,8 +58,8 @@ const MODEL_OPTIONS: ModelOption[] = [
   },
 ];
 
-const findModelByPath = (path: string): ModelOption | undefined => {
-  return MODEL_OPTIONS.find(m => m.modelPath === path || path?.includes(m.id));
+const findModelByPath = (path: string, options: ModelOption[]): ModelOption | undefined => {
+  return options.find(m => m.modelPath === path || path?.includes(m.id));
 };
 
 interface ChatInputProps {
@@ -72,12 +72,13 @@ interface ChatInputProps {
 }
 
 const isClaudeModel = (m: ModelOption) => isClaudePath(m.modelPath);
-const firstFreeModel = () => MODEL_OPTIONS.find(m => !isClaudeModel(m)) ?? MODEL_OPTIONS[0];
+const firstFreeModel = (options: ModelOption[]) => options.find(m => !isClaudeModel(m)) ?? options[0];
 
 export default function ChatInput({ sessionId, onSend, onStop, isProcessing = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>(MODEL_OPTIONS[0].id);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
+  const [selectedModelId, setSelectedModelId] = useState<string>(DEFAULT_MODEL_OPTIONS[0].id);
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
   const { quota, refresh: refreshQuota } = useUserQuota();
   // The daily-cap dialog is triggered from two places: (a) a 429 returned
@@ -92,6 +93,34 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
   const [awaitingTopUp, setAwaitingTopUp] = useState(false);
   const lastSentRef = useRef<string>('');
 
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/config/model')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.available) return;
+        const claude = data.available.find((m: { provider?: string; id?: string }) => (
+          m.provider === 'anthropic' && m.id
+        ));
+        if (!claude?.id) return;
+
+        setModelOptions((options) => {
+          const next = options.map((option) => (
+            isClaudeModel(option)
+              ? { ...option, modelPath: claude.id, name: claude.label ?? option.name }
+              : option
+          ));
+          if (data.current) {
+            const current = findModelByPath(data.current, next);
+            if (current) setSelectedModelId(current.id);
+          }
+          return next;
+        });
+      })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, []);
+
   // Model is per-session: fetch this tab's current model every time the
   // session changes. Other tabs keep their own selections independently.
   useEffect(() => {
@@ -102,15 +131,15 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
       .then((data) => {
         if (cancelled) return;
         if (data?.model) {
-          const model = findModelByPath(data.model);
+          const model = findModelByPath(data.model, modelOptions);
           if (model) setSelectedModelId(model.id);
         }
       })
       .catch(() => { /* ignore */ });
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, modelOptions]);
 
-  const selectedModel = MODEL_OPTIONS.find(m => m.id === selectedModelId) || MODEL_OPTIONS[0];
+  const selectedModel = modelOptions.find(m => m.id === selectedModelId) || modelOptions[0];
 
   // Auto-focus the textarea when the session becomes ready
   useEffect(() => {
@@ -182,8 +211,8 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
   const handleUseFreeModel = useCallback(async () => {
     setClaudeQuotaExhausted(false);
     if (!sessionId) return;
-    const free = MODEL_OPTIONS.find(m => m.modelPath === FIRST_FREE_MODEL_PATH)
-      ?? firstFreeModel();
+    const free = modelOptions.find(m => m.modelPath === FIRST_FREE_MODEL_PATH)
+      ?? firstFreeModel(modelOptions);
     try {
       const res = await apiFetch(`/api/session/${sessionId}/model`, {
         method: 'POST',
@@ -199,7 +228,7 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
         }
       }
     } catch { /* ignore */ }
-  }, [sessionId, onSend, setClaudeQuotaExhausted]);
+  }, [sessionId, onSend, setClaudeQuotaExhausted, modelOptions]);
 
   const handleClaudeUpgradeClick = useCallback(async () => {
     if (!sessionId) return;
@@ -426,7 +455,7 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
             }
           }}
         >
-          {MODEL_OPTIONS.map((model) => (
+          {modelOptions.map((model) => (
             <MenuItem
               key={model.id}
               onClick={() => handleSelectModel(model)}
