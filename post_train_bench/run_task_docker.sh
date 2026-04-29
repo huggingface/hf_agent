@@ -1,12 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ "$#" -ne 5 ]; then
+    echo "Usage: $0 BENCHMARK MODEL_TO_TRAIN TASK_RUN_ID NUM_HOURS EVAL_LIMIT" >&2
+    exit 2
+fi
+
 BENCHMARK="$1"
 MODEL_TO_TRAIN="$2"
 TASK_RUN_ID="$3"
 NUM_HOURS="$4"
-DURATION_MINUTES="${5:-}"
-EVAL_LIMIT="${6:--1}"
+EVAL_LIMIT="$5"
 
 if [ -z "${RUN_ROOT:-}" ] || [ -z "${REPO_ROOT:-}" ] || [ -z "${PTB_DIR:-}" ]; then
     echo "RUN_ROOT, REPO_ROOT, and PTB_DIR must be exported" >&2
@@ -17,18 +21,19 @@ if [ -z "${ML_INTERN_AGENT_MODEL:-}" ]; then
     exit 2
 fi
 
-DOCKER_IMAGE="${POST_TRAIN_BENCH_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest}"
-HF_HOME_HOST="${HF_HOME:-$HOME/.cache/huggingface}"
+SOLVE_DOCKER_IMAGE="${POST_TRAIN_BENCH_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest}"
+EVAL_DOCKER_IMAGE="${POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:latest}"
+SEED_HF_CACHE="${POST_TRAIN_BENCH_SEED_HF_CACHE:-/fsx/lewis/post_train_bench/seed_hf_cache}"
+PROMPT_AGENT="${POST_TRAIN_BENCH_PROMPT_AGENT:-claude}"
 
-if [ -z "$DURATION_MINUTES" ]; then
-    DURATION_MINUTES="$(python - "$NUM_HOURS" <<'PY'
+DURATION_MINUTES="$(python - "$NUM_HOURS" <<'PY'
 import math
 import sys
 print(max(1, math.ceil(float(sys.argv[1]) * 60)))
 PY
 )"
-fi
 DURATION_SECONDS="$((DURATION_MINUTES * 60))"
+SOLVE_TIMEOUT_SECONDS="${POST_TRAIN_BENCH_FORCE_SOLVE_TIMEOUT_SECONDS:-$((DURATION_SECONDS + 300))}"
 
 safe_name() {
     python - "$1" <<'PY'
@@ -41,14 +46,61 @@ MODEL_SAFE="$(safe_name "$MODEL_TO_TRAIN")"
 AGENT_SAFE="$(safe_name "$ML_INTERN_AGENT_MODEL")"
 METHOD_DIR="ml_intern_${AGENT_SAFE}_${NUM_HOURS}h"
 EVAL_DIR="${RUN_ROOT}/results/${METHOD_DIR}/${BENCHMARK}_${MODEL_SAFE}_${TASK_RUN_ID}"
-TMP_SUBDIR="/tmp/ml_intern_ptb_${BENCHMARK}_${MODEL_SAFE}_${TASK_RUN_ID}"
+TMP_BASE="${SLURM_TMPDIR:-/scratch/${USER:-user}}"
+TMP_SUBDIR="${TMP_BASE}/ml_intern_ptb_${BENCHMARK}_${MODEL_SAFE}_${TASK_RUN_ID}_$$"
 JOB_DIR="${TMP_SUBDIR}/job_dir"
 JOB_TMP="${TMP_SUBDIR}/tmp"
 JOB_REPO="${TMP_SUBDIR}/ml-intern-src"
+JOB_JUDGE="${TMP_SUBDIR}/judge"
+TASK_CACHE_ROOT="${TMP_BASE}/post_train_bench_hf_cache/${BENCHMARK}_${MODEL_SAFE}_${TASK_RUN_ID}_$$"
+SOLVE_HF_CACHE="${TASK_CACHE_ROOT}/solve"
+EVAL_HF_CACHE="${TASK_CACHE_ROOT}/eval"
+MONITOR_PID=""
 
-rm -rf "$TMP_SUBDIR"
-mkdir -p "$EVAL_DIR" "$JOB_DIR/task" "$JOB_TMP" "$JOB_REPO" "$HF_HOME_HOST"
+cleanup() {
+    if [ -n "$MONITOR_PID" ]; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+        wait "$MONITOR_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TMP_SUBDIR" "$TASK_CACHE_ROOT"
+}
+trap cleanup EXIT
+
+seed_cache() {
+    local dest="$1"
+    mkdir -p "$dest"
+    if [ -d "$SEED_HF_CACHE" ]; then
+        cp -a "$SEED_HF_CACHE/." "$dest/"
+    else
+        echo "Seed HF cache not found, starting with an empty cache: $SEED_HF_CACHE"
+    fi
+}
+
+start_system_monitor() {
+    local interval="${POST_TRAIN_BENCH_MONITOR_INTERVAL_SECONDS:-30}"
+    (
+        while true; do
+            echo "=== $(date -u --iso-8601=seconds) ==="
+            uptime || true
+            free -h || true
+            df -h "$JOB_DIR" "$JOB_TMP" "$SOLVE_HF_CACHE" "$EVAL_HF_CACHE" 2>/dev/null || true
+            if command -v nvidia-smi >/dev/null 2>&1; then
+                nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw --format=csv || true
+            fi
+            echo
+            sleep "$interval"
+        done
+    ) >> "$EVAL_DIR/system_monitor.log" 2>&1 &
+    MONITOR_PID="$!"
+}
+
+rm -rf "$TMP_SUBDIR" "$TASK_CACHE_ROOT"
+mkdir -p "$EVAL_DIR" "$JOB_DIR/task" "$JOB_TMP" "$JOB_REPO" "$JOB_JUDGE" "$TASK_CACHE_ROOT"
 cp -a "$REPO_ROOT/." "$JOB_REPO/"
+rm -rf "$JOB_REPO/scratch/PostTrainBench" "$JOB_REPO/post_train_bench/runs"
+cp "$REPO_ROOT/post_train_bench/run_judge.py" "$JOB_JUDGE/run_judge.py"
+seed_cache "$SOLVE_HF_CACHE"
+seed_cache "$EVAL_HF_CACHE"
 
 exec > >(tee "$EVAL_DIR/output.log")
 exec 2> >(tee "$EVAL_DIR/error.log" >&2)
@@ -59,8 +111,15 @@ echo "agent_model=$ML_INTERN_AGENT_MODEL"
 echo "task_run_id=$TASK_RUN_ID"
 echo "num_hours=$NUM_HOURS"
 echo "duration_minutes=$DURATION_MINUTES"
+echo "duration_seconds=$DURATION_SECONDS"
+echo "solve_timeout_seconds=$SOLVE_TIMEOUT_SECONDS"
 echo "eval_limit=$EVAL_LIMIT"
-echo "docker_image=$DOCKER_IMAGE"
+echo "solve_docker_image=$SOLVE_DOCKER_IMAGE"
+echo "eval_docker_image=$EVAL_DOCKER_IMAGE"
+echo "seed_hf_cache=$SEED_HF_CACHE"
+echo "solve_hf_cache=$SOLVE_HF_CACHE"
+echo "eval_hf_cache=$EVAL_HF_CACHE"
+echo "prompt_agent=$PROMPT_AGENT"
 
 cp "$PTB_DIR/src/eval/tasks/${BENCHMARK}/evaluate.py" "$JOB_DIR/task/"
 if [ -d "$PTB_DIR/src/eval/tasks/${BENCHMARK}/evaluation_code" ]; then
@@ -80,7 +139,7 @@ PROMPT="$(
             --benchmark-id "$BENCHMARK" \
             --num-hours "$NUM_HOURS" \
             --num-gpus 1 \
-            --agent ml_intern
+            --agent "$PROMPT_AGENT"
 )"
 printf '%s\n' "$PROMPT" > "$EVAL_DIR/prompt.txt"
 export PROMPT
@@ -107,33 +166,54 @@ fi
 TIMER
 chmod +x "$JOB_DIR/task/timer.sh"
 
-CONTAINER_MOUNTS="${JOB_REPO}:/ml-intern-src,${PTB_DIR}:/posttrainbench,${JOB_DIR}:/workspace,${JOB_TMP}:/tmp,${HF_HOME_HOST}:/hf-cache,${EVAL_DIR}:/result"
-CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN,ANTHROPIC_API_KEY,OPENAI_API_KEY,GEMINI_API_KEY,INFERENCE_TOKEN,HF_BILL_TO,ML_INTERN_AGENT_MODEL,PROMPT"
+SOLVE_CONTAINER_MOUNTS="${JOB_REPO}:/ml-intern-src,${JOB_DIR}:/workspace,${JOB_TMP}:/tmp,${SOLVE_HF_CACHE}:/hf-cache,${EVAL_DIR}:/result"
+JUDGE_CONTAINER_MOUNTS="${JOB_JUDGE}:/judge,${JOB_DIR}/task:/workspace/task,${EVAL_DIR}:/result,${JOB_TMP}:/tmp"
+EVAL_CONTAINER_MOUNTS="${PTB_DIR}:/posttrainbench,${EVAL_DIR}:/result,${JOB_TMP}:/tmp,${EVAL_HF_CACHE}:/hf-cache"
+SOLVE_CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN,ANTHROPIC_API_KEY,OPENAI_API_KEY,GEMINI_API_KEY,INFERENCE_TOKEN,HF_BILL_TO,ML_INTERN_AGENT_MODEL,PROMPT,TRACKIO_PROJECT,TRACKIO_SPACE_ID"
+JUDGE_CONTAINER_ENV="OPENAI_API_KEY,PTB_JUDGE_MODEL"
+EVAL_CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN,OPENAI_API_KEY,INFERENCE_TOKEN,HF_BILL_TO"
 
-run_in_container() {
+echo "solve_container_mounts=$SOLVE_CONTAINER_MOUNTS"
+echo "judge_container_mounts=$JUDGE_CONTAINER_MOUNTS"
+echo "eval_container_mounts=$EVAL_CONTAINER_MOUNTS"
+
+run_judge_container() {
     srun \
-        --container-image="$DOCKER_IMAGE" \
-        --container-mounts="$CONTAINER_MOUNTS" \
+        --no-container-mount-home \
+        --container-image="$SOLVE_DOCKER_IMAGE" \
+        --container-mounts="$JUDGE_CONTAINER_MOUNTS" \
         --container-workdir=/workspace/task \
-        --container-env="$CONTAINER_ENV" \
+        --container-env="$JUDGE_CONTAINER_ENV" \
         "$@"
 }
 
-export HF_HOME=/hf-cache
-SOLVE_OUT="$EVAL_DIR/solve_out.txt"
+run_eval_container() {
+    srun \
+        --no-container-mount-home \
+        --container-image="$EVAL_DOCKER_IMAGE" \
+        --container-mounts="$EVAL_CONTAINER_MOUNTS" \
+        --container-workdir=/posttrainbench/src/eval/tasks/"$BENCHMARK" \
+        --container-env="$EVAL_CONTAINER_ENV" \
+        "$@"
+}
+
+SOLVE_LOG_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+SOLVE_OUT="$EVAL_DIR/solve_out_${SOLVE_LOG_TS}.txt"
 
 echo "================================"
 echo "========= RUNNING TASK ========="
 echo "================================"
 
+start_system_monitor
 START_TS="$(date --iso-8601=seconds)"
 set +e
-timeout --signal=TERM --kill-after=30s "$((DURATION_MINUTES + 5))m" \
+timeout --signal=TERM --kill-after=30s "${SOLVE_TIMEOUT_SECONDS}s" \
     srun \
-        --container-image="$DOCKER_IMAGE" \
-        --container-mounts="$CONTAINER_MOUNTS" \
+        --no-container-mount-home \
+        --container-image="$SOLVE_DOCKER_IMAGE" \
+        --container-mounts="$SOLVE_CONTAINER_MOUNTS" \
         --container-workdir=/workspace/task \
-        --container-env="$CONTAINER_ENV" \
+        --container-env="$SOLVE_CONTAINER_ENV" \
         bash -lc '
         set -euo pipefail
         export HF_HOME=/hf-cache
@@ -152,6 +232,8 @@ timeout --signal=TERM --kill-after=30s "$((DURATION_MINUTES + 5))m" \
 SOLVE_EXIT=$?
 set -e
 END_TS="$(date --iso-8601=seconds)"
+cp "$SOLVE_OUT" "$EVAL_DIR/solve_out.txt"
+printf '%s\n' "$SOLVE_EXIT" > "$EVAL_DIR/solve_exit.txt"
 python - "$START_TS" "$END_TS" "$EVAL_DIR/time_taken.txt" <<'PY'
 import datetime as dt
 import sys
@@ -159,17 +241,19 @@ import sys
 start = dt.datetime.fromisoformat(sys.argv[1])
 end = dt.datetime.fromisoformat(sys.argv[2])
 seconds = int((end - start).total_seconds())
-with open(sys.argv[3], "w") as f:
+with open(sys.argv[3], "w", encoding="utf-8") as f:
     f.write(f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}\n")
 PY
 
 echo "solve_exit=$SOLVE_EXIT"
 
 if [ -d "$JOB_DIR/task/final_model" ]; then
+    rm -rf "$EVAL_DIR/final_model"
     cp -r "$JOB_DIR/task/final_model" "$EVAL_DIR/final_model"
     rm -rf "$JOB_DIR/task/final_model"
 fi
 
+rm -rf "$EVAL_DIR/task"
 cp -r "$JOB_DIR/task" "$EVAL_DIR/task"
 
 echo "========================================="
@@ -185,13 +269,58 @@ JUDGE_PROMPT="$(
 printf '%s\n' "$JUDGE_PROMPT" > "$EVAL_DIR/judge_prompt.txt"
 
 set +e
-run_in_container python /ml-intern-src/post_train_bench/run_judge.py \
-    --task-dir /result/task \
+run_judge_container python /judge/run_judge.py \
+    --task-dir /workspace/task \
     --prompt-file /result/judge_prompt.txt \
     --output-dir /result > "$EVAL_DIR/judge_output.txt" 2>&1
 JUDGE_EXIT=$?
 set -e
 echo "judge_exit=$JUDGE_EXIT"
+if [ "$JUDGE_EXIT" -ne 0 ]; then
+    exit "$JUDGE_EXIT"
+fi
+for required_judgement in contamination_judgement.txt disallowed_model_judgement.txt; do
+    if [ ! -s "$EVAL_DIR/$required_judgement" ]; then
+        echo "Missing required judge output: $required_judgement" >&2
+        exit 1
+    fi
+done
+
+validate_final_model() {
+    echo "================================"
+    echo "==== VALIDATING FINAL MODEL ===="
+    echo "================================"
+    set +e
+    run_eval_container bash -lc '
+        set -euo pipefail
+        export HF_HOME=/hf-cache
+        export PYTHONNOUSERSITE=1
+        python - <<'"'"'PY'"'"'
+from pathlib import Path
+from transformers import AutoConfig, AutoTokenizer
+
+model_path = Path("/result/final_model")
+if not model_path.is_dir():
+    raise SystemExit("final_model directory is missing")
+if not (model_path / "config.json").is_file():
+    raise SystemExit("final_model/config.json is missing")
+AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+try:
+    AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+except Exception as exc:
+    print(f"tokenizer validation warning: {type(exc).__name__}: {exc}")
+print("final_model validation passed")
+PY
+    ' > "$EVAL_DIR/final_model_validation.txt" 2>&1
+    local status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        echo "Final model validation failed; see $EVAL_DIR/final_model_validation.txt" >&2
+        exit "$status"
+    fi
+}
+
+validate_final_model
 
 echo "================================"
 echo "========= EVALUATING ==========="
@@ -201,12 +330,11 @@ run_evaluation() {
     local max_tokens_arg="$1"
     local eval_num="$2"
     set +e
-    run_in_container bash -lc "
+    run_eval_container bash -lc "
         set -euo pipefail
         export HF_HOME=/hf-cache
         export PYTHONNOUSERSITE=1
         export VLLM_API_KEY=inspectai
-        cd /posttrainbench/src/eval/tasks/${BENCHMARK}
         python evaluate.py \
             --model-path /result/final_model \
             --templates-dir ../../../../src/eval/templates \
@@ -238,7 +366,7 @@ run_evaluation_with_retry() {
 }
 
 EVAL_COUNTER=0
-run_evaluation_with_retry 4 ""
+run_evaluation_with_retry 4 "" || true
 
 case "$BENCHMARK" in
     aime2025|bfcl|gpqamain) MAX_TOKENS_ARG="--max-tokens 12000" ;;
@@ -246,7 +374,7 @@ case "$BENCHMARK" in
     arenahardwriting|healthbench) MAX_TOKENS_ARG="--max-new-tokens 12288" ;;
     *) MAX_TOKENS_ARG="" ;;
 esac
-run_evaluation_with_retry 3 "$MAX_TOKENS_ARG"
+run_evaluation_with_retry 3 "$MAX_TOKENS_ARG" || true
 
 case "$BENCHMARK" in
     aime2025|bfcl|gpqamain) MAX_TOKENS_ARG="--max-tokens 8000" ;;
@@ -256,6 +384,11 @@ case "$BENCHMARK" in
 esac
 run_evaluation_with_retry 2 "$MAX_TOKENS_ARG"
 
+if [ ! -f "$EVAL_DIR/metrics.json" ]; then
+    echo "Evaluation failed after all retry phases" >&2
+    exit 1
+fi
+
 python post_train_bench/collect_artifacts.py \
     --run-root "$RUN_ROOT" \
     --eval-dir "$EVAL_DIR" \
@@ -264,8 +397,6 @@ python post_train_bench/collect_artifacts.py \
     --task-run-id "$TASK_RUN_ID" \
     --method "$METHOD_DIR"
 
-rm -rf "$TMP_SUBDIR"
-
-if [ "$SOLVE_EXIT" -ne 0 ]; then
+if [ "$SOLVE_EXIT" -ne 0 ] && [ "$SOLVE_EXIT" -ne 124 ]; then
     exit "$SOLVE_EXIT"
 fi

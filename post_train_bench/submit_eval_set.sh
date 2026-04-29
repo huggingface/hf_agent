@@ -21,6 +21,12 @@ Environment:
   POST_TRAIN_BENCH_DIR         Default: scratch/PostTrainBench
   POST_TRAIN_BENCH_DOCKER_IMAGE
                                Default: registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest
+  POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE
+                               Default: registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:latest
+  POST_TRAIN_BENCH_SEED_HF_CACHE
+                               Default: /fsx/lewis/post_train_bench/seed_hf_cache
+  POST_TRAIN_BENCH_PROMPT_AGENT
+                               Prompt rendering agent. Default: claude.
   POST_TRAIN_BENCH_SLURM_TIME  Slurm walltime. Default: 01:00:00 for smoke,
                                14:00:00 for full.
   POST_TRAIN_BENCH_RUN_ID      Optional explicit run id. Overrides the default
@@ -66,6 +72,9 @@ RUN_STAMP="${POST_TRAIN_BENCH_RUN_STAMP:-$(date -u +%Y-%m-%d_%H-%M-%S)}"
 RUN_PARENT="${HOST_REPO_ROOT}/post_train_bench/runs/${ML_INTERN_AGENT_MODEL}"
 EXPLICIT_RUN_ID="${POST_TRAIN_BENCH_RUN_ID:-}"
 DOCKER_IMAGE="${POST_TRAIN_BENCH_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest}"
+EVAL_DOCKER_IMAGE="${POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE:-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:latest}"
+SEED_HF_CACHE="${POST_TRAIN_BENCH_SEED_HF_CACHE:-/fsx/lewis/post_train_bench/seed_hf_cache}"
+PROMPT_AGENT="${POST_TRAIN_BENCH_PROMPT_AGENT:-claude}"
 PTB_SLURM_JOB_ID=""
 
 if [ -n "$EXPLICIT_RUN_ID" ] || [ "$DRY_RUN" -eq 1 ]; then
@@ -94,7 +103,6 @@ rows = [{
     "benchmark": "gsm8k",
     "model_to_train": "Qwen/Qwen3-1.7B-Base",
     "num_hours": "0.083",
-    "duration_minutes": 5,
     "eval_limit": 8,
 }]
 Path(sys.argv[1]).write_text("\n".join(json.dumps(row) for row in rows) + "\n")
@@ -156,7 +164,7 @@ create_source_snapshot() {
 }
 
 write_metadata() {
-    export RUN_ID MODE DOCKER_IMAGE PTB_DIR MATRIX_FILE MATRIX_COUNT RUN_STAMP PTB_SLURM_JOB_ID SOURCE_SNAPSHOT SLURM_TIME
+    export RUN_ID MODE DOCKER_IMAGE EVAL_DOCKER_IMAGE SEED_HF_CACHE PROMPT_AGENT PTB_DIR MATRIX_FILE MATRIX_COUNT RUN_STAMP PTB_SLURM_JOB_ID SOURCE_SNAPSHOT SLURM_TIME
     python - "$RUN_ROOT/run_metadata.json" <<'PY'
 import json
 import os
@@ -182,6 +190,10 @@ metadata = {
     "ml_intern_status_short": status,
     "dirty_worktree": bool(status),
     "docker_image": os.environ["DOCKER_IMAGE"],
+    "solve_docker_image": os.environ["DOCKER_IMAGE"],
+    "eval_docker_image": os.environ["EVAL_DOCKER_IMAGE"],
+    "seed_hf_cache": os.environ["SEED_HF_CACHE"],
+    "prompt_agent": os.environ["PROMPT_AGENT"],
     "slurm_time": os.environ["SLURM_TIME"],
     "post_train_bench_dir": os.environ["PTB_DIR"],
     "matrix_file": os.environ["MATRIX_FILE"],
@@ -201,7 +213,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
         --hold
         "--array=0-$((MATRIX_COUNT - 1))"
         "--time=${SLURM_TIME}"
-        "--export=ALL,RUN_PARENT=${RUN_PARENT},RUN_STAMP=${RUN_STAMP},PTB_DIR=${PTB_DIR},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE}"
+        "--export=ALL,RUN_PARENT=${RUN_PARENT},RUN_STAMP=${RUN_STAMP},PTB_DIR=${PTB_DIR},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE},POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE=${EVAL_DOCKER_IMAGE},POST_TRAIN_BENCH_SEED_HF_CACHE=${SEED_HF_CACHE},POST_TRAIN_BENCH_PROMPT_AGENT=${PROMPT_AGENT}"
         post_train_bench/launch.slurm
     )
     write_metadata
@@ -221,7 +233,7 @@ if [ -n "$EXPLICIT_RUN_ID" ]; then
         --parsable
         "--array=0-$((MATRIX_COUNT - 1))"
         "--time=${SLURM_TIME}"
-        "--export=ALL,RUN_ROOT=${RUN_ROOT},MATRIX_FILE=${MATRIX_FILE},PTB_DIR=${PTB_DIR},REPO_ROOT=${SOURCE_SNAPSHOT},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE},RUN_ID=${RUN_ID}"
+        "--export=ALL,RUN_ROOT=${RUN_ROOT},MATRIX_FILE=${MATRIX_FILE},PTB_DIR=${PTB_DIR},REPO_ROOT=${SOURCE_SNAPSHOT},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE},POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE=${EVAL_DOCKER_IMAGE},POST_TRAIN_BENCH_SEED_HF_CACHE=${SEED_HF_CACHE},POST_TRAIN_BENCH_PROMPT_AGENT=${PROMPT_AGENT},RUN_ID=${RUN_ID}"
         post_train_bench/launch.slurm
     )
     write_metadata
@@ -243,7 +255,7 @@ SBATCH_CMD=(
     --hold
     "--array=0-$((MATRIX_COUNT - 1))"
     "--time=${SLURM_TIME}"
-    "--export=ALL,RUN_PARENT=${RUN_PARENT},RUN_STAMP=${RUN_STAMP},PTB_DIR=${PTB_DIR},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE}"
+    "--export=ALL,RUN_PARENT=${RUN_PARENT},RUN_STAMP=${RUN_STAMP},PTB_DIR=${PTB_DIR},POST_TRAIN_BENCH_DOCKER_IMAGE=${DOCKER_IMAGE},POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE=${EVAL_DOCKER_IMAGE},POST_TRAIN_BENCH_SEED_HF_CACHE=${SEED_HF_CACHE},POST_TRAIN_BENCH_PROMPT_AGENT=${PROMPT_AGENT}"
     post_train_bench/launch.slurm
 )
 SBATCH_RESULT="$("${SBATCH_CMD[@]}")"

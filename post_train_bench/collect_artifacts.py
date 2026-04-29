@@ -91,16 +91,24 @@ def main() -> int:
     for name in [
         "prompt.txt",
         "solve_out.txt",
+        "solve_exit.txt",
+        "system_monitor.log",
         "output.log",
         "error.log",
         "time_taken.txt",
+        "final_model_validation.txt",
         "metrics.json",
         "contamination_judgement.txt",
         "disallowed_model_judgement.txt",
         "judge_output.txt",
+        "judge_prompt.txt",
+        "codex_judge_prompt.txt",
         "judge_raw_response.txt",
     ]:
         copy_optional(eval_dir / name, dest / name, manifest)
+
+    for path in sorted(eval_dir.glob("solve_out_*.txt")):
+        copy_optional(path, dest / path.name, manifest)
 
     for path in sorted(eval_dir.glob("final_eval_*.txt")):
         copy_optional(path, dest / path.name, manifest)

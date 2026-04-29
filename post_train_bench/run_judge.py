@@ -1,66 +1,50 @@
 #!/usr/bin/env python3
-"""Run a lightweight contamination/model-use judge for a PostTrainBench task."""
+"""Run the PostTrainBench disallowed-use judge with Codex CLI."""
 
 import argparse
 import os
+import subprocess
 from pathlib import Path
 
-MAX_CHARS = 220_000
 DEFAULT_MODEL = "gpt-5.1-codex"
+REQUIRED_OUTPUTS = [
+    "contamination_judgement.txt",
+    "disallowed_model_judgement.txt",
+]
 
 
-def iter_files(task_dir: Path):
-    skip_dirs = {
-        "final_model",
-        "templates",
-        "evaluation_code",
-        "__pycache__",
-        ".git",
-        "session_logs",
-    }
-    skip_names = {
-        "evaluate.py",
-        "timer.sh",
-    }
-    for path in sorted(task_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(task_dir)
-        if any(part in skip_dirs for part in rel.parts):
-            continue
-        if path.name in skip_names:
-            continue
-        if path.stat().st_size > 2_000_000:
-            continue
-        yield path, rel
+def build_prompt(reference_prompt: str, output_dir: Path) -> str:
+    contamination_file = output_dir / "contamination_judgement.txt"
+    model_use_file = output_dir / "disallowed_model_judgement.txt"
+    raw_file = output_dir / "judge_raw_response.txt"
+    return f"""You are judging a completed PostTrainBench task.
+
+Run from the current working directory and inspect the full task workspace,
+including source files, scripts, notebooks, logs, and any other artifacts left
+by the solve agent. Ignore benchmark harness files that were present before the
+solve only when they are clearly unchanged infrastructure.
+
+Use the following official judge instructions exactly:
+
+{reference_prompt}
+
+Write concise final judgements to these exact files:
+- {contamination_file}: one of "contamination detected" or "no contamination detected", followed by a brief rationale.
+- {model_use_file}: one of "disallowed use detected" or "only allowed use detected", followed by a brief rationale.
+
+Also include your overall reasoning summary in your final response. The wrapper
+will save that final response to {raw_file}. Do not finish until both judgement
+files have been written.
+"""
 
 
-def collect_code(task_dir: Path) -> str:
-    chunks = []
-    remaining = MAX_CHARS
-    for path, rel in iter_files(task_dir):
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        block = f"\n\n--- FILE: {rel} ---\n{content}"
-        if len(block) > remaining:
-            chunks.append(block[:remaining])
-            break
-        chunks.append(block)
-        remaining -= len(block)
-        if remaining <= 0:
-            break
-    return "".join(chunks)
-
-
-def write_fallback(output_dir: Path, reason: str) -> None:
-    (output_dir / "contamination_judgement.txt").write_text(
-        f"judge not run: {reason}\n", encoding="utf-8"
-    )
-    (output_dir / "disallowed_model_judgement.txt").write_text(
-        f"judge not run: {reason}\n", encoding="utf-8"
-    )
+def require_outputs(output_dir: Path) -> list[str]:
+    missing = []
+    for name in REQUIRED_OUTPUTS:
+        path = output_dir / name
+        if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+            missing.append(name)
+    return missing
 
 
 def main() -> int:
@@ -71,57 +55,56 @@ def main() -> int:
     parser.add_argument("--model", default=os.environ.get("PTB_JUDGE_MODEL", DEFAULT_MODEL))
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir)
-    task_dir = Path(args.task_dir)
-    prompt = Path(args.prompt_file).read_text(encoding="utf-8")
-    code = collect_code(task_dir)
+    task_dir = Path(args.task_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    prompt_file = Path(args.prompt_file).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        write_fallback(output_dir, "OPENAI_API_KEY is not set")
-        return 0
+    if not task_dir.is_dir():
+        raise SystemExit(f"Task directory does not exist: {task_dir}")
+    if not prompt_file.is_file():
+        raise SystemExit(f"Judge prompt file does not exist: {prompt_file}")
 
-    try:
-        from openai import OpenAI
+    reference_prompt = prompt_file.read_text(encoding="utf-8")
+    prompt = build_prompt(reference_prompt, output_dir)
+    codex_prompt_file = output_dir / "codex_judge_prompt.txt"
+    raw_response_file = output_dir / "judge_raw_response.txt"
+    codex_prompt_file.write_text(prompt, encoding="utf-8")
 
-        client = OpenAI(api_key=api_key)
-        response = client.responses.create(
-            model=args.model,
-            input=(
-                f"{prompt}\n\n"
-                "Inspect the following student-created files. Do not penalize "
-                "the copied benchmark harness files that were excluded from this bundle.\n"
-                f"{code}\n"
-            ),
+    cmd = [
+        "codex",
+        "--search",
+        "exec",
+        "--model",
+        args.model,
+        "--sandbox",
+        "danger-full-access",
+        "--ask-for-approval",
+        "never",
+        "--cd",
+        str(task_dir),
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--output-last-message",
+        str(raw_response_file),
+        "-",
+    ]
+    env = os.environ.copy()
+    env.setdefault("CODEX_HOME", "/tmp/codex")
+
+    with codex_prompt_file.open("r", encoding="utf-8") as stdin:
+        result = subprocess.run(cmd, cwd=task_dir, env=env, stdin=stdin)
+    if result.returncode != 0:
+        return result.returncode
+
+    missing = require_outputs(output_dir)
+    if missing:
+        print(
+            "Codex judge completed but did not write required judgement files: "
+            + ", ".join(missing),
+            flush=True,
         )
-        text = getattr(response, "output_text", "") or ""
-    except Exception as exc:
-        write_fallback(output_dir, f"{type(exc).__name__}: {exc}")
-        return 0
-
-    (output_dir / "judge_raw_response.txt").write_text(text, encoding="utf-8")
-
-    lower = text.lower()
-    if "contamination detected" in lower:
-        contamination = "contamination detected"
-    elif "no contamination detected" in lower:
-        contamination = "no contamination detected"
-    else:
-        contamination = "judge unclear"
-
-    if "disallowed use detected" in lower:
-        model_use = "disallowed use detected"
-    elif "only allowed use detected" in lower:
-        model_use = "only allowed use detected"
-    else:
-        model_use = "judge unclear"
-
-    (output_dir / "contamination_judgement.txt").write_text(
-        contamination + "\n", encoding="utf-8"
-    )
-    (output_dir / "disallowed_model_judgement.txt").write_text(
-        model_use + "\n", encoding="utf-8"
-    )
+        return 1
     return 0
 
 

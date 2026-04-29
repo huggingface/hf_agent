@@ -17,6 +17,8 @@ RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs
 
+RUN npm install -g @openai/codex@0.125.0
+
 # uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"

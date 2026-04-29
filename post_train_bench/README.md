@@ -34,21 +34,24 @@ final run directory and metadata, then releases the job. Dry runs use a
 ```bash
 export HF_TOKEN=hf_...
 export ANTHROPIC_API_KEY=sk-ant-...   # or the provider key for ML_INTERN_AGENT_MODEL
-export OPENAI_API_KEY=sk-...          # used by Arena/Health evals and optional judge
+export OPENAI_API_KEY=sk-...          # used by Arena/Health evals and required Codex judge
 export ML_INTERN_AGENT_MODEL=anthropic/claude-opus-4-6  # optional; this is the default
 ```
 
-The default Docker image is:
+The runner uses separate solve/judge and eval images. The default images are:
 
 ```bash
-registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest
+export POST_TRAIN_BENCH_DOCKER_IMAGE=registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest
+export POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE=registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:latest
 ```
 
-Override it with:
+The solve phase uses a fresh per-task HF cache seeded from:
 
 ```bash
-export POST_TRAIN_BENCH_DOCKER_IMAGE=registry.../posttrainbench:your-tag
+export POST_TRAIN_BENCH_SEED_HF_CACHE=/fsx/lewis/post_train_bench/seed_hf_cache
 ```
+
+Override the path if the cluster seed cache moves.
 
 ## Smoke Test
 
@@ -109,6 +112,7 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |           |-- contamination_judgement.txt
 |           |-- disallowed_model_judgement.txt
 |           |-- final_eval_*.txt        # raw evaluation attempts
+|           |-- final_model_validation.txt
 |           |-- final_model/            # model selected by the agent
 |           |-- judge_output.txt        # judge runner stdout/stderr
 |           |-- judge_prompt.txt        # prompt sent to the contamination judge
@@ -118,6 +122,9 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |           |-- error.log               # runner stderr
 |           |-- prompt.txt              # PostTrainBench prompt given to ml-intern
 |           |-- solve_out.txt           # raw ml-intern agent trace
+|           |-- solve_out_*.txt         # timestamped raw ml-intern agent trace
+|           |-- solve_exit.txt          # solve command exit status
+|           |-- system_monitor.log      # host CPU/GPU/disk monitor samples
 |           |-- task/                   # task workspace captured after solve
 |           |`-- time_taken.txt         # wall time for the solve phase
 |-- slurm
@@ -154,37 +161,56 @@ Full mode requests a 14-hour Slurm allocation by default. Set
 `POST_TRAIN_BENCH_SLURM_TIME` before submission if the cluster queue or a
 specific benchmark needs a different ceiling.
 
+Matrix rows support only these fields:
+
+```json
+{"benchmark": "gsm8k", "model_to_train": "Qwen/Qwen3-1.7B-Base", "num_hours": "0.083", "eval_limit": 8}
+```
+
+`eval_limit` is optional. `duration_minutes` is intentionally invalid; the
+runner derives the solve budget from `num_hours`.
+
 ## Rebuilding The Docker Image
 
-The checked-in `post_train_bench/Dockerfile` mirrors the Dockerfile from the
-`posttrain-bench` integration branch and pins the PostTrainBench-compatible ML
-stack.
+The checked-in Dockerfiles build the solve/judge image and eval-only image.
+The solve/judge image includes Codex CLI for the required contamination and
+disallowed-model-use judge. The eval image installs the pinned benchmark stack,
+`inspect_evals@06001a83`, and `inspect_ai_vllm_stdout`.
 
 Build locally:
 
 ```bash
-docker build -t registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest \
-  -f post_train_bench/Dockerfile .
+bash post_train_bench/build_container.sh \
+  --sqsh-output /fsx/lewis/docker_images/posttrainbench.sqsh
+
+bash post_train_bench/build_container_eval.sh \
+  --sqsh-output /fsx/lewis/docker_images/posttrainbench-eval.sqsh
 ```
 
 Push to the cluster registry:
 
 ```bash
 docker push registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:latest
+docker push registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:latest
 ```
 
 Use a custom tag when testing dependency changes:
 
 ```bash
-docker build -t registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:ptb-test \
-  -f post_train_bench/Dockerfile .
+bash post_train_bench/build_container.sh \
+  --image registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:ptb-test
+bash post_train_bench/build_container_eval.sh \
+  --image registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:ptb-test
 docker push registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:ptb-test
+docker push registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:ptb-test
 export POST_TRAIN_BENCH_DOCKER_IMAGE=registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench:ptb-test
+export POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE=registry.hpc-cluster-hopper.hpc.internal.huggingface.tech/library/posttrainbench-eval:ptb-test
 ```
 
 You do not need to rebuild the image just to evaluate a different `ml-intern`
-commit. The Slurm job mounts the current checkout into the container and
-installs it at runtime.
+commit. The Slurm job copies the current checkout into a temporary solve
+workspace and installs it at runtime. The eval phase does not mount
+`/ml-intern-src` and does not inherit solve-installed packages.
 
 ## Notes
 
@@ -193,5 +219,6 @@ installs it at runtime.
   `anthropic/claude-opus-4-6`.
 - The run metadata records whether the source worktree was dirty at submission
   time. Commit intended changes before running official evaluations.
-- The optional judge writes `judge not run: ...` if `OPENAI_API_KEY` is not set
-  or the judge API call fails.
+- The Codex judge is required. `contamination_judgement.txt` and
+  `disallowed_model_judgement.txt` must both be present and nonempty before
+  evaluation proceeds.
