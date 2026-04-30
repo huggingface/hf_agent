@@ -74,13 +74,13 @@ def main() -> int:
     cmd = [
         "codex",
         "--search",
-        "exec",
         "--model",
         args.model,
         "--sandbox",
         "danger-full-access",
         "--ask-for-approval",
         "never",
+        "exec",
         "--cd",
         str(task_dir),
         "--skip-git-repo-check",
@@ -91,6 +91,7 @@ def main() -> int:
     ]
     env = os.environ.copy()
     env.setdefault("CODEX_HOME", "/tmp/codex")
+    Path(env["CODEX_HOME"]).mkdir(parents=True, exist_ok=True)
 
     with codex_prompt_file.open("r", encoding="utf-8") as stdin:
         result = subprocess.run(cmd, cwd=task_dir, env=env, stdin=stdin)
