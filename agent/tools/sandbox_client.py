@@ -7,13 +7,13 @@
 Sandbox Tools — Agent-native primitives for HF Space dev-mode sandboxes.
 
 Architecture:
-  - Creates a sandbox by duplicating a template Space (runs sandbox_server.py)
+  - Creates a fresh Docker Space with sandbox_server.py
   - Waits for it to come online
   - Communicates via HTTPS to the Space's API
   - Optionally deletes the Space when done
 
 Lifecycle:
-    sb = Sandbox.create(owner="burtenshaw")         # duplicate, wait, connect
+    sb = Sandbox.create(owner="burtenshaw")         # create, wait, connect
     sb = Sandbox.create(owner="burtenshaw",          # with options
                         hardware="t4-small",
                         private=True,
@@ -37,6 +37,7 @@ Tools: bash, read, write, edit, upload
 from __future__ import annotations
 
 import io
+import hashlib
 import secrets as secrets_lib
 import sys
 import time
@@ -65,6 +66,14 @@ MAX_TIMEOUT = 1200
 WAIT_TIMEOUT = 600
 WAIT_INTERVAL = 5
 API_WAIT_TIMEOUT = 180
+SANDBOX_API_TOKEN_HASH_ENV = "SANDBOX_API_TOKEN_SHA256"
+_ALLOWED_SANDBOX_VARIABLES = {"TRACKIO_SPACE_ID", "TRACKIO_PROJECT"}
+_FORBIDDEN_SANDBOX_VARIABLES = {
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+    "HUGGINGFACEHUB_API_TOKEN",
+    "HF_HOME",
+}
 
 _DOCKERFILE = """\
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
@@ -100,7 +109,7 @@ CMD ["python", "sandbox_server.py"]
 
 _SANDBOX_SERVER = '''\
 """Minimal FastAPI server for sandbox operations."""
-import hmac, os, subprocess, pathlib, signal, threading, re, tempfile
+import hashlib, hmac, os, subprocess, pathlib, signal, threading, re, tempfile
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
@@ -157,18 +166,19 @@ def _atomic_write(path: pathlib.Path, content: str):
 
 app = FastAPI()
 
-def _expected_api_token() -> str:
-    return os.environ.get("SANDBOX_API_TOKEN") or os.environ.get("HF_TOKEN") or ""
+def _expected_api_token_hash() -> str:
+    return os.environ.get("SANDBOX_API_TOKEN_SHA256", "")
 
 def _require_auth(request: Request) -> None:
-    expected = _expected_api_token()
+    expected = _expected_api_token_hash()
     if not expected:
         raise HTTPException(status_code=503, detail="Sandbox API token not configured")
     auth_header = request.headers.get("authorization", "")
     scheme, _, supplied = auth_header.partition(" ")
     if scheme.lower() != "bearer" or not supplied:
         raise HTTPException(status_code=401, detail="Missing bearer token")
-    if not hmac.compare_digest(supplied, expected):
+    supplied_hash = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(supplied_hash, expected):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
 
 _AUTH = [Depends(_require_auth)]
@@ -473,6 +483,30 @@ if __name__ == "__main__":
 '''
 
 
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validate_sandbox_variables(variables: dict[str, str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for key, value in (variables or {}).items():
+        normalized = key.strip()
+        if normalized in _FORBIDDEN_SANDBOX_VARIABLES:
+            raise ValueError(f"{normalized} cannot be injected into sandbox environments")
+        if normalized not in _ALLOWED_SANDBOX_VARIABLES:
+            raise ValueError(
+                f"{normalized} is not an allowed sandbox variable. "
+                f"Allowed variables: {', '.join(sorted(_ALLOWED_SANDBOX_VARIABLES))}"
+            )
+        if value:
+            result[normalized] = value
+    return result
+
+
+def _space_variables_payload(variables: dict[str, str]) -> list[dict[str, str]]:
+    return [{"key": key, "value": value} for key, value in variables.items()]
+
+
 @dataclass
 class ToolResult:
     success: bool
@@ -513,10 +547,9 @@ class Sandbox:
         # Trailing slash is critical: httpx resolves relative paths against base_url.
         # Without it, client.get("health") resolves to /health instead of /api/health.
         self._base_url = f"https://{slug}.hf.space/api/"
-        api_token = self.api_token or self.token
         self._client = httpx.Client(
             base_url=self._base_url,
-            headers={"Authorization": f"Bearer {api_token}"} if api_token else {},
+            headers={"Authorization": f"Bearer {self.api_token}"} if self.api_token else {},
             timeout=httpx.Timeout(MAX_TIMEOUT, connect=30),
             follow_redirects=True,
         )
@@ -539,25 +572,27 @@ class Sandbox:
         sleep_time: int | None = None,
         token: str | None = None,
         secrets: dict[str, str] | None = None,
+        variables: dict[str, str] | None = None,
         wait_timeout: int = WAIT_TIMEOUT,
         log: "Callable[[str], object] | None" = None,
         cancel_event: "Any | None" = None,
     ) -> Sandbox:
         """
-        Create a new sandbox by duplicating the template Space.
+        Create a new sandbox as a fresh Docker Space.
 
-        Generates a unique space name, duplicates the template, waits for it
+        Generates a unique space name, uploads the server files, waits for it
         to come online, then returns a connected Sandbox.
 
         Args:
             owner: HF username or org (e.g. "burtenshaw").
             name: Base name for the space. Defaults to "sandbox".
                   A unique suffix is always appended.
-            template: Source Space to duplicate (default: burtenshaw/sandbox).
+            template: Deprecated and ignored. Kept for older callers.
             hardware: Hardware tier (cpu-basic, t4-small, etc.).
             private: Whether the Space should be private.
             sleep_time: Auto-sleep after N seconds of inactivity.
             token: HF API token (from user's OAuth session).
+            variables: Non-secret Space variables to expose to the sandbox.
             wait_timeout: Max seconds to wait for Space to start (default: 300).
             cancel_event: A threading.Event (or compatible) checked during
                           polling loops.  When set, the Space is deleted and
@@ -583,30 +618,29 @@ class Sandbox:
         suffix = uuid.uuid4().hex[:8]
         space_id = f"{owner}/{base}-{suffix}"
         sandbox_api_token = secrets_lib.token_urlsafe(32)
+        sandbox_api_token_hash = _sha256_hex(sandbox_api_token)
+        sandbox_variables = _validate_sandbox_variables({**(secrets or {}), **(variables or {})})
 
-        _log(f"Creating sandbox: {space_id} (from {template})...")
+        _log(f"Creating sandbox: {space_id}...")
 
-        kwargs = {
-            "from_id": template,
-            "to_id": space_id,
+        repo_kwargs = {
+            "repo_id": space_id,
+            "repo_type": "space",
+            "space_sdk": "docker",
             "private": private,
-            "hardware": hardware,
+            "space_hardware": hardware,
+            "space_secrets": [
+                {"key": SANDBOX_API_TOKEN_HASH_ENV, "value": sandbox_api_token_hash}
+            ],
+            "space_variables": _space_variables_payload(sandbox_variables),
         }
         if sleep_time is not None:
-            kwargs["sleep_time"] = sleep_time
+            repo_kwargs["space_sleep_time"] = sleep_time
 
-        api.duplicate_space(**kwargs)
+        api.create_repo(**repo_kwargs)
         _log(f"Space created: https://huggingface.co/spaces/{space_id}")
 
         _check_cancel()
-
-        # Inject secrets BEFORE uploading server files (which triggers rebuild).
-        # Secrets added after a Space is running aren't available until restart,
-        # so they must be set before the build/start cycle.
-        sandbox_secrets = {**(secrets or {}), "SANDBOX_API_TOKEN": sandbox_api_token}
-        if sandbox_secrets:
-            for key, val in sandbox_secrets.items():
-                api.add_space_secret(space_id, key, val)
 
         # Upload sandbox server and Dockerfile (triggers rebuild)
         cls._setup_server(space_id, api, log=_log)
@@ -686,6 +720,8 @@ class Sandbox:
 
         Does a health check to verify the Space is reachable.
         """
+        if not api_token:
+            raise ValueError("api_token is required to connect to sandbox APIs")
         sb = cls(
             space_id=space_id,
             token=token,
@@ -766,6 +802,11 @@ class Sandbox:
     def _call(
         self, endpoint: str, payload: dict, timeout: float | None = None
     ) -> ToolResult:
+        if not self.api_token:
+            return ToolResult(
+                success=False,
+                error="Sandbox API token is required for sandbox operations.",
+            )
         # Strip leading slash for correct httpx base_url resolution
         endpoint = endpoint.lstrip("/")
         effective_timeout = timeout or self.timeout

@@ -1147,6 +1147,12 @@ class Handlers:
 
                     # 4. Record results and send outputs (order preserved)
                     for tc, tool_name, tool_args, output, success in results:
+                        try:
+                            from agent.core.redact import scrub_string
+
+                            output = scrub_string(output)
+                        except Exception:
+                            pass
                         tool_msg = Message(
                             role="tool",
                             content=output,

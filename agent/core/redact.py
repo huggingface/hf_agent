@@ -16,8 +16,8 @@ from typing import Any
 # Patterns are conservative: they only match tokens with the canonical prefix
 # and a minimum body length so we don't paint over normal text.
 _PATTERNS: list[tuple[re.Pattern, str]] = [
-    # Hugging Face tokens: hf_[A-Za-z0-9]{30,}
-    (re.compile(r"hf_[A-Za-z0-9]{30,}"), "[REDACTED_HF_TOKEN]"),
+    # Hugging Face tokens, including OAuth-style hf_oauth_... tokens.
+    (re.compile(r"hf_[A-Za-z0-9_\-]{30,}"), "[REDACTED_HF_TOKEN]"),
     # Anthropic: sk-ant-[A-Za-z0-9_\-]{20,}
     (re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"), "[REDACTED_ANTHROPIC_KEY]"),
     # OpenAI: sk-[A-Za-z0-9]{40,}  (legacy + proj keys)

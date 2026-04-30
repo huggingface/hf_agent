@@ -10,6 +10,13 @@ def test_hf_token():
     assert "[REDACTED_HF_TOKEN]" in out
 
 
+def test_hf_oauth_token():
+    s = "HF_TOKEN=hf_oauth_" + "A" * 40 + "-_suffix"
+    out = scrub_string(s)
+    assert "hf_oauth_" not in out
+    assert "HF_TOKEN=[REDACTED]" in out
+
+
 def test_anthropic_key():
     s = "key=sk-ant-api03_" + "a" * 40
     out = scrub_string(s)

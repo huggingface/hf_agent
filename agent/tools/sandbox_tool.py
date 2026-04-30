@@ -159,7 +159,7 @@ def _cleanup_user_orphan_sandboxes(
 async def _ensure_sandbox(
     session: Any,
     hardware: str = "cpu-basic",
-    extra_secrets: dict[str, str] | None = None,
+    extra_variables: dict[str, str] | None = None,
     **create_kwargs,
 ) -> tuple[Sandbox | None, str | None]:
     """
@@ -231,15 +231,11 @@ async def _ensure_sandbox(
 
     watcher_task = asyncio.create_task(_watch_cancel())
 
-    secrets: dict[str, str] = {"HF_TOKEN": token}
-    if extra_secrets:
-        secrets.update({k: v for k, v in extra_secrets.items() if v})
-
     kwargs = {
         "owner": owner,
         "hardware": hardware,
         "token": token,
-        "secrets": secrets,
+        "variables": {k: v for k, v in (extra_variables or {}).items() if v},
         "log": _log,
         "cancel_event": cancel_flag,
         **create_kwargs,
@@ -263,7 +259,7 @@ async def _ensure_sandbox(
         create_latency_s=int(_t.monotonic() - _t_start),
     )
 
-    # Set a descriptive title (template title is inherited on duplicate)
+    # Set a descriptive title for the freshly created Space.
     from huggingface_hub import metadata_update
 
     await asyncio.to_thread(
@@ -305,7 +301,7 @@ SANDBOX_CREATE_TOOL_SPEC = {
         "If the model won't fit, pick larger hardware upfront — OOM on a sandbox wastes time.\n\n"
         "If you intend to run a training script in this sandbox that uses report_to='trackio', "
         "pass `trackio_space_id` (e.g. '<username>/mlintern-<8char>') and `trackio_project` so they "
-        "are set as TRACKIO_SPACE_ID/TRACKIO_PROJECT secrets in the sandbox and the UI can embed the live dashboard.\n\n"
+        "are set as TRACKIO_SPACE_ID/TRACKIO_PROJECT variables in the sandbox and the UI can embed the live dashboard.\n\n"
         "Hardware: " + ", ".join([e.value for e in SpaceHardware]) + ".\n"
     ),
     "parameters": {
@@ -326,8 +322,8 @@ SANDBOX_CREATE_TOOL_SPEC = {
                 "type": "string",
                 "description": (
                     "Optional. The HF Space hosting the trackio dashboard for runs in this sandbox "
-                    "(e.g. '<username>/mlintern-<8char>', under YOUR HF namespace). Injected as "
-                    "TRACKIO_SPACE_ID secret and surfaced to the UI. The Space is auto-created and "
+                    "(e.g. '<username>/mlintern-<8char>', under YOUR HF namespace). Injected as the "
+                    "TRACKIO_SPACE_ID variable and surfaced to the UI. The Space is auto-created and "
                     "seeded with the trackio dashboard — DO NOT pre-create it via hf_repo_git, "
                     "that produces an empty Space that breaks the embed."
                 ),
@@ -335,7 +331,7 @@ SANDBOX_CREATE_TOOL_SPEC = {
             "trackio_project": {
                 "type": "string",
                 "description": (
-                    "Optional. The trackio project name. Injected as TRACKIO_PROJECT secret and "
+                    "Optional. The trackio project name. Injected as the TRACKIO_PROJECT variable and "
                     "used by the UI to filter the embedded dashboard to this project."
                 ),
             },
@@ -389,18 +385,18 @@ async def sandbox_create_handler(
     if "private" in args:
         create_kwargs["private"] = args["private"]
 
-    extra_secrets: dict[str, str] = {}
+    extra_variables: dict[str, str] = {}
     if trackio_space_id:
-        extra_secrets["TRACKIO_SPACE_ID"] = trackio_space_id
+        extra_variables["TRACKIO_SPACE_ID"] = trackio_space_id
         await _seed_trackio_dashboard_safe(session, trackio_space_id)
     if trackio_project:
-        extra_secrets["TRACKIO_PROJECT"] = trackio_project
+        extra_variables["TRACKIO_PROJECT"] = trackio_project
 
     try:
         sb, error = await _ensure_sandbox(
             session,
             hardware=hardware,
-            extra_secrets=extra_secrets or None,
+            extra_variables=extra_variables or None,
             **create_kwargs,
         )
     except Exception as e:

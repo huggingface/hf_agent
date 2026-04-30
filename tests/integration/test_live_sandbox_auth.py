@@ -43,7 +43,6 @@ def test_live_sandbox_authenticated_agent_communication():
             hardware="cpu-basic",
             private=False,
             token=token,
-            secrets={"HF_TOKEN": token},
             wait_timeout=900,
         )
 
@@ -61,6 +60,21 @@ def test_live_sandbox_authenticated_agent_communication():
         bash = sandbox.bash("printf sandbox-live-ok", timeout=30)
         assert bash.success, bash.error
         assert "sandbox-live-ok" in bash.output
+
+        env_check = sandbox.bash(
+            "python -c \"import os; "
+            "print('HF_TOKEN=' + str('HF_TOKEN' in os.environ)); "
+            "print('HUGGINGFACE_HUB_TOKEN=' + str('HUGGINGFACE_HUB_TOKEN' in os.environ)); "
+            "print('SANDBOX_API_TOKEN=' + str('SANDBOX_API_TOKEN' in os.environ)); "
+            "print('SANDBOX_API_TOKEN_SHA256=' + str('SANDBOX_API_TOKEN_SHA256' in os.environ))\"",
+            timeout=30,
+        )
+        assert env_check.success, env_check.error
+        assert "HF_TOKEN=False" in env_check.output
+        assert "HUGGINGFACE_HUB_TOKEN=False" in env_check.output
+        assert "SANDBOX_API_TOKEN=False" in env_check.output
+        assert "SANDBOX_API_TOKEN_SHA256=True" in env_check.output
+        assert sandbox.api_token not in env_check.output
 
         write = sandbox.write("/tmp/ml_intern_live_auth.txt", "alpha\nbeta\n")
         assert write.success, write.error

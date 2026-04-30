@@ -142,6 +142,13 @@ class Session:
 
     async def send_event(self, event: Event) -> None:
         """Send event back to client and log to trajectory"""
+        try:
+            from agent.core.redact import scrub
+
+            event.data = scrub(event.data)
+        except Exception as e:
+            logger.debug("Event redaction failed for %s: %s", event.event_type, e)
+
         # Log event to trajectory
         self.logged_events.append(
             {
