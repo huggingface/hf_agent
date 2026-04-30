@@ -202,7 +202,16 @@ metadata = {
 }
 Path(sys.argv[1]).write_text(json.dumps(metadata, indent=2) + "\n")
 PY
-    env | sort > "$RUN_ROOT/env/submit_env.txt"
+    uv run python - "$RUN_ROOT/env/submit_env.txt" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+from agent.core.redact import scrub_string
+
+lines = [scrub_string(f"{key}={value}") for key, value in sorted(os.environ.items())]
+Path(sys.argv[1]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
 }
 
 if [ "$DRY_RUN" -eq 1 ]; then

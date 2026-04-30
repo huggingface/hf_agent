@@ -96,6 +96,7 @@ start_system_monitor() {
 
 rm -rf "$TMP_SUBDIR" "$TASK_CACHE_ROOT"
 mkdir -p "$EVAL_DIR" "$JOB_DIR/task" "$JOB_TMP" "$JOB_REPO" "$JOB_JUDGE" "$TASK_CACHE_ROOT"
+rm -f "$EVAL_DIR/metrics.json"
 cp -a "$REPO_ROOT/." "$JOB_REPO/"
 rm -rf "$JOB_REPO/scratch/PostTrainBench" "$JOB_REPO/post_train_bench/runs"
 cp "$REPO_ROOT/post_train_bench/run_judge.py" "$JOB_JUDGE/run_judge.py"
@@ -166,16 +167,24 @@ fi
 TIMER
 chmod +x "$JOB_DIR/task/timer.sh"
 
-SOLVE_CONTAINER_MOUNTS="${JOB_REPO}:/ml-intern-src,${JOB_DIR}:/workspace,${JOB_TMP}:/tmp,${SOLVE_HF_CACHE}:/hf-cache,${EVAL_DIR}:/result"
+SOLVE_CONTAINER_MOUNTS="${JOB_REPO}:/ml-intern-src,${JOB_DIR}:/workspace,${JOB_TMP}:/tmp,${SOLVE_HF_CACHE}:/hf-cache"
 JUDGE_CONTAINER_MOUNTS="${JOB_JUDGE}:/judge,${JOB_DIR}/task:/workspace/task,${EVAL_DIR}:/result,${JOB_TMP}:/tmp"
 EVAL_CONTAINER_MOUNTS="${PTB_DIR}:/posttrainbench,${EVAL_DIR}:/result,${JOB_TMP}:/tmp,${EVAL_HF_CACHE}:/hf-cache"
-SOLVE_CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN,ANTHROPIC_API_KEY,OPENAI_API_KEY,GEMINI_API_KEY,INFERENCE_TOKEN,HF_BILL_TO,ML_INTERN_AGENT_MODEL,PROMPT,TRACKIO_PROJECT,TRACKIO_SPACE_ID"
+VALIDATION_CONTAINER_MOUNTS="${EVAL_DIR}/final_model:/final_model:ro,${JOB_TMP}:/tmp,${EVAL_HF_CACHE}:/hf-cache"
+SOLVE_PROVIDER_ENV=""
+case "$ML_INTERN_AGENT_MODEL" in
+    anthropic/*|claude*) SOLVE_PROVIDER_ENV=",ANTHROPIC_API_KEY" ;;
+    openai/*|gpt-*|o1*|o3*|o4*|o5*) SOLVE_PROVIDER_ENV=",OPENAI_API_KEY" ;;
+    google/*|gemini*) SOLVE_PROVIDER_ENV=",GEMINI_API_KEY" ;;
+esac
+SOLVE_CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN${SOLVE_PROVIDER_ENV},ML_INTERN_AGENT_MODEL,PROMPT,TRACKIO_PROJECT,TRACKIO_SPACE_ID"
 JUDGE_CONTAINER_ENV="OPENAI_API_KEY,PTB_JUDGE_MODEL"
 EVAL_CONTAINER_ENV="HF_TOKEN,HUGGING_FACE_HUB_TOKEN,OPENAI_API_KEY,INFERENCE_TOKEN,HF_BILL_TO"
 
 echo "solve_container_mounts=$SOLVE_CONTAINER_MOUNTS"
 echo "judge_container_mounts=$JUDGE_CONTAINER_MOUNTS"
 echo "eval_container_mounts=$EVAL_CONTAINER_MOUNTS"
+echo "validation_container_mounts=$VALIDATION_CONTAINER_MOUNTS"
 
 run_judge_container() {
     srun \
@@ -194,6 +203,16 @@ run_eval_container() {
         --container-mounts="$EVAL_CONTAINER_MOUNTS" \
         --container-workdir=/posttrainbench/src/eval/tasks/"$BENCHMARK" \
         --container-env="$EVAL_CONTAINER_ENV" \
+        "$@"
+}
+
+run_validation_container() {
+    srun \
+        --no-container-mount-home \
+        --container-image="$EVAL_DOCKER_IMAGE" \
+        --container-mounts="$VALIDATION_CONTAINER_MOUNTS" \
+        --container-workdir=/tmp \
+        --container-env="HF_TOKEN,HUGGING_FACE_HUB_TOKEN" \
         "$@"
 }
 
@@ -233,6 +252,7 @@ SOLVE_EXIT=$?
 set -e
 END_TS="$(date --iso-8601=seconds)"
 cp "$SOLVE_OUT" "$EVAL_DIR/solve_out.txt"
+cp "$SOLVE_OUT" "$JOB_DIR/task/solve_out.txt"
 printf '%s\n' "$SOLVE_EXIT" > "$EVAL_DIR/solve_exit.txt"
 python - "$START_TS" "$END_TS" "$EVAL_DIR/time_taken.txt" <<'PY'
 import datetime as dt
@@ -246,15 +266,6 @@ with open(sys.argv[3], "w", encoding="utf-8") as f:
 PY
 
 echo "solve_exit=$SOLVE_EXIT"
-
-if [ -d "$JOB_DIR/task/final_model" ]; then
-    rm -rf "$EVAL_DIR/final_model"
-    cp -r "$JOB_DIR/task/final_model" "$EVAL_DIR/final_model"
-    rm -rf "$JOB_DIR/task/final_model"
-fi
-
-rm -rf "$EVAL_DIR/task"
-cp -r "$JOB_DIR/task" "$EVAL_DIR/task"
 
 echo "========================================="
 echo "=== RUNNING CONTAMINATION JUDGE ========"
@@ -277,21 +288,48 @@ JUDGE_EXIT=$?
 set -e
 echo "judge_exit=$JUDGE_EXIT"
 if [ "$JUDGE_EXIT" -ne 0 ]; then
+    python "$JOB_REPO/post_train_bench/integrity.py" write-status \
+        --status judge_failed \
+        --reason "judge process exited with status $JUDGE_EXIT" \
+        --output "$EVAL_DIR/integrity_status.json"
     exit "$JUDGE_EXIT"
 fi
 for required_judgement in contamination_judgement.txt disallowed_model_judgement.txt; do
     if [ ! -s "$EVAL_DIR/$required_judgement" ]; then
         echo "Missing required judge output: $required_judgement" >&2
+        python "$JOB_REPO/post_train_bench/integrity.py" write-status \
+            --status judge_failed \
+            --reason "missing required judge output: $required_judgement" \
+            --output "$EVAL_DIR/integrity_status.json"
         exit 1
     fi
 done
+if ! python "$JOB_REPO/post_train_bench/integrity.py" judge-status \
+    --eval-dir "$EVAL_DIR" \
+    --output "$EVAL_DIR/integrity_status.json"; then
+    echo "Integrity judge did not return a clean verdict; see $EVAL_DIR/integrity_status.json" >&2
+    exit 1
+fi
+
+if [ -d "$JOB_DIR/task/final_model" ]; then
+    rm -rf "$EVAL_DIR/final_model"
+    cp -r "$JOB_DIR/task/final_model" "$EVAL_DIR/final_model"
+    rm -rf "$JOB_DIR/task/final_model"
+fi
+
+rm -rf "$EVAL_DIR/task"
+cp -r "$JOB_DIR/task" "$EVAL_DIR/task"
 
 validate_final_model() {
     echo "================================"
     echo "==== VALIDATING FINAL MODEL ===="
     echo "================================"
+    python "$JOB_REPO/post_train_bench/integrity.py" precheck-final-model \
+        --model-path "$EVAL_DIR/final_model" \
+        --base-model "$MODEL_TO_TRAIN" \
+        --output "$EVAL_DIR/final_model_precheck.json"
     set +e
-    run_eval_container bash -lc '
+    run_validation_container bash -lc '
         set -euo pipefail
         export HF_HOME=/hf-cache
         export PYTHONNOUSERSITE=1
@@ -299,13 +337,13 @@ validate_final_model() {
 from pathlib import Path
 from transformers import AutoConfig, AutoTokenizer
 
-model_path = Path("/result/final_model")
+model_path = Path("/final_model")
 if not model_path.is_dir():
     raise SystemExit("final_model directory is missing")
 if not (model_path / "config.json").is_file():
     raise SystemExit("final_model/config.json is missing")
-AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
-AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+AutoConfig.from_pretrained(model_path, local_files_only=True)
+AutoTokenizer.from_pretrained(model_path, local_files_only=True)
 print("final_model validation passed")
 PY
     ' > "$EVAL_DIR/final_model_validation.txt" 2>&1
@@ -318,6 +356,7 @@ PY
 }
 
 validate_final_model
+rm -f "$EVAL_DIR/metrics.json"
 
 echo "================================"
 echo "========= EVALUATING ==========="
@@ -326,6 +365,9 @@ echo "================================"
 run_evaluation() {
     local max_tokens_arg="$1"
     local eval_num="$2"
+    local metrics_candidate="/tmp/metrics_candidate_${eval_num}.json"
+    local host_metrics_candidate="${JOB_TMP}/metrics_candidate_${eval_num}.json"
+    rm -f "$host_metrics_candidate" "$EVAL_DIR/metrics.json"
     set +e
     run_eval_container bash -lc "
         set -euo pipefail
@@ -337,10 +379,19 @@ run_evaluation() {
             --templates-dir ../../../../src/eval/templates \
             --limit ${EVAL_LIMIT} \
             ${max_tokens_arg} \
-            --json-output-file /result/metrics.json
+            --json-output-file ${metrics_candidate}
     " > "$EVAL_DIR/final_eval_${eval_num}.txt" 2>&1
     local status=$?
     set -e
+    if [ "$status" -eq 0 ] && [ -s "$host_metrics_candidate" ]; then
+        mv "$host_metrics_candidate" "$EVAL_DIR/metrics.json"
+        return 0
+    fi
+    rm -f "$host_metrics_candidate"
+    if [ "$status" -eq 0 ]; then
+        echo "Evaluation attempt $eval_num exited successfully but did not write metrics" >&2
+        return 1
+    fi
     return "$status"
 }
 
@@ -349,9 +400,6 @@ run_evaluation_with_retry() {
     local max_tokens_arg="$2"
     local attempt
     for ((attempt=1; attempt<=max_retries; attempt++)); do
-        if [ -f "$EVAL_DIR/metrics.json" ]; then
-            return 0
-        fi
         EVAL_COUNTER=$((EVAL_COUNTER + 1))
         echo "Evaluation attempt $EVAL_COUNTER (phase attempt $attempt of $max_retries)"
         run_evaluation "$max_tokens_arg" "$EVAL_COUNTER" || true
@@ -383,6 +431,17 @@ run_evaluation_with_retry 2 "$MAX_TOKENS_ARG"
 
 if [ ! -f "$EVAL_DIR/metrics.json" ]; then
     echo "Evaluation failed after all retry phases" >&2
+    exit 1
+fi
+
+if ! python "$JOB_REPO/post_train_bench/integrity.py" scan-secrets \
+    --path "$EVAL_DIR" \
+    --output "$EVAL_DIR/secret_scan.json"; then
+    python "$JOB_REPO/post_train_bench/integrity.py" write-status \
+        --status invalid \
+        --reason "secret scan found unredacted secrets" \
+        --output "$EVAL_DIR/integrity_status.json"
+    echo "Secret scan found unredacted secrets; see $EVAL_DIR/secret_scan.json" >&2
     exit 1
 fi
 

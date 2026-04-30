@@ -4,10 +4,12 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 DEFAULT_MODEL = "gpt-5.1-codex"
+CODEX_NPM_PACKAGE = "@openai/codex@0.125.0"
 REQUIRED_OUTPUTS = [
     "contamination_judgement.txt",
     "disallowed_model_judgement.txt",
@@ -67,6 +69,18 @@ def ensure_codex_auth(env: dict[str, str]) -> None:
     auth_file.chmod(0o600)
 
 
+def resolve_codex_command() -> list[str]:
+    if shutil.which("codex"):
+        return ["codex"]
+    if shutil.which("npx"):
+        return ["npx", "-y", CODEX_NPM_PACKAGE]
+    raise FileNotFoundError(
+        "Neither `codex` nor `npx` is available in the judge container. "
+        "Install the Codex CLI in the solve/judge image or rebuild it from "
+        "post_train_bench/Dockerfile."
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-dir", required=True)
@@ -91,8 +105,14 @@ def main() -> int:
     raw_response_file = output_dir / "judge_raw_response.txt"
     codex_prompt_file.write_text(prompt, encoding="utf-8")
 
+    try:
+        codex_command = resolve_codex_command()
+    except FileNotFoundError as exc:
+        print(str(exc), flush=True)
+        return 1
+
     cmd = [
-        "codex",
+        *codex_command,
         "--search",
         "--model",
         args.model,

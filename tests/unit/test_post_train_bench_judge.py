@@ -10,6 +10,7 @@ run_judge = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(run_judge)
 ensure_codex_auth = run_judge.ensure_codex_auth
+resolve_codex_command = run_judge.resolve_codex_command
 
 
 def test_ensure_codex_auth_writes_api_key_auth_file(tmp_path):
@@ -42,3 +43,28 @@ def test_ensure_codex_auth_preserves_existing_auth_file(tmp_path):
     )
 
     assert json.loads(auth_file.read_text(encoding="utf-8"))["OPENAI_API_KEY"] == "existing"
+
+
+def test_resolve_codex_command_prefers_codex_cli(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex.chmod(0o755)
+    npx = bin_dir / "npx"
+    npx.write_text("#!/bin/sh\n", encoding="utf-8")
+    npx.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    assert resolve_codex_command() == ["codex"]
+
+
+def test_resolve_codex_command_falls_back_to_npx(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npx = bin_dir / "npx"
+    npx.write_text("#!/bin/sh\n", encoding="utf-8")
+    npx.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    assert resolve_codex_command() == ["npx", "-y", run_judge.CODEX_NPM_PACKAGE]

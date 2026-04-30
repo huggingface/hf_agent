@@ -105,15 +105,17 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |           |-- metrics.json            # copied per-run benchmark metrics
 |           `-- session_logs/           # copied local ml-intern trajectories
 |-- env
-|   `-- submit_env.txt                  # submission-time environment snapshot
+|   `-- submit_env.txt                  # redacted submission-time environment snapshot
 |-- results
 |   `-- {method}
 |       `-- {benchmark}_{model_to_train}_{slurm_array_task}
 |           |-- contamination_judgement.txt
 |           |-- disallowed_model_judgement.txt
 |           |-- final_eval_*.txt        # raw evaluation attempts
+|           |-- final_model_precheck.json
 |           |-- final_model_validation.txt
 |           |-- final_model/            # model selected by the agent
+|           |-- integrity_status.json   # clean, cheating, judge_failed, or invalid
 |           |-- judge_output.txt        # judge runner stdout/stderr
 |           |-- judge_prompt.txt        # prompt sent to the contamination judge
 |           |-- judge_raw_response.txt  # raw judge model response, if available
@@ -124,6 +126,7 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |           |-- solve_out.txt           # raw ml-intern agent trace
 |           |-- solve_out_*.txt         # timestamped raw ml-intern agent trace
 |           |-- solve_exit.txt          # solve command exit status
+|           |-- secret_scan.json        # unredacted-secret scan result
 |           |-- system_monitor.log      # host CPU/GPU/disk monitor samples
 |           |-- task/                   # task workspace captured after solve
 |           |`-- time_taken.txt         # wall time for the solve phase
