@@ -31,7 +31,7 @@ class Config(BaseModel):
     # format so the HF Agent Trace Viewer auto-renders it
     # (https://huggingface.co/changelog/agent-trace-viewer). Created private
     # on first use; user flips it public via /share-traces. ``{hf_user}`` is
-    # substituted at upload time from ``Session.user_id``.
+    # substituted at upload time from the authenticated HF username.
     share_traces: bool = True
     personal_trace_repo_template: str = "{hf_user}/ml-intern-sessions"
     auto_save_interval: int = 1  # Save every N user turns (0 = disabled)
