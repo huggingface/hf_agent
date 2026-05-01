@@ -744,6 +744,7 @@ def _sse_response(
     async def event_generator():
         # ── Phase 1: replay events the client missed ────────────────────────
         last_seen_seq = after_seq
+        replay_count = 0
         for doc in replay_events or []:
             msg = _event_doc_to_msg(doc)
             seq = msg.get("seq")
@@ -751,9 +752,18 @@ def _sse_response(
                 continue
             if isinstance(seq, int):
                 last_seen_seq = max(last_seen_seq, seq)
+            replay_count += 1
             yield _format_sse(msg)
             if msg.get("event_type", "") in _TERMINAL_EVENTS:
+                logger.info(
+                    f"replay_event_count session_id={session_id} "
+                    f"count={replay_count} after_seq={after_seq}"
+                )
                 return
+        logger.info(
+            f"replay_event_count session_id={session_id} "
+            f"count={replay_count} after_seq={after_seq}"
+        )
 
         # ── Phase 2: live tail ──────────────────────────────────────────────
         is_holder = (

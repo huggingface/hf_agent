@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -273,6 +273,8 @@ class SessionManager:
                 f"Lease lost for session {session_id} (held_by={self._holder_id}); "
                 f"requeued {requeued} claimed submissions"
             )
+            if requeued > 0:
+                logger.info(f"requeue_claimed holder_id={self._holder_id} count={requeued}")
         except Exception as e:
             logger.error(
                 f"requeue_claimed_for failed during lease-loss for {session_id}: {e}"
@@ -303,6 +305,7 @@ class SessionManager:
             await agent_session.session.send_event(
                 Event(event_type="migrating", data={"reason": reason})
             )
+            logger.info(f"migrating_emitted session_id={session_id} reason={reason}")
         except Exception as e:
             logger.warning(
                 f"Failed to emit migrating event for {session_id}: {e}"
@@ -312,7 +315,9 @@ class SessionManager:
         store = self._store()
         if getattr(store, "enabled", False):
             try:
-                await store.requeue_claimed_for(self._holder_id)
+                n = await store.requeue_claimed_for(self._holder_id)
+                if n > 0:
+                    logger.info(f"requeue_claimed holder_id={self._holder_id} count={n}")
             except Exception as e:
                 logger.warning(
                     f"requeue_claimed_for failed during release of "
@@ -321,6 +326,7 @@ class SessionManager:
         # 3) Release the lease.
         try:
             await store.release_lease(session_id, self._holder_id)
+            logger.info(f"lease_release session_id={session_id} holder_id={self._holder_id} reason={reason}")
         except Exception as e:
             logger.warning(f"release_lease failed for {session_id}: {e}")
         # 4) Drop from in-memory and cancel the agent task. Don't await the
@@ -454,6 +460,7 @@ class SessionManager:
                     )
                     try:
                         await store.release_lease(sid, self._holder_id)
+                        logger.info(f"lease_release session_id={sid} holder_id={self._holder_id} reason=idle_eviction")
                     except Exception as e:
                         logger.warning(
                             f"release_lease failed during idle evict for {sid}: {e}"
@@ -840,6 +847,7 @@ class SessionManager:
                     f"Refusing restore of {session_id}: lease held by another process"
                 )
                 return None
+            logger.info(f"lease_claim session_id={session_id} holder_id={self._holder_id}")
 
         agent_session = await self._rebuild_agent_session_from_store(
             loaded=loaded,
@@ -885,6 +893,7 @@ class SessionManager:
                 f"Worker refusing to claim {session_id}: lease held by another process"
             )
             return None
+        logger.info(f"lease_claim session_id={session_id} holder_id={self._holder_id}")
 
         meta = loaded.get("metadata") or {}
         owner = str(meta.get("user_id") or "") or "dev"
@@ -993,6 +1002,7 @@ class SessionManager:
         # claimed (Mongo path) or persistence is disabled (single-process
         # local dev — we are trivially the only holder).
         agent_session.holder_id = self._holder_id
+        logger.info(f"lease_claim session_id={session_id} holder_id={self._holder_id}")
 
         await self._start_agent_session(
             agent_session=agent_session,
@@ -1202,6 +1212,15 @@ class SessionManager:
                 # Wall-clock (time.time()) so it composes with the same clock
                 # used by ``_no_subscriber_since`` and the idle-eviction loop.
                 agent_session.last_submission_at = time.time()
+                created_at = claimed.get("created_at")
+                if isinstance(created_at, datetime):
+                    _ca = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+                    lag = (datetime.now(UTC) - _ca).total_seconds()
+                    if lag > 0.1:
+                        logger.debug(
+                            f"pending_submission_lag session_id={session_id} "
+                            f"op_type={op_type} lag_ms={int(lag * 1000)}"
+                        )
                 # Inline ops: interrupt + shutdown bypass the agent loop.
                 if op_type == "interrupt":
                     session.cancel()
@@ -1292,6 +1311,7 @@ class SessionManager:
 
             try:
                 await self._store().release_lease(session_id, self._holder_id)
+                logger.info(f"lease_release session_id={session_id} holder_id={self._holder_id} reason=session_end")
             except Exception as e:
                 logger.debug(
                     f"release_lease failed for {session_id} on session end: {e}"

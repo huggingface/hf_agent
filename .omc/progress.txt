@@ -167,9 +167,30 @@ Verification:
 
 Subtleties: worker claim tick polls db.pending_submissions directly rather than walking sessions (works without prior knowledge of session set). last_submission_at unified to time.time() wall-clock.
 
-## Iteration 7: starting US-008 (Step 7 — observability + deployment migration)
+## Iteration 7: US-008 (Step 7 — observability + deployment migration) — COMPLETE
 
-Smallest story. Add log lines for lease ops + replay scan + pending lag. Add deployment runbook (deploy ordering: Workers first, Main last; backfill via init).
+Added 11 observability log lines across:
+- backend/session_manager.py (10 sites): lease_claim (3 sites: create_session, ensure_session_loaded, claim_dormant_session); requeue_claimed (2 sites: _on_lease_lost INFO, release_session_to_background); migrating_emitted (release_session_to_background); lease_release (3 sites: release_session_to_background, _run_session finally, _idle_eviction_loop); pending_submission_lag DEBUG in _drain_and_process (only when lag > 100ms).
+- backend/routes/agent.py: replay_event_count INFO in _sse_response replay phase (both terminal-exit and phase-complete paths).
+
+Deployment runbook appended to AGENTS.md: deploy ordering (Workers first, Main last), blast radius mongo query, env vars table (MODE, MONGODB_URI, GRACE_PERIOD_SECONDS, IDLE_EVICTION_SECONDS), local 2-process stack with mongo replica set bring-up, chaos test (docker pause/unpause), observability grep patterns.
+
+Verification:
+- ruff: clean on session_manager.py + session_persistence.py; 2 pre-existing errors in routes/agent.py (unused os import, unused local) confirmed unrelated.
+- pytest: 83 passing, 0 failed in 2.15s.
+
+## ALL 8 STORIES COMPLETE
+
+PRD passes:true on US-001 through US-008.
+
+Cumulative scope:
+- 7 feature commits on bg-sessions-mongo-control-plane (plus 1 design-doc commit)
+- ~3000+ lines added across 12+ files (backend/session_manager.py, backend/main.py, backend/routes/agent.py, backend/start.sh, backend/worker.py, agent/core/session.py, agent/core/agent_loop.py, agent/core/session_persistence.py, agent/tools/research_tool.py, AGENTS.md, plus new test files and PRD/progress)
+- 83 new unit tests across 6 new test files (test_session_persistence_lease, test_session_manager_lease, test_session_manager_submissions, test_sse_holder_overlay, test_lifespan_grace_sweep, test_worker_idle_eviction)
+- Pre-existing test suite still green (248 passing in broader run; 2 unrelated test_doom_loop failures verified via git stash predate this PR)
+
+Next: architect verification per Ralph Step 7 (THOROUGH tier — multi-file architectural change).
+
 
 
 

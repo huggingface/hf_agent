@@ -129,7 +129,7 @@
       "id": "US-008",
       "title": "Observability + deployment migration (Step 7)",
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "Log lines added: lease_claim, lease_renew, lease_release, lease_renewal_failure, requeue_claimed, migrating_emitted, replay_event_count (on /api/events SSE), pending_submission_lag (claimed_at - created_at)",
         "Deploy migration script or runbook documented in docs/deployment.md (or AGENTS.md update): (a) Workers deployed first with new code, (b) Main rolled last, (c) backfill runs as part of MongoSessionStore.init() (already in US-001), (d) blast radius captured pre-launch via SELECT count(*) FROM sessions WHERE runtime_state='processing' baseline metric",
