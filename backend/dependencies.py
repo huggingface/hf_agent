@@ -138,6 +138,38 @@ async def _extract_user_from_token(token: str) -> dict[str, Any] | None:
     return user
 
 
+async def _dev_user_from_env() -> dict[str, Any]:
+    """Use HF_TOKEN as the dev identity when available.
+
+    Local dev often runs without OAuth, but session trace uploads still need a
+    real HF namespace. Deriving the dev user from HF_TOKEN keeps local uploads
+    pointed at the token owner's dataset instead of dev/ml-intern-traces.
+    """
+    token = os.environ.get("HF_TOKEN", "")
+    if not token:
+        return DEV_USER
+
+    whoami = await fetch_whoami_v2(token)
+    if not isinstance(whoami, dict):
+        return DEV_USER
+
+    username = None
+    for key in ("name", "user", "preferred_username"):
+        value = whoami.get(key)
+        if isinstance(value, str) and value:
+            username = value
+            break
+    if not username:
+        return DEV_USER
+
+    return {
+        "user_id": username,
+        "username": username,
+        "authenticated": True,
+        "plan": await _fetch_user_plan(token),
+    }
+
+
 async def check_org_membership(token: str, org_name: str) -> bool:
     """Check if the token owner belongs to an HF org. Only caches positive results."""
     now = time.time()
@@ -170,10 +202,10 @@ async def get_current_user(request: Request) -> dict[str, Any]:
     1. Authorization: Bearer <token> header
     2. hf_access_token cookie
 
-    In dev mode (AUTH_ENABLED=False), returns a default dev user.
+    In dev mode (AUTH_ENABLED=False), uses HF_TOKEN as the user when possible.
     """
     if not AUTH_ENABLED:
-        return DEV_USER
+        return await _dev_user_from_env()
 
     # Try Authorization header
     token = bearer_token_from_header(request.headers.get("Authorization", ""))
