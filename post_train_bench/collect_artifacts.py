@@ -122,6 +122,7 @@ def main() -> int:
         "error.log",
         "time_taken.txt",
         "final_model_validation.txt",
+        "baseline_final_model.txt",
         "final_model_precheck.json",
         "integrity_status.json",
         "protected_files_check.json",

@@ -123,6 +123,7 @@ echo "solve_timeout_seconds=$SOLVE_TIMEOUT_SECONDS"
 echo "eval_limit=$EVAL_LIMIT"
 echo "solve_docker_image=$SOLVE_DOCKER_IMAGE"
 echo "eval_docker_image=$EVAL_DOCKER_IMAGE"
+echo "baseline_final_model=${POST_TRAIN_BENCH_BASELINE_FINAL_MODEL:-0}"
 echo "seed_hf_cache=$SEED_HF_CACHE"
 echo "solve_hf_cache=$SOLVE_HF_CACHE"
 echo "eval_hf_cache=$EVAL_HF_CACHE"
@@ -223,6 +224,52 @@ run_validation_container() {
         --container-workdir=/tmp \
         --container-env="HF_TOKEN,HUGGING_FACE_HUB_TOKEN" \
         "$@"
+}
+
+create_baseline_final_model() {
+    if [ "${POST_TRAIN_BENCH_BASELINE_FINAL_MODEL:-0}" != "1" ]; then
+        return
+    fi
+    if [ -d "$JOB_DIR/task/final_model" ]; then
+        return
+    fi
+    echo "Creating smoke-only baseline final_model from $MODEL_TO_TRAIN"
+    export MODEL_TO_TRAIN
+    set +e
+    srun \
+        --no-container-mount-home \
+        --container-image="$EVAL_DOCKER_IMAGE" \
+        --container-mounts="${JOB_DIR}:/workspace,${JOB_TMP}:/tmp,${EVAL_HF_CACHE}:/hf-cache" \
+        --container-workdir=/workspace/task \
+        --container-env="MODEL_TO_TRAIN,POST_TRAIN_BENCH_SOLVE_HF_TOKEN,HUGGING_FACE_HUB_READ_TOKEN" \
+        bash -lc '
+            set -euo pipefail
+            export HF_HOME=/hf-cache
+            export PYTHONNOUSERSITE=1
+            if [ -n "${POST_TRAIN_BENCH_SOLVE_HF_TOKEN:-}" ]; then
+                export HF_TOKEN="$POST_TRAIN_BENCH_SOLVE_HF_TOKEN"
+                export HUGGING_FACE_HUB_TOKEN="$POST_TRAIN_BENCH_SOLVE_HF_TOKEN"
+            elif [ -n "${HUGGING_FACE_HUB_READ_TOKEN:-}" ]; then
+                export HF_TOKEN="$HUGGING_FACE_HUB_READ_TOKEN"
+                export HUGGING_FACE_HUB_TOKEN="$HUGGING_FACE_HUB_READ_TOKEN"
+            fi
+            python - <<'"'"'PY'"'"'
+import os
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_id = os.environ["MODEL_TO_TRAIN"]
+model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto")
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model.save_pretrained("final_model", safe_serialization=True)
+tokenizer.save_pretrained("final_model")
+print(f"saved baseline final_model from {model_id}")
+PY
+        ' > "$EVAL_DIR/baseline_final_model.txt" 2>&1
+    local status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        echo "Smoke baseline final_model creation failed; see $EVAL_DIR/baseline_final_model.txt" >&2
+    fi
 }
 
 FINALIZED=0
@@ -382,6 +429,8 @@ if ! python "$TRUSTED_INTEGRITY" verify-protected-files \
     write_integrity_status invalid "protected benchmark files changed during solve"
     fail_run 1 "Protected benchmark files changed during solve; see $EVAL_DIR/protected_files_check.json"
 fi
+create_baseline_final_model
+snapshot_evidence || true
 
 echo "========================================="
 echo "=== RUNNING CONTAMINATION JUDGE ========"

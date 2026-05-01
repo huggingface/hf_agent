@@ -77,6 +77,12 @@ collection have room to finish. Override the scheduler allocation with:
 export POST_TRAIN_BENCH_SLURM_TIME=00:30:00
 ```
 
+Smoke mode defaults `POST_TRAIN_BENCH_BASELINE_FINAL_MODEL=1`. If the agent
+does not leave a `final_model`, the runner creates a base-model `final_model`
+after the protected-file check so the judge, validation, evaluation, artifact
+collection, and hash reporting paths are still exercised. Full mode defaults
+this fallback off.
+
 To check paths and metadata without submitting:
 
 ```bash
@@ -117,6 +123,7 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |           |-- disallowed_model_judgement.txt
 |           |-- evidence_snapshot.json   # task/final_model capture status
 |           |-- final_eval_*.txt        # raw evaluation attempts
+|           |-- baseline_final_model.txt # smoke fallback creation log, if used
 |           |-- final_model_precheck.json
 |           |-- final_model_validation.txt
 |           |-- final_model/            # model selected by the agent

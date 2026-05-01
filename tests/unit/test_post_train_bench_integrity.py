@@ -224,6 +224,7 @@ def test_runner_does_not_mount_result_into_solve_or_trust_remote_code():
     assert '"$JOB_REPO/post_train_bench/integrity.py" verify-protected-files' not in runner
     assert "uv pip install --system -e ." not in runner
     assert "uv pip install --system ." in runner
+    assert "create_baseline_final_model" in runner
     solve_env_line = next(
         line for line in runner.splitlines() if line.startswith("SOLVE_CONTAINER_ENV=")
     )
@@ -252,3 +253,4 @@ def test_submit_full_mode_requires_clean_provenance():
     assert "Refusing full mode with mutable solve image" in submit
     assert "image_provenance" in submit
     assert "sha256_file" in submit
+    assert "POST_TRAIN_BENCH_BASELINE_FINAL_MODEL" in submit
