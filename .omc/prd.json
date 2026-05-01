@@ -1,0 +1,145 @@
+{
+  "task": "v1 of background-running ml-intern: Main+Workers HF Space topology with MongoDB as universal control plane. Sessions survive SSE drops, browser close, and Main Space restarts via lease+heartbeat ownership. Frontend unchanged.",
+  "planPath": ".omc/plans/ralplan-enable-ml-intern-to-run.md",
+  "specPath": ".omc/specs/deep-dive-enable-ml-intern-to-run.md",
+  "branch": "bg-sessions-mongo-control-plane",
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Mongo persistence layer extensions (Step 1)",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "MongoSessionStore exposes: claim_lease(session_id, holder_id, ttl_s=30), renew_lease(session_id, holder_id, ttl_s=30), release_lease(session_id, holder_id), enqueue_pending_submission(session_id, op_type, payload), claim_pending_submission(session_id, holder_id), mark_submission_done(submission_id), requeue_claimed_for(holder_id), change_stream_pending_submissions(session_id), change_stream_events(session_id, after_seq), with no-op mirrors on NoopSessionStore",
+        "claim_lease is exactly-once under N concurrent asyncio.gather callers (unit test) — exactly one returns the doc, rest return None",
+        "renew_lease with non-matching holder_id returns None (unit test)",
+        "claim_pending_submission returns docs in FIFO order by created_at (unit test with 3 enqueued submissions)",
+        "requeue_claimed_for(holder_id) preserves original created_at and re-claim order (unit test: claim 3, requeue, re-claim — same order)",
+        "MongoSessionStore.init() runs the backward-compat backfill: sessions with last_active_at > now-1h and no lease get lease={holder_id:null, expires_at:0}; sessions with last_active_at <= now-1h flip runtime_state to idle (NOT ended)",
+        "session_id index on pending_submissions: (session_id, status, created_at) created in _create_indexes",
+        "holder_id format helper exists: f\"{mode}:{hostname}:{uuid7-or-uuid4-suffix}\" — uses uuid7 if available (Python ≥ 3.13), else uuid4. Picked once at process start.",
+        "pytest tests/test_session_persistence.py passes",
+        "ruff check on modified files passes"
+      ],
+      "files": ["agent/core/session_persistence.py", "tests/test_session_persistence.py (new or extended)"],
+      "dependencies": []
+    },
+    {
+      "id": "US-002",
+      "title": "requeue_claimed_for wired into lifespan + lease-renewal failure (Step 1.5)",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "SessionManager exposes a private method that calls store.requeue_claimed_for(self._holder_id) on lease-renewal failure path (the path is added in US-003 / Step 2 heartbeat task; this story can land alongside it)",
+        "Lifespan shutdown sweep (added in US-006 / Step 5) calls requeue_claimed_for(holder_id) before release_lease",
+        "Unit test: claim 3 submissions, simulate holder loss, assert all 3 flip back to pending with original created_at; another holder picks them up in original order",
+        "ruff check on modified files passes"
+      ],
+      "files": ["backend/session_manager.py", "tests/test_session_manager_lease.py (new)"],
+      "dependencies": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "SessionManager lease-holder awareness + heartbeat (Step 2)",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "SessionManager.__init__ reads MODE env var (default 'main'), reads hostname (socket.gethostname()), and computes self._holder_id = f\"{mode}:{hostname}:{uuid_suffix}\" using the helper from US-001",
+        "SessionManager exposes self.mode (\"main\"|\"worker\") and self._holder_id as instance attributes",
+        "SessionManager.start() launches a background lease-renewal task that runs every 10 s and renews leases for all sessions in self.sessions held by self._holder_id",
+        "On renew failure (renew_lease returns None for a held session), the heartbeat task: (a) calls requeue_claimed_for(self._holder_id), (b) drops the session from self.sessions, (c) logs a WARN with session_id and the holder transition",
+        "Lease TTL is the PRIMARY recovery mechanism — lifespan-hook release is best-effort optimization (documented in code comment, NOT relied upon for SIGKILL recovery)",
+        "Manual test: SIGKILL SessionManager process and observe lease.expires_at goes stale within 30 s; another instance reclaims via CAS",
+        "pytest passes; ruff check passes"
+      ],
+      "files": ["backend/session_manager.py"],
+      "dependencies": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Replace submission_queue with Mongo-backed reader; add is_in_tool_call (Step 3)",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "submission_queue: asyncio.Queue field is removed from AgentSession dataclass and from _create_session_sync",
+        "_run_session loop body waits on change_stream_pending_submissions(session_id) (or 500ms poll fallback) instead of submission_queue.get(); each consumed doc → claim_pending_submission CAS → Submission(operation=Operation(...)) → process_submission → mark_submission_done in finally",
+        "submit, submit_user_input, submit_approval, undo, compact, shutdown_session all call store.enqueue_pending_submission(session_id, op_type, payload) instead of agent_session.submission_queue.put(...)",
+        "interrupt branches on holder: holder calls session.cancel() directly (preserves backend/session_manager.py:801-807 fast path); non-holder writes op_type='interrupt' to pending_submissions",
+        "Session class has new is_in_tool_call: bool = False attribute; agent/core/agent_loop.py at the two tool dispatch sites (~line 1111 and ~line 1387) sets it True before dispatch and clears in finally; agent/tools/research_tool.py:~460 also sets/clears it",
+        "Unit: enqueue 3 submissions across 2 mock holders claiming the same session — exactly one consumes each, FIFO order",
+        "Integration test or manual local dev test: 1 Main + 1 Worker with shared Mongo; POST /api/submit while Main holds lease → Main consumes; release lease; next POST consumed by Worker",
+        "pytest passes; ruff check passes"
+      ],
+      "files": ["backend/session_manager.py", "backend/routes/agent.py", "agent/core/session.py", "agent/core/agent_loop.py", "agent/tools/research_tool.py"],
+      "dependencies": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Holder-local fast-path overlay for SSE (Step 4)",
+      "priority": 5,
+      "passes": false,
+      "acceptanceCriteria": [
+        "EventBroadcaster class is RETAINED at backend/session_manager.py (not deleted)",
+        "Session.send_event durability path is unchanged — append_event called BEFORE in-process broadcaster push",
+        "_sse_response (and the chat_sse + subscribe_events route handlers that build it) branches on holder: if agent_session.holder_id == session_manager._holder_id → subscribe to in-process broadcaster (fast path); else → open Mongo change_stream_events with after_seq=replay_max_seq (slow path); polling fallback if change_stream open fails",
+        "Replay-from-Mongo phase still runs first in both branches (replay_events from load_events_after, then live)",
+        "Test: open two SSE streams (one to holder, one to non-holder) against the same session_id, both see identical event sequences and identical seq numbers",
+        "Latency: holder-local p50 stays at today's foreground latency profile; non-holder p50 within 50-200 ms band (manual measure)",
+        "pytest passes; ruff check passes"
+      ],
+      "files": ["backend/session_manager.py", "backend/routes/agent.py"],
+      "dependencies": ["US-003", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Lifespan sweep + grace-period sweeper + /background route + migrating event + subscriber counts (Step 5)",
+      "priority": 6,
+      "passes": false,
+      "acceptanceCriteria": [
+        "lifespan shutdown branch in backend/main.py: between line 62 (close of final-flush try/except) and line 63 (await session_manager.close()), inserts a sweep that for each session in self.sessions with runtime_state=='processing': (a) emits a 'migrating' session_event via store.append_event, (b) calls store.requeue_claimed_for(self._holder_id), (c) calls store.release_lease(session_id, self._holder_id)",
+        "SessionManager has _subscriber_counts: dict[str, int] and _no_subscriber_since: dict[str, float] attributes",
+        "SessionManager has _attach_subscriber(session_id) and _detach_subscriber(session_id) methods called from both SSE transport paths (fast and slow) at attach time and in the finally block",
+        "A grace-period sweeper task in SessionManager.start() runs every 30 s: for each session held by self._holder_id where _subscriber_counts[session_id] == 0 AND _no_subscriber_since[session_id] + GRACE_PERIOD_SECONDS < now AND runtime_state in ('processing', 'idle' with pending_submissions): emits 'migrating', requeues, releases lease",
+        "GRACE_PERIOD_SECONDS env var with default 180 (3 min)",
+        "New POST /api/session/{session_id}/background route: emits 'migrating' event, requeues, releases lease (manual trigger #2 from spec)",
+        "pytest passes; ruff check passes"
+      ],
+      "files": ["backend/main.py", "backend/session_manager.py", "backend/routes/agent.py"],
+      "dependencies": ["US-003", "US-004", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Worker entrypoint via MODE flag in start.sh + idle eviction (Step 6)",
+      "priority": 7,
+      "passes": false,
+      "acceptanceCriteria": [
+        "backend/start.sh branches on $MODE: if 'worker' → exec python -m backend.worker; else → existing 8 lines preserved verbatim including port-conflict graceful exit-0 hack",
+        "backend/worker.py exists as a 3-line shim: import asyncio; from backend.main import worker_loop; asyncio.run(worker_loop())",
+        "backend/main.py defines worker_loop() that: initializes SessionManager with mode='worker', polls/streams pending_submissions across all sessions, claims a session's lease via claim_lease (with CAS) for those without a holder, processes its claimed sessions, runs the heartbeat from US-003",
+        "Idle eviction in SessionManager: a task runs every 60 s, for each session held by self._holder_id where (not session.is_in_tool_call) AND (not is_processing) AND (no pending_submissions for this session_id) AND (last_submission_at + IDLE_EVICTION_SECONDS < now): release lease, drop from self.sessions",
+        "AgentSession has last_submission_at: float field updated on each submission consume",
+        "IDLE_EVICTION_SECONDS env var with default 1800 (30 min)",
+        "Unit test: simulate worker with idle session past TTL → eviction releases lease",
+        "pytest passes; ruff check passes"
+      ],
+      "files": ["backend/start.sh", "backend/worker.py", "backend/main.py", "backend/session_manager.py"],
+      "dependencies": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-006"]
+    },
+    {
+      "id": "US-008",
+      "title": "Observability + deployment migration (Step 7)",
+      "priority": 8,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Log lines added: lease_claim, lease_renew, lease_release, lease_renewal_failure, requeue_claimed, migrating_emitted, replay_event_count (on /api/events SSE), pending_submission_lag (claimed_at - created_at)",
+        "Deploy migration script or runbook documented in docs/deployment.md (or AGENTS.md update): (a) Workers deployed first with new code, (b) Main rolled last, (c) backfill runs as part of MongoSessionStore.init() (already in US-001), (d) blast radius captured pre-launch via SELECT count(*) FROM sessions WHERE runtime_state='processing' baseline metric",
+        "Local-dev section in docs covers: docker run mongo:7 --replSet rs0; rs.initiate(); rs.status(); MONGODB_URI env var; two-process startup (MODE=main and MODE=worker)",
+        "Drill 1 (5-step close-laptop) executes successfully against local stack — captured as a manual verification log in progress.txt",
+        "Drill 2 (Main restart with active turn) executes successfully against local stack — captured as a manual verification log in progress.txt",
+        "pytest passes; ruff check passes"
+      ],
+      "files": ["backend/session_manager.py", "agent/core/session_persistence.py", "backend/routes/agent.py", "docs/deployment.md (new) or AGENTS.md (extended)"],
+      "dependencies": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-006", "US-007"]
+    }
+  ]
+}

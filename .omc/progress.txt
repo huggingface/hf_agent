@@ -1,0 +1,54 @@
+# Ralph progress log — bg-sessions-mongo-control-plane
+
+## Session start: 2026-05-01
+
+### Pipeline upstream
+- /deep-dive: 8 interview rounds + 3-lane causal trace (Mongo confirmed configured in prod, sticky-session question sidestepped, heartbeat reframed via lease+heartbeat)
+- /plan --consensus --direct: 2 iterations. Architect APPROVE WITH SUGGESTIONS → Critic APPROVE WITH REQUIRED REVISIONS → Planner revision → Architect APPROVE → Critic APPROVE WITH MINOR CLEANUP → cleanups applied directly.
+- Final plan: .omc/plans/ralplan-enable-ml-intern-to-run.md (453 lines, 7 steps + Step 1.5)
+- Branch: bg-sessions-mongo-control-plane (commit 7da6dc9: design docs)
+
+### PRD: 8 stories (US-001 through US-008)
+- US-001: Mongo persistence layer extensions (Step 1) — IN PROGRESS
+- US-002: requeue_claimed_for wiring (Step 1.5)
+- US-003: SessionManager lease awareness + heartbeat (Step 2)
+- US-004: Replace submission_queue + add is_in_tool_call (Step 3)
+- US-005: Holder-local fast-path overlay for SSE (Step 4)
+- US-006: Lifespan sweep + grace sweeper + /background + migrating event + subscriber counts (Step 5)
+- US-007: Worker entrypoint + MODE flag + idle eviction (Step 6)
+- US-008: Observability + deployment migration (Step 7)
+
+### Locked open questions (from plan)
+1. Backward-compat: option (a) backfill empty lease for sessions with last_active_at > now-1h; flip older to runtime_state=idle (NOT ended, recoverable)
+2. holder_id: f"{mode}:{hostname}:{uuid7-or-uuid4-suffix}" — uuid7 if Python ≥ 3.13 else uuid4
+3. Idle eviction: 30 min default, predicate `not is_in_tool_call AND not is_processing AND no pending_submissions`
+
+### Codebase notes from prior reads
+- backend/session_manager.py: 1014 lines. EventBroadcaster at 44-78. AgentSession dataclass at 81-101. submission_queue field at 88, constructed at 535. _run_session at 693-772 (1s timeout polling on submission_queue.get).
+- backend/main.py: 115 lines. lifespan at 30-63. Insertion point: between line 62 (close of try/except for final-flush) and line 63 (await session_manager.close()).
+- backend/start.sh: 15 lines (verified by wc -l). Has port-conflict graceful exit-0 hack to preserve.
+- agent/core/session_persistence.py: NoopSessionStore at 54-103, MongoSessionStore at 105-472, get_session_store at 478. Uses AsyncMongoClient, counters collection for monotonic seq.
+- agent/core/agent_loop.py: tool dispatch at lines ~1111 and ~1387 (per critic). Plus agent/tools/research_tool.py:~460.
+
+## Iteration 1: US-001 (Step 1 — Mongo persistence layer extensions) — COMPLETE
+
+Delegated to executor at OPUS tier. Result:
+- agent/core/session_persistence.py: +319 lines (10 new MongoSessionStore methods + 5 NoopSessionStore mirrors + make_holder_id helper + _backfill_lease_state + new pending_submissions index)
+- pyproject.toml: +1 line (mongomock-motor>=0.0.36 to dev deps)
+- tests/test_session_persistence_lease.py: NEW, 12 tests all passing (1.75s)
+- ruff: clean
+- Pre-existing tests still pass (11 in tests/unit/test_session_persistence.py + tests/unit/test_session_manager_persistence.py)
+
+Verified anchors:
+- make_holder_id() at line 35
+- _backfill_lease_state() called from init() at line 177; defined at 187
+- claim_lease/renew_lease/release_lease at lines 566/603/620 (MongoSessionStore)
+- claim_pending_submission at 659; requeue_claimed_for at 698
+- NoopSessionStore mirrors at 123-141
+
+Time: ~3 min wall, ~63k tokens executor. Commit follows.
+
+## Iteration 2: starting US-002 (Step 1.5 — requeue_claimed_for wiring)
+
+Note: US-002 wiring depends on US-003's heartbeat task. Per plan: US-002 lands ALONGSIDE US-003 (both modify backend/session_manager.py). Will dispatch them as a single coordinated executor task to avoid merge-conflict on the same file.
+

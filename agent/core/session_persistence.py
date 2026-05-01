@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import UTC, datetime
+import socket
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from bson import BSON
+from bson import BSON, ObjectId
 from pymongo import AsyncMongoClient, DeleteMany, ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError, InvalidDocument, PyMongoError
 
@@ -28,6 +30,21 @@ def _now() -> datetime:
 
 def _doc_id(session_id: str, idx: int) -> str:
     return f"{session_id}:{idx}"
+
+
+def make_holder_id(mode: str) -> str:
+    """Build a process holder id ``f"{mode}:{hostname}:{8-hex-suffix}"``.
+
+    Uses ``uuid7`` if available (Python ≥ 3.13) for chronological ordering;
+    falls back to ``uuid4`` otherwise. Pick once at process start; do not
+    change mid-run.
+    """
+    hostname = socket.gethostname()
+    if hasattr(uuid, "uuid7"):
+        suffix = uuid.uuid7().hex[:8]  # type: ignore[attr-defined]
+    else:
+        suffix = uuid.uuid4().hex[:8]
+    return f"{mode}:{hostname}:{suffix}"
 
 
 def _safe_message_doc(message: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +118,42 @@ class NoopSessionStore:
     async def mark_pro_seen(self, *_: Any, **__: Any) -> dict[str, Any] | None:
         return None
 
+    # ── Lease + pending-submission control plane (no-op) ──────────────────
+
+    async def claim_lease(self, *_: Any, **__: Any) -> dict[str, Any] | None:
+        return None
+
+    async def renew_lease(self, *_: Any, **__: Any) -> dict[str, Any] | None:
+        return None
+
+    async def release_lease(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def enqueue_pending_submission(self, *_: Any, **__: Any) -> str:
+        return ""
+
+    async def claim_pending_submission(self, *_: Any, **__: Any) -> dict[str, Any] | None:
+        return None
+
+    async def mark_submission_done(self, *_: Any, **__: Any) -> None:
+        return None
+
+    async def requeue_claimed_for(self, *_: Any, **__: Any) -> int:
+        return 0
+
+    async def change_stream_pending_submissions(self, *_: Any, **__: Any):
+        raise NotImplementedError("change streams require Mongo persistence")
+        yield  # pragma: no cover - makes this an async generator
+
+    async def change_stream_events(self, *_: Any, **__: Any):
+        raise NotImplementedError("change streams require Mongo persistence")
+        yield  # pragma: no cover - makes this an async generator
+
+    async def poll_pending_submissions_after(
+        self, *_: Any, **__: Any
+    ) -> list[dict[str, Any]]:
+        return []
+
 
 class MongoSessionStore(NoopSessionStore):
     """MongoDB-backed session store."""
@@ -121,6 +174,7 @@ class MongoSessionStore(NoopSessionStore):
             await self.client.admin.command("ping")
             await self._create_indexes()
             self.enabled = True
+            await self._backfill_lease_state()
             logger.info("Mongo session persistence enabled (db=%s)", self.db_name)
         except Exception as e:
             logger.warning("Mongo session persistence disabled: %s", e)
@@ -129,6 +183,39 @@ class MongoSessionStore(NoopSessionStore):
                 await self.client.close()
             self.client = None
             self.db = None
+
+    async def _backfill_lease_state(self) -> None:
+        """One-shot migration for sessions predating the lease control plane.
+
+        Idempotent: the ``lease: {$exists: false}`` filter excludes already
+        migrated rows, so re-running ``init()`` is a no-op.
+        """
+        if self.db is None:
+            return
+        try:
+            cutoff = _now() - timedelta(hours=1)
+            recent = await self.db.sessions.update_many(
+                {
+                    "lease": {"$exists": False},
+                    "status": "active",
+                    "last_active_at": {"$gt": cutoff},
+                },
+                {"$set": {"lease": {"holder_id": None, "expires_at": _now()}}},
+            )
+            old = await self.db.sessions.update_many(
+                {
+                    "lease": {"$exists": False},
+                    "status": "active",
+                    "last_active_at": {"$lte": cutoff},
+                },
+                {"$set": {"runtime_state": "idle"}},
+            )
+            logger.info(
+                f"Backfilled empty lease on {recent.modified_count} sessions; "
+                f"flipped {old.modified_count} old sessions to idle."
+            )
+        except PyMongoError as e:
+            logger.warning(f"Lease backfill skipped due to Mongo error: {e}")
 
     async def close(self) -> None:
         if self.client is not None:
@@ -156,6 +243,9 @@ class MongoSessionStore(NoopSessionStore):
         )
         await self.db.session_trace_messages.create_index([("created_at", -1)])
         await self.db.pro_users.create_index([("first_seen_pro_at", -1)])
+        await self.db.pending_submissions.create_index(
+            [("session_id", 1), ("status", 1), ("created_at", 1)]
+        )
 
     def _ready(self) -> bool:
         return bool(self.enabled and self.db is not None)
@@ -470,6 +560,231 @@ class MongoSessionStore(NoopSessionStore):
             "converted": True,
             "first_seen_at": (doc.get("first_seen_at") or now).isoformat(),
         }
+
+    # ── Lease control plane ───────────────────────────────────────────────
+
+    async def claim_lease(
+        self, session_id: str, holder_id: str, ttl_s: int = 30
+    ) -> dict[str, Any] | None:
+        """Atomic CAS claim. Succeeds iff lease missing or expired.
+
+        Returns the updated session doc, or ``None`` if another holder
+        currently owns an unexpired lease.
+        """
+        if not self._ready():
+            return None
+        now = _now()
+        try:
+            return await self.db.sessions.find_one_and_update(
+                {
+                    "_id": session_id,
+                    "$or": [
+                        {"lease.expires_at": {"$lt": now}},
+                        {"lease": {"$exists": False}},
+                        {"lease.holder_id": None},
+                    ],
+                },
+                {
+                    "$set": {
+                        "lease": {
+                            "holder_id": holder_id,
+                            "expires_at": now + timedelta(seconds=ttl_s),
+                            "claimed_at": now,
+                        },
+                    },
+                    "$inc": {"lease_generation": 1},
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+        except PyMongoError as e:
+            logger.warning(f"claim_lease failed for {session_id} ({holder_id}): {e}")
+            return None
+
+    async def renew_lease(
+        self, session_id: str, holder_id: str, ttl_s: int = 30
+    ) -> dict[str, Any] | None:
+        """Atomic renew. Returns updated doc, or ``None`` if we lost it."""
+        if not self._ready():
+            return None
+        now = _now()
+        try:
+            return await self.db.sessions.find_one_and_update(
+                {"_id": session_id, "lease.holder_id": holder_id},
+                {"$set": {"lease.expires_at": now + timedelta(seconds=ttl_s)}},
+                return_document=ReturnDocument.AFTER,
+            )
+        except PyMongoError as e:
+            logger.warning(f"renew_lease failed for {session_id} ({holder_id}): {e}")
+            return None
+
+    async def release_lease(self, session_id: str, holder_id: str) -> None:
+        """Atomic release. No-op if we no longer hold the lease."""
+        if not self._ready():
+            return None
+        now = _now()
+        try:
+            await self.db.sessions.update_one(
+                {"_id": session_id, "lease.holder_id": holder_id},
+                {"$set": {"lease.expires_at": now}},
+            )
+        except PyMongoError as e:
+            logger.warning(f"release_lease failed for {session_id} ({holder_id}): {e}")
+
+    # ── Pending submissions ───────────────────────────────────────────────
+
+    async def enqueue_pending_submission(
+        self, session_id: str, op_type: str, payload: dict[str, Any]
+    ) -> str:
+        """Insert a pending submission and return its inserted ``_id`` (str)."""
+        if not self._ready():
+            return ""
+        doc = {
+            "_id": ObjectId(),
+            "session_id": session_id,
+            "op_type": op_type,
+            "payload": payload or {},
+            "status": "pending",
+            "claimed_by": None,
+            "created_at": _now(),
+        }
+        try:
+            await self.db.pending_submissions.insert_one(doc)
+            return str(doc["_id"])
+        except PyMongoError as e:
+            logger.warning(
+                f"enqueue_pending_submission failed for {session_id}: {e}"
+            )
+            return ""
+
+    async def claim_pending_submission(
+        self, session_id: str, holder_id: str
+    ) -> dict[str, Any] | None:
+        """Atomic FIFO claim of the oldest pending submission for a session."""
+        if not self._ready():
+            return None
+        now = _now()
+        try:
+            return await self.db.pending_submissions.find_one_and_update(
+                {"session_id": session_id, "status": "pending"},
+                {
+                    "$set": {
+                        "status": "claimed",
+                        "claimed_by": holder_id,
+                        "claimed_at": now,
+                    }
+                },
+                sort=[("created_at", 1)],
+                return_document=ReturnDocument.AFTER,
+            )
+        except PyMongoError as e:
+            logger.warning(
+                f"claim_pending_submission failed for {session_id} ({holder_id}): {e}"
+            )
+            return None
+
+    async def mark_submission_done(self, submission_id: str | ObjectId) -> None:
+        """Mark a previously claimed submission as completed."""
+        if not self._ready():
+            return None
+        _id = submission_id if isinstance(submission_id, ObjectId) else ObjectId(submission_id)
+        try:
+            await self.db.pending_submissions.update_one(
+                {"_id": _id},
+                {"$set": {"status": "done", "completed_at": _now()}},
+            )
+        except PyMongoError as e:
+            logger.warning(f"mark_submission_done failed for {submission_id}: {e}")
+
+    async def requeue_claimed_for(self, holder_id: str) -> int:
+        """Flip every ``claimed`` submission for ``holder_id`` back to ``pending``.
+
+        Must NOT modify ``created_at`` — FIFO ordering is preserved across
+        handovers (e.g. lease loss, lifespan shutdown sweep).
+        """
+        if not self._ready():
+            return 0
+        try:
+            result = await self.db.pending_submissions.update_many(
+                {"status": "claimed", "claimed_by": holder_id},
+                {
+                    "$set": {"status": "pending", "claimed_by": None},
+                    "$unset": {"claimed_at": ""},
+                },
+            )
+            return int(result.modified_count or 0)
+        except PyMongoError as e:
+            logger.warning(f"requeue_claimed_for failed for {holder_id}: {e}")
+            return 0
+
+    # ── Change-stream tails (replica-set required) ────────────────────────
+
+    async def change_stream_pending_submissions(self, session_id: str):
+        """Yield newly inserted pending submissions for ``session_id``.
+
+        Raises ``PyMongoError`` (the standard pymongo behaviour) if the
+        deployment isn't a replica set; callers fall back to polling.
+        """
+        if not self._ready():
+            return
+        pipeline = [
+            {
+                "$match": {
+                    "operationType": "insert",
+                    "fullDocument.session_id": session_id,
+                    "fullDocument.status": "pending",
+                }
+            }
+        ]
+        async with self.db.pending_submissions.watch(pipeline=pipeline) as stream:
+            async for change in stream:
+                full = change.get("fullDocument")
+                if full is not None:
+                    yield full
+
+    async def change_stream_events(self, session_id: str, after_seq: int = 0):
+        """Yield session_events documents with seq > ``after_seq``."""
+        if not self._ready():
+            return
+        pipeline = [
+            {
+                "$match": {
+                    "operationType": "insert",
+                    "fullDocument.session_id": session_id,
+                    "fullDocument.seq": {"$gt": int(after_seq or 0)},
+                }
+            }
+        ]
+        async with self.db.session_events.watch(pipeline=pipeline) as stream:
+            async for change in stream:
+                full = change.get("fullDocument")
+                if full is not None:
+                    yield full
+
+    # ── Polling fallback ──────────────────────────────────────────────────
+
+    async def poll_pending_submissions_after(
+        self, session_id: str, after_id: str | None
+    ) -> list[dict[str, Any]]:
+        """Return all pending submissions for ``session_id`` newer than ``after_id``.
+
+        Used when change streams are unavailable. Sorted by ``created_at``.
+        """
+        if not self._ready():
+            return []
+        query: dict[str, Any] = {"session_id": session_id, "status": "pending"}
+        if after_id:
+            try:
+                query["_id"] = {"$gt": ObjectId(after_id)}
+            except Exception:  # noqa: BLE001 - bad id ⇒ start from beginning
+                pass
+        try:
+            cursor = self.db.pending_submissions.find(query).sort("created_at", 1)
+            return [row async for row in cursor]
+        except PyMongoError as e:
+            logger.warning(
+                f"poll_pending_submissions_after failed for {session_id}: {e}"
+            )
+            return []
 
 
 _store: NoopSessionStore | MongoSessionStore | None = None
