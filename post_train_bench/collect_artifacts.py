@@ -8,6 +8,21 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+HASHED_MODEL_SUFFIXES = {
+    ".json",
+    ".safetensors",
+}
+HASHED_MODEL_NAMES = {
+    "tokenizer.model",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "vocab.json",
+    "merges.txt",
+    "adapter_config.json",
+}
+
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -15,6 +30,15 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def should_hash_model_file(path: Path) -> bool:
+    name = path.name
+    if name in HASHED_MODEL_NAMES:
+        return True
+    if path.suffix.lower() in HASHED_MODEL_SUFFIXES:
+        return True
+    return name.startswith("tokenizer") or name.startswith("adapter_")
 
 
 def copy_optional(src: Path, dst: Path, manifest: dict) -> None:
@@ -52,12 +76,13 @@ def record_optional_tree(src: Path, manifest: dict, key: str) -> None:
         return
     for path in sorted(src.rglob("*")):
         if path.is_file():
-            manifest[key].append(
-                {
-                    "path": str(path),
-                    "bytes": path.stat().st_size,
-                }
-            )
+            entry = {
+                "path": str(path),
+                "bytes": path.stat().st_size,
+            }
+            if should_hash_model_file(path):
+                entry["sha256"] = sha256(path)
+            manifest[key].append(entry)
 
 
 def main() -> int:
@@ -101,6 +126,7 @@ def main() -> int:
         "integrity_status.json",
         "protected_files_check.json",
         "protected_files_manifest.json",
+        "evidence_snapshot.json",
         "metrics.json",
         "secret_scan.json",
         "contamination_judgement.txt",

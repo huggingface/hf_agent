@@ -191,6 +191,22 @@ def test_protected_files_verify_rejects_missing_file(tmp_path):
     assert payload["missing"] == ["evaluate.py"]
 
 
+def test_snapshot_evidence_splits_task_snapshot_and_final_model(tmp_path):
+    task_dir = tmp_path / "job" / "task"
+    final_model = task_dir / "final_model"
+    final_model.mkdir(parents=True)
+    (task_dir / "solve_out.txt").write_text("log\n", encoding="utf-8")
+    (final_model / "config.json").write_text("{}", encoding="utf-8")
+    eval_dir = tmp_path / "result"
+
+    payload = integrity.snapshot_evidence(task_dir, eval_dir)
+
+    assert payload["status"] == "clean"
+    assert (eval_dir / "task" / "solve_out.txt").is_file()
+    assert not (eval_dir / "task" / "final_model").exists()
+    assert (eval_dir / "final_model" / "config.json").is_file()
+
+
 def test_runner_does_not_mount_result_into_solve_or_trust_remote_code():
     runner = (Path(__file__).parents[2] / "post_train_bench" / "run_task_docker.sh").read_text(
         encoding="utf-8"
@@ -200,6 +216,39 @@ def test_runner_does_not_mount_result_into_solve_or_trust_remote_code():
         line for line in runner.splitlines() if line.startswith("SOLVE_CONTAINER_MOUNTS=")
     )
     assert "${EVAL_DIR}:/result" not in solve_mount_line
+    assert "${JOB_REPO}:/ml-intern-src:ro" in solve_mount_line
     assert "trust_remote_code=True" not in runner
     assert "snapshot-protected-files" in runner
     assert "verify-protected-files" in runner
+    assert "TRUSTED_INTEGRITY" in runner
+    assert '"$JOB_REPO/post_train_bench/integrity.py" verify-protected-files' not in runner
+    assert "uv pip install --system -e ." not in runner
+    assert "uv pip install --system ." in runner
+    solve_env_line = next(
+        line for line in runner.splitlines() if line.startswith("SOLVE_CONTAINER_ENV=")
+    )
+    assert "HF_TOKEN,HUGGING_FACE_HUB_TOKEN" not in solve_env_line
+    assert "POST_TRAIN_BENCH_SOLVE_HF_TOKEN" in solve_env_line
+
+
+def test_agent_config_disables_hub_write_tools():
+    config = json.loads(
+        (Path(__file__).parents[2] / "post_train_bench" / "ml_intern_config.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert {"hf_repo_files", "hf_repo_git"} <= set(config["disabled_tools"])
+
+
+def test_submit_full_mode_requires_clean_provenance():
+    submit = (Path(__file__).parents[2] / "post_train_bench" / "submit_eval_set.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--allow-dirty" in submit
+    assert "--allow-mutable-images" in submit
+    assert "Refusing full mode from a dirty worktree" in submit
+    assert "Refusing full mode with mutable solve image" in submit
+    assert "image_provenance" in submit
+    assert "sha256_file" in submit

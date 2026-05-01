@@ -12,6 +12,8 @@
   "system_prompt_file": "/ml-intern-src/post_train_bench/system_prompt.yaml",
   "disabled_tools": [
     "hf_jobs",
+    "hf_repo_files",
+    "hf_repo_git",
     "notify",
     "sandbox_create"
   ],

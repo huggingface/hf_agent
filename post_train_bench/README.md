@@ -29,10 +29,14 @@ final run directory and metadata, then releases the job. Dry runs use a
   `scratch/PostTrainBench`; override it with `POST_TRAIN_BENCH_DIR`.
 - Slurm with Pyxis container support is available.
 - The current checkout contains the `ml-intern` commit you want to evaluate.
-- Required tokens are exported:
+- Required tokens are exported. The solve phase receives only
+  `POST_TRAIN_BENCH_SOLVE_HF_TOKEN` or `HUGGING_FACE_HUB_READ_TOKEN`; use a
+  read-only token there. The eval phase can still use the normal evaluation
+  tokens.
 
 ```bash
-export HF_TOKEN=hf_...
+export POST_TRAIN_BENCH_SOLVE_HF_TOKEN=hf_...  # read-only
+export HF_TOKEN=hf_...                         # eval-only
 export ANTHROPIC_API_KEY=sk-ant-...   # or the provider key for ML_INTERN_AGENT_MODEL
 export OPENAI_API_KEY=sk-...          # used by Arena/Health evals and required Codex judge
 export ML_INTERN_AGENT_MODEL=anthropic/claude-opus-4-6  # optional; this is the default
@@ -111,6 +115,7 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |       `-- {benchmark}_{model_to_train}_{slurm_array_task}
 |           |-- contamination_judgement.txt
 |           |-- disallowed_model_judgement.txt
+|           |-- evidence_snapshot.json   # task/final_model capture status
 |           |-- final_eval_*.txt        # raw evaluation attempts
 |           |-- final_model_precheck.json
 |           |-- final_model_validation.txt
@@ -136,7 +141,7 @@ post_train_bench/runs/{ML_INTERN_AGENT_MODEL}/{RUN_ID}
 |   |-- {job_id}_{array_id}.err         # Slurm wrapper stderr
 |   `-- {job_id}_{array_id}.out         # Slurm wrapper stdout
 |-- matrix.jsonl                        # benchmark/model rows for the array
-|-- run_metadata.json                   # commit, Docker image, run id, dirty flag
+|-- run_metadata.json                   # commit, image provenance/hashes, run id, dirty flag
 |-- sbatch_command.txt                  # exact submission command
 `-- sbatch_output.txt                   # Slurm job id and release output
 ```
@@ -156,6 +161,10 @@ Do not run this until the smoke test succeeds. This command submits the full
 bash post_train_bench/submit_eval_set.sh full
 ```
 
+Full mode refuses dirty worktrees and mutable registry tags by default. Use
+digest-pinned images or local `.sqsh` images. The escape hatches
+`--allow-dirty` and `--allow-mutable-images` are for internal experiments only.
+
 To inspect the generated full matrix without submitting:
 
 ```bash
@@ -174,6 +183,19 @@ Matrix rows support only these fields:
 
 `eval_limit` is optional. `duration_minutes` is intentionally invalid; the
 runner derives the solve budget from `num_hours`.
+
+Aggregate completed runs with the checked-in factor-weighted reporter:
+
+```bash
+uv run python post_train_bench/aggregate_results.py \
+  post_train_bench/runs/${ML_INTERN_AGENT_MODEL}/{RUN_ID} \
+  --output-json post_train_bench/runs/${ML_INTERN_AGENT_MODEL}/{RUN_ID}/aggregate_report.json \
+  --output-csv post_train_bench/runs/${ML_INTERN_AGENT_MODEL}/{RUN_ID}/aggregate_report.csv
+```
+
+Pass multiple run roots to report multi-run mean, standard deviation, standard
+error, min, and max for each method. Non-clean integrity statuses are reported
+explicitly and are not silently converted into benchmark scores.
 
 ## Rebuilding The Docker Image
 
@@ -214,8 +236,9 @@ export POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE=registry.hpc-cluster-hopper.hpc.intern
 
 You do not need to rebuild the image just to evaluate a different `ml-intern`
 commit. The Slurm job copies the current checkout into a temporary solve
-workspace and installs it at runtime. The eval phase does not mount
-`/ml-intern-src` and does not inherit solve-installed packages.
+workspace, mounts it read-only, and installs it non-editably before the measured
+solve timeout starts. The eval phase does not mount `/ml-intern-src` and does
+not inherit solve-installed packages.
 
 ## Notes
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -200,6 +201,58 @@ def verify_protected_files(task_dir: Path, manifest_path: Path) -> dict:
             "task_dir": str(task_dir),
             "protected_file_count": len(manifest.get("files", [])),
         },
+    }
+
+
+def snapshot_evidence(task_dir: Path, eval_dir: Path) -> dict:
+    """Copy untrusted solve evidence to the result directory.
+
+    The task snapshot excludes final_model so the model can be recorded as a
+    separate top-level artifact and mounted read-only for validation.
+    """
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    task_dst = eval_dir / "task"
+    final_dst = eval_dir / "final_model"
+
+    task_copied = False
+    final_model_copied = False
+    missing = []
+
+    if task_dir.is_dir():
+        if task_dst.exists():
+            shutil.rmtree(task_dst)
+        shutil.copytree(
+            task_dir,
+            task_dst,
+            ignore=shutil.ignore_patterns(
+                "final_model",
+                ".cache",
+                "__pycache__",
+            ),
+        )
+        task_copied = True
+    else:
+        missing.append(str(task_dir))
+
+    final_src = task_dir / "final_model"
+    if final_src.is_dir():
+        if final_dst.exists():
+            shutil.rmtree(final_dst)
+        shutil.copytree(final_src, final_dst)
+        final_model_copied = True
+    elif final_dst.is_dir():
+        final_model_copied = True
+    else:
+        missing.append(str(final_src))
+
+    return {
+        "created_at": utc_now(),
+        "status": "clean" if task_copied else "invalid",
+        "task_dir": str(task_dir),
+        "eval_dir": str(eval_dir),
+        "task_snapshot_copied": task_copied,
+        "final_model_copied": final_model_copied,
+        "missing": missing,
     }
 
 
@@ -465,6 +518,12 @@ def command_verify_protected_files(args: argparse.Namespace) -> int:
     return 0 if payload["status"] == "clean" else 1
 
 
+def command_snapshot_evidence(args: argparse.Namespace) -> int:
+    payload = snapshot_evidence(Path(args.task_dir), Path(args.eval_dir))
+    write_json(Path(args.output), payload)
+    return 0 if payload["status"] == "clean" else 1
+
+
 def command_precheck_final_model(args: argparse.Namespace) -> int:
     payload = precheck_final_model(Path(args.model_path), args.base_model)
     write_json(Path(args.output), payload)
@@ -502,6 +561,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--manifest", required=True)
     verify_parser.add_argument("--output", required=True)
     verify_parser.set_defaults(func=command_verify_protected_files)
+
+    evidence_parser = subparsers.add_parser("snapshot-evidence")
+    evidence_parser.add_argument("--task-dir", required=True)
+    evidence_parser.add_argument("--eval-dir", required=True)
+    evidence_parser.add_argument("--output", required=True)
+    evidence_parser.set_defaults(func=command_snapshot_evidence)
 
     precheck_parser = subparsers.add_parser("precheck-final-model")
     precheck_parser.add_argument("--model-path", required=True)

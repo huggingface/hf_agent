@@ -13,7 +13,9 @@ Modes:
   full   Submit the full 4-model x 7-benchmark matrix. This is documented for manual use.
 
 Options:
-  --dry-run  Create metadata and matrix, print the sbatch command, do not submit.
+  --dry-run               Create metadata and matrix, print the sbatch command, do not submit.
+  --allow-dirty           Allow full mode from a dirty worktree.
+  --allow-mutable-images  Allow full mode with non-digest registry tags.
 
 Environment:
   ML_INTERN_AGENT_MODEL        Intern model, used literally in runs/<model>/<run_id>.
@@ -42,10 +44,18 @@ fi
 shift || true
 
 DRY_RUN=0
+ALLOW_DIRTY=0
+ALLOW_MUTABLE_IMAGES=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run)
             DRY_RUN=1
+            ;;
+        --allow-dirty)
+            ALLOW_DIRTY=1
+            ;;
+        --allow-mutable-images)
+            ALLOW_MUTABLE_IMAGES=1
             ;;
         *)
             echo "Unknown option: $1" >&2
@@ -60,6 +70,11 @@ export ML_INTERN_AGENT_MODEL="${ML_INTERN_AGENT_MODEL:-anthropic/claude-opus-4-6
 
 HOST_REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$HOST_REPO_ROOT"
+
+if [ "$MODE" = "full" ] && [ "$DRY_RUN" -ne 1 ] && [ "$ALLOW_DIRTY" -ne 1 ] && [ -n "$(git status --short)" ]; then
+    echo "Refusing full mode from a dirty worktree. Commit or stash changes, or pass --allow-dirty." >&2
+    exit 2
+fi
 
 PTB_DIR="${POST_TRAIN_BENCH_DIR:-scratch/PostTrainBench}"
 if [ ! -d "$PTB_DIR/src/eval/tasks" ]; then
@@ -76,6 +91,30 @@ EVAL_DOCKER_IMAGE="${POST_TRAIN_BENCH_EVAL_DOCKER_IMAGE:-registry.hpc-cluster-ho
 SEED_HF_CACHE="${POST_TRAIN_BENCH_SEED_HF_CACHE:-/fsx/lewis/post_train_bench/seed_hf_cache}"
 PROMPT_AGENT="${POST_TRAIN_BENCH_PROMPT_AGENT:-claude}"
 PTB_SLURM_JOB_ID=""
+
+is_immutable_image() {
+    local image="$1"
+    if [ -f "$image" ]; then
+        return 0
+    fi
+    case "$image" in
+        *@sha256:*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if [ "$MODE" = "full" ] && [ "$DRY_RUN" -ne 1 ] && [ "$ALLOW_MUTABLE_IMAGES" -ne 1 ]; then
+    if ! is_immutable_image "$DOCKER_IMAGE"; then
+        echo "Refusing full mode with mutable solve image: $DOCKER_IMAGE" >&2
+        echo "Use a digest-pinned image or local .sqsh, or pass --allow-mutable-images." >&2
+        exit 2
+    fi
+    if ! is_immutable_image "$EVAL_DOCKER_IMAGE"; then
+        echo "Refusing full mode with mutable eval image: $EVAL_DOCKER_IMAGE" >&2
+        echo "Use a digest-pinned image or local .sqsh, or pass --allow-mutable-images." >&2
+        exit 2
+    fi
+fi
 
 if [ -n "$EXPLICIT_RUN_ID" ] || [ "$DRY_RUN" -eq 1 ]; then
     RUN_ID="${EXPLICIT_RUN_ID:-${RUN_STAMP}_dryrun}"
@@ -164,8 +203,9 @@ create_source_snapshot() {
 }
 
 write_metadata() {
-    export RUN_ID MODE DOCKER_IMAGE EVAL_DOCKER_IMAGE SEED_HF_CACHE PROMPT_AGENT PTB_DIR MATRIX_FILE MATRIX_COUNT RUN_STAMP PTB_SLURM_JOB_ID SOURCE_SNAPSHOT SLURM_TIME
+    export RUN_ID MODE DOCKER_IMAGE EVAL_DOCKER_IMAGE SEED_HF_CACHE PROMPT_AGENT PTB_DIR MATRIX_FILE MATRIX_COUNT RUN_STAMP PTB_SLURM_JOB_ID SOURCE_SNAPSHOT SLURM_TIME ALLOW_DIRTY ALLOW_MUTABLE_IMAGES
     python - "$RUN_ROOT/run_metadata.json" <<'PY'
+import hashlib
 import json
 import os
 import subprocess
@@ -175,6 +215,25 @@ from pathlib import Path
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, text=True, capture_output=True).stdout.strip()
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def image_metadata(value: str) -> dict:
+    path = Path(value)
+    payload = {"value": value, "kind": "local_file" if path.is_file() else "registry"}
+    if path.is_file():
+        payload["sha256"] = sha256_file(path)
+        payload["bytes"] = path.stat().st_size
+    elif "@sha256:" in value:
+        payload["digest"] = value.rsplit("@sha256:", 1)[1]
+    else:
+        payload["mutable"] = True
+    return payload
 
 status = git("status", "--short")
 metadata = {
@@ -192,6 +251,12 @@ metadata = {
     "docker_image": os.environ["DOCKER_IMAGE"],
     "solve_docker_image": os.environ["DOCKER_IMAGE"],
     "eval_docker_image": os.environ["EVAL_DOCKER_IMAGE"],
+    "image_provenance": {
+        "solve": image_metadata(os.environ["DOCKER_IMAGE"]),
+        "eval": image_metadata(os.environ["EVAL_DOCKER_IMAGE"]),
+    },
+    "allow_dirty": os.environ["ALLOW_DIRTY"] == "1",
+    "allow_mutable_images": os.environ["ALLOW_MUTABLE_IMAGES"] == "1",
     "seed_hf_cache": os.environ["SEED_HF_CACHE"],
     "prompt_agent": os.environ["PROMPT_AGENT"],
     "slurm_time": os.environ["SLURM_TIME"],

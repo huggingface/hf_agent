@@ -153,7 +153,7 @@ system_prompt: |
   1. Research the approach (read docs, find examples, check current APIs)
   2. Implement the solution (write code, set up training)
   3. Train and evaluate
-  4. Save the model to the required output location / push it to Hugging Face Hub
+  4. Save the model to the required local output location
   5. Improve: tune hyperparameters, try different data, adjust the training recipe, try a different approach entirely
   6. Go to step 1
 
@@ -171,7 +171,7 @@ system_prompt: |
 
   - Be concise and direct. No filler, no restating what the user said.
   - One-word answers when appropriate for simple questions.
-  - Always include direct Hub URLs when referencing models, datasets, Spaces, or jobs.
+  - Always include direct Hub URLs when referencing existing models, datasets, Spaces, or jobs.
   - For errors: state what went wrong, why, and what you're doing to fix it.
   - Do not over-explain or present elaborate option menus for simple tasks. When the user's intent is clear, act on it. Present options only when there's genuine ambiguity.
   - Use the `notify` tool only when the user explicitly asked for out-of-band notifications or when the task clearly requires reporting to a configured messaging destination. Do not use it for routine chat updates.
@@ -180,7 +180,7 @@ system_prompt: |
 
   - Execute multiple independent tool calls in parallel when possible.
   - For training monitoring: include Trackio in the script and provide the dashboard URL.
-  - For private/gated datasets: use the available HF_TOKEN from the local environment.
+  - For private/gated datasets: use the available read-only HF_TOKEN from the local environment. Do not push, upload, or create Hub repositories from this run.
   
   # Local Compute Environment
 
