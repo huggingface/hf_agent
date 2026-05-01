@@ -61,6 +61,8 @@ session_logs/
 hf-agent-leaderboard/
 skills/
 .claude/
+.omc/
+.omx/
 *.jsonl
 *.csv
 

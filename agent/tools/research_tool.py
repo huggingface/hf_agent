@@ -452,14 +452,16 @@ async def research_handler(
                 continue
 
             try:
-                import json as _json
-
-                args_str = _json.dumps(tool_args)[:80]
+                args_str = json.dumps(tool_args)[:80]
                 await _log(f"▸ {tool_name}  {args_str}")
 
-                output, _success = await session.tool_router.call_tool(
-                    tool_name, tool_args, session=session, tool_call_id=tc.id
-                )
+                session.is_in_tool_call = True
+                try:
+                    output, _success = await session.tool_router.call_tool(
+                        tool_name, tool_args, session=session, tool_call_id=tc.id
+                    )
+                finally:
+                    session.is_in_tool_call = False
                 _tool_uses += 1
                 await _log(f"tools:{_tool_uses}")
                 # Truncate tool output for the research context
