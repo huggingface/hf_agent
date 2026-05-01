@@ -26,6 +26,9 @@ def test_dataset_card_readme_has_metadata_and_public_warning():
     assert "- coding-agent" in readme
     assert "- ml-intern" in readme
     assert 'path: "sessions/**/*.jsonl"' in readme
+    assert "ML Intern demo: https://smolagents-ml-intern.hf.space" in readme
+    assert "ML Intern CLI: https://github.com/huggingface/ml-intern" in readme
+    assert "Repository: https://huggingface.co/datasets/" not in readme
     assert (
         "**WARNING: no comprehensive redaction or human review has been performed for this dataset.**"
         in readme

@@ -374,7 +374,10 @@ This dataset contains ML Intern coding agent session traces uploaded from local
 ML Intern runs. The traces are stored as JSON Lines files under `sessions/`,
 with one file per session.
 
-Repository: https://huggingface.co/datasets/{repo_id}
+## Links
+
+- ML Intern demo: https://smolagents-ml-intern.hf.space
+- ML Intern CLI: https://github.com/huggingface/ml-intern
 
 ## Data description
 
