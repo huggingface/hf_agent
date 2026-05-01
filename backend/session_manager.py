@@ -154,6 +154,7 @@ class SessionManager:
         self.mode: str = raw_mode
         self._holder_id: str = make_holder_id(self.mode)
         self._heartbeat_task: asyncio.Task | None = None
+        self._grace_sweep_task: asyncio.Task | None = None
         # SSE subscriber bookkeeping — used by the US-006 grace-period
         # sweeper to decide when a session has had no readers for long
         # enough to be evicted. Populated by ``_attach_subscriber`` /
@@ -196,6 +197,7 @@ class SessionManager:
         await self.persistence_store.init()
         await self.messaging_gateway.start()
         self._heartbeat_task = asyncio.create_task(self._lease_heartbeat_loop())
+        self._grace_sweep_task = asyncio.create_task(self._grace_period_sweep_loop())
 
     async def close(self) -> None:
         """Flush and close shared background resources."""
@@ -206,6 +208,13 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
             self._heartbeat_task = None
+        if self._grace_sweep_task is not None:
+            self._grace_sweep_task.cancel()
+            try:
+                await self._grace_sweep_task
+            except asyncio.CancelledError:
+                pass
+            self._grace_sweep_task = None
         await self.messaging_gateway.close()
         if self.persistence_store is not None:
             await self.persistence_store.close()
@@ -264,6 +273,113 @@ class SessionManager:
         if agent_session and agent_session.task and not agent_session.task.done():
             agent_session.task.cancel()
             # Don't await — heartbeat loop must keep going.
+
+    async def release_session_to_background(
+        self, session_id: str, reason: str = "manual"
+    ) -> bool:
+        """Emit migrating event, requeue claimed submissions, release lease.
+
+        Used by the lifespan shutdown sweep, the grace-period sweeper, and
+        the manual ``/background`` route. Idempotent on already-released or
+        unknown session IDs (returns False in that case).
+        """
+        async with self._lock:
+            agent_session = self.sessions.get(session_id)
+        if agent_session is None:
+            return False
+        # 1) Emit migrating event so the frontend can render a "reconnecting"
+        # state. send_event also durably appends via append_event, so a
+        # non-holder reader will see it on the next change-stream tick.
+        try:
+            await agent_session.session.send_event(
+                Event(event_type="migrating", data={"reason": reason})
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to emit migrating event for {session_id}: {e}"
+            )
+        # 2) Requeue any submissions we have in-flight back to pending so a
+        # Worker can pick them up.
+        store = self._store()
+        if getattr(store, "enabled", False):
+            try:
+                await store.requeue_claimed_for(self._holder_id)
+            except Exception as e:
+                logger.warning(
+                    f"requeue_claimed_for failed during release of "
+                    f"{session_id}: {e}"
+                )
+        # 3) Release the lease.
+        try:
+            await store.release_lease(session_id, self._holder_id)
+        except Exception as e:
+            logger.warning(f"release_lease failed for {session_id}: {e}")
+        # 4) Drop from in-memory and cancel the agent task. Don't await the
+        # cancel — heartbeat / sweep loops must keep going.
+        async with self._lock:
+            popped = self.sessions.pop(session_id, None)
+        if popped and popped.task and not popped.task.done():
+            popped.task.cancel()
+        return True
+
+    async def _grace_period_sweep_loop(self) -> None:
+        """Every 30s, scan sessions held by this process. If a session has
+        had zero subscribers for longer than ``GRACE_PERIOD_SECONDS`` AND has
+        either in-flight work or pending submissions, release it to
+        background. Idle-with-no-work sessions are NOT auto-backgrounded —
+        they wait for idle eviction (US-007) or shutdown.
+        """
+        SWEEP_INTERVAL_S = 30
+        GRACE_PERIOD_S = float(os.environ.get("GRACE_PERIOD_SECONDS", "180"))
+        while True:
+            try:
+                await asyncio.sleep(SWEEP_INTERVAL_S)
+                now = time.time()
+                async with self._lock:
+                    session_ids = list(self.sessions.keys())
+                store = self._store()
+                for session_id in session_ids:
+                    agent_session = self.sessions.get(session_id)
+                    if agent_session is None:
+                        continue
+                    if agent_session.holder_id != self._holder_id:
+                        continue
+                    no_sub_since = self._no_subscriber_since.get(session_id)
+                    if no_sub_since is None:
+                        # Either someone is connected now, or no one has
+                        # ever connected — neither case is an eviction.
+                        continue
+                    if now - no_sub_since < GRACE_PERIOD_S:
+                        continue
+                    has_pending = False
+                    if getattr(store, "enabled", False):
+                        try:
+                            pending_docs = await store.poll_pending_submissions_after(
+                                session_id, None
+                            )
+                            has_pending = len(pending_docs) > 0
+                        except Exception:
+                            has_pending = False
+                    has_work = (
+                        agent_session.is_processing
+                        or has_pending
+                        or getattr(agent_session.session, "is_in_tool_call", False)
+                    )
+                    if not has_work:
+                        continue
+                    logger.info(
+                        f"Grace period elapsed for {session_id} "
+                        f"(no subs for {now - no_sub_since:.0f}s); "
+                        "releasing to background"
+                    )
+                    await self.release_session_to_background(
+                        session_id, reason="grace_period_elapsed"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Grace sweep loop error: {e}")
+                await asyncio.sleep(1)
 
     def _store(self):
         if self.persistence_store is None:

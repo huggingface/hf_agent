@@ -57,6 +57,7 @@ def _bare_manager() -> SessionManager:
     manager.mode = "main"
     manager._holder_id = "main:test-host:deadbeef"
     manager._heartbeat_task = None
+    manager._grace_sweep_task = None
     return manager
 
 

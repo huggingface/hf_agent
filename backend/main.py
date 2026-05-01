@@ -60,6 +60,26 @@ async def lifespan(app: FastAPI):
                     logger.warning("Failed to flush session %s: %s", sid, e)
     except Exception as e:
         logger.warning("Lifespan final-flush skipped: %s", e)
+
+    # Lease handover sweep — for sessions still mid-turn when Main shuts
+    # down, emit a migrating event then release the lease so a Worker can
+    # pick them up. Idle sessions just rehydrate normally on next request
+    # and don't need this dance.
+    try:
+        for sid, agent_session in list(session_manager.sessions.items()):
+            runtime_state = session_manager._runtime_state(agent_session)
+            if runtime_state == "processing" or agent_session.is_processing:
+                try:
+                    await session_manager.release_session_to_background(
+                        sid,
+                        reason="main_shutdown",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Lease handover sweep failed for %s: %s", sid, e
+                    )
+    except Exception as e:
+        logger.warning("Lifespan lease sweep skipped: %s", e)
     await session_manager.close()
 
 

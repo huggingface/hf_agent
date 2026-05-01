@@ -123,9 +123,30 @@ Verification:
 - ruff: clean on session_manager.py + tests; routes/agent.py has 2 pre-existing errors (os import unused line 10, agent_session unused line 572) verified via git stash as predating this PR
 - pytest: 62 passing in cumulative suite (12 + 12 + 18 + 7 + 5 + 5 + 3)
 
-## Iteration 5: starting US-006 (Step 5 — lifespan sweep + grace sweeper + /background route + migrating event)
+## Iteration 5: US-006 (Step 5 — lifespan sweep + grace sweeper + /background + migrating) — COMPLETE
 
-Multi-file, complex. Touches backend/main.py (lifespan), backend/session_manager.py (grace sweeper task), backend/routes/agent.py (new /api/session/{id}/background route).
+backend/session_manager.py:
+- Added _grace_sweep_task: asyncio.Task | None = None to __init__.
+- start() creates _grace_sweep_task (_grace_period_sweep_loop) alongside heartbeat.
+- close() cancels and awaits _grace_sweep_task.
+- Added release_session_to_background(session_id, reason): emits migrating event via session.send_event (durably persisted via append_event), requeue_claimed_for, release_lease, drops from self.sessions, cancels task without await.
+- Added _grace_period_sweep_loop: 30s tick, scans held sessions, releases when subscribers absent ≥ GRACE_PERIOD_SECONDS (default 180s) AND session has work (is_processing OR is_in_tool_call OR pending submissions). Idle-no-work sessions left alone (US-007 territory).
+
+backend/main.py: lifespan shutdown sweep added between final-flush and session_manager.close(). Uses session_manager._runtime_state(agent_session).
+
+backend/routes/agent.py: POST /api/session/{session_id}/background route. Reuses _check_session_access. Returns 200 {"status":"released"} or 404.
+
+tests/test_lifespan_grace_sweep.py NEW (8 tests): release_session_to_background event emission, drop, idempotency; grace sweep with subscribers present (no release), grace expired with work (release), grace expired without work (no release); /background route 200/404.
+tests/test_session_manager_lease.py + tests/test_session_manager_submissions.py: added manager._grace_sweep_task = None to _bare_manager helper.
+
+Verification: ruff clean on session_manager.py + new tests; 8 pre-existing ruff errors in main.py and routes/agent.py verified unrelated via git stash. pytest: 70 passing in cumulative suite.
+
+Subtlety: grace-sweep predicate requires BOTH (no subs ≥ grace period) AND (has work). This avoids evicting brand-new tabs the user opened, walked away from, and never typed in.
+
+## Iteration 6: starting US-007 (Step 6 — Worker entrypoint + MODE flag + idle eviction)
+
+Worker mode: backend/start.sh branches on $MODE; backend/worker.py shim; backend/main.py defines worker_loop. Plus idle eviction (separate task on SessionManager) using last_submission_at + IDLE_EVICTION_SECONDS predicate.
+
 
 
 

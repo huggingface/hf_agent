@@ -94,7 +94,7 @@
       "id": "US-006",
       "title": "Lifespan sweep + grace-period sweeper + /background route + migrating event + subscriber counts (Step 5)",
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "lifespan shutdown branch in backend/main.py: between line 62 (close of final-flush try/except) and line 63 (await session_manager.close()), inserts a sweep that for each session in self.sessions with runtime_state=='processing': (a) emits a 'migrating' session_event via store.append_event, (b) calls store.requeue_claimed_for(self._holder_id), (c) calls store.release_lease(session_id, self._holder_id)",
         "SessionManager has _subscriber_counts: dict[str, int] and _no_subscriber_since: dict[str, float] attributes",

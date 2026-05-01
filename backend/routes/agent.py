@@ -551,6 +551,24 @@ async def delete_session(
     return {"status": "deleted", "session_id": session_id}
 
 
+@router.post("/session/{session_id}/background")
+async def background_session(
+    session_id: str, user: dict = Depends(get_current_user)
+) -> dict:
+    """Manually move a session to background.
+
+    Releases the lease so a Worker can pick it up. The frontend uses this
+    when the user clicks "run in background".
+    """
+    await _check_session_access(session_id, user)
+    success = await session_manager.release_session_to_background(
+        session_id, reason="user_requested"
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or inactive")
+    return {"status": "released", "session_id": session_id}
+
+
 @router.post("/submit")
 async def submit_input(
     request: SubmitRequest, user: dict = Depends(get_current_user)
