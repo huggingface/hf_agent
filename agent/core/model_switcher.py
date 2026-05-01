@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from agent.core.effort_probe import ProbeInconclusive, probe_effort
 from agent.utils.ollama_utils import ensure_ollama_readiness
+from agent.utils.persistence import save_last_model, get_persisted_models
 
 
 # Suggested models shown by `/model` (not a gate). Users can paste any HF
@@ -40,6 +41,11 @@ SUGGESTED_MODELS = [
     {"id": "deepseek-ai/DeepSeek-V4-Pro:deepinfra", "label": "DeepSeek V4 Pro"},
     {"id": "ollama/qwen3.6", "label": "Qwen 3.6 (Local)"},
 ]
+
+# Load any additional models persisted by the user
+for _pm in get_persisted_models():
+    if not any(_m["id"] == _pm["id"] for _m in SUGGESTED_MODELS):
+        SUGGESTED_MODELS.append(_pm)
 
 
 _ROUTING_POLICIES = {"fastest", "cheapest", "preferred"}
@@ -244,3 +250,5 @@ def _commit_switch(model_id, config, session, effective, cache: bool) -> None:
             session.model_effective_effort.pop(model_id, None)
     else:
         config.model_name = model_id
+
+    save_last_model(model_id)

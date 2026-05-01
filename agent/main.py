@@ -30,6 +30,7 @@ from agent.core.tools import ToolRouter
 from agent.messaging.gateway import NotificationGateway
 from agent.utils.reliability_checks import check_training_script_save_pattern
 from agent.utils.ollama_utils import ensure_ollama_readiness
+from agent.utils.persistence import get_last_model, save_last_model
 from agent.utils.terminal_display import (
     get_console,
     print_approval_header,
@@ -797,6 +798,11 @@ async def _handle_slash_command(
             return None
 
         label = model_id.replace("ollama/", "", 1).capitalize() + " (Local)"
+        
+        # Persist it so it shows up in future sessions
+        from agent.utils.persistence import add_persisted_model
+        add_persisted_model(model_id, label)
+        
         SUGGESTED_MODELS.append({"id": model_id, "label": label})
         print(f"Added local model: {model_id}")
         print(f"Switch to it with: /model {model_id}")
@@ -978,8 +984,12 @@ async def main(model: str | None = None):
 
     # Load config early to check model name
     config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
-    if model:
-        config.model_name = model
+    
+    # Resolve model: CLI arg > Cache > Config default
+    config.model_name = model or get_last_model() or config.model_name
+    
+    # Persist the choice so we remember it next time
+    save_last_model(config.model_name)
 
     # Check if Ollama is running and model is available (prompt to pull if not)
     if config.model_name.startswith("ollama/"):
@@ -1234,8 +1244,11 @@ async def headless_main(
 
     config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
 
-    if model:
-        config.model_name = model
+    # Resolve model: CLI arg > Cache > Config default
+    config.model_name = model or get_last_model() or config.model_name
+    
+    # Persist the choice so we remember it next time
+    save_last_model(config.model_name)
 
     # Check if Ollama is running and model is available
     if config.model_name.startswith("ollama/"):
