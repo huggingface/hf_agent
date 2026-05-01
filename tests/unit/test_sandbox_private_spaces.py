@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 from types import SimpleNamespace
 
 from agent.core import telemetry
@@ -10,6 +11,7 @@ from agent.tools.sandbox_tool import sandbox_create_handler
 
 def test_sandbox_client_defaults_to_private_spaces(monkeypatch):
     duplicate_kwargs = {}
+    requested_hardware = []
 
     class FakeApi:
         def __init__(self, token=None):
@@ -17,6 +19,10 @@ def test_sandbox_client_defaults_to_private_spaces(monkeypatch):
 
         def duplicate_space(self, **kwargs):
             duplicate_kwargs.update(kwargs)
+
+        def request_space_hardware(self, space_id, hardware, sleep_time=None):
+            requested_hardware.append((space_id, hardware, sleep_time))
+            return SimpleNamespace(stage="BUILDING", hardware=None)
 
         def add_space_secret(self, *args, **kwargs):
             pass
@@ -35,6 +41,7 @@ def test_sandbox_client_defaults_to_private_spaces(monkeypatch):
     Sandbox.create(owner="alice", token="hf-token", log=lambda msg: None)
 
     assert duplicate_kwargs["private"] is True
+    assert requested_hardware == [(duplicate_kwargs["to_id"], "cpu-basic", None)]
 
 
 def test_sandbox_client_retries_transient_runtime_404(monkeypatch):
@@ -55,6 +62,9 @@ def test_sandbox_client_retries_transient_runtime_404(monkeypatch):
 
         def duplicate_space(self, **kwargs):
             pass
+
+        def request_space_hardware(self, space_id, hardware, sleep_time=None):
+            return SimpleNamespace(stage="BUILDING", hardware=None)
 
         def add_space_secret(self, *args, **kwargs):
             pass
@@ -113,6 +123,29 @@ def test_sandbox_tool_forces_private_spaces(monkeypatch):
     assert "Visibility: private" in out
 
 
+def test_orphan_sweep_preserves_spaces_without_last_modified():
+    deleted: list[str] = []
+    logs: list[str] = []
+
+    class FakeApi:
+        def list_spaces(self, **kwargs):
+            assert kwargs["full"] is True
+            return [SimpleNamespace(id="alice/sandbox-12345678")]
+
+        def delete_repo(self, repo_id, repo_type):
+            deleted.append(repo_id)
+
+    count = sandbox_tool._cleanup_user_orphan_sandboxes(
+        FakeApi(),
+        "alice",
+        logs.append,
+    )
+
+    assert count == 0
+    assert deleted == []
+    assert logs == ["orphan sweep: skipping alice/sandbox-12345678; missing lastModified"]
+
+
 def test_ensure_sandbox_overrides_private_argument(monkeypatch):
     captured_kwargs = {}
 
@@ -159,6 +192,61 @@ def test_ensure_sandbox_overrides_private_argument(monkeypatch):
     assert error is None
     assert sb is not None
     assert captured_kwargs["private"] is True
+
+
+def test_sandbox_creation_is_serialized_per_owner(monkeypatch):
+    active_creates = 0
+    max_active_creates = 0
+    active_lock = threading.Lock()
+
+    class FakeApi:
+        def __init__(self, token=None):
+            self.token = token
+
+        def whoami(self):
+            return {"name": "alice"}
+
+    class FakeSession:
+        def __init__(self):
+            self.hf_token = "hf-token"
+            self.sandbox = None
+            self.event_queue = SimpleNamespace(put_nowait=lambda event: None)
+            self._cancelled = asyncio.Event()
+
+        async def send_event(self, event):
+            pass
+
+    def fake_create(**kwargs):
+        nonlocal active_creates, max_active_creates
+        with active_lock:
+            active_creates += 1
+            max_active_creates = max(max_active_creates, active_creates)
+        time.sleep(0.02)
+        with active_lock:
+            active_creates -= 1
+        return SimpleNamespace(
+            space_id=f"alice/sandbox-{kwargs['hardware']}",
+            url="https://huggingface.co/spaces/alice/sandbox",
+        )
+
+    async def fake_record_sandbox_create(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(sandbox_tool, "HfApi", FakeApi)
+    monkeypatch.setattr(sandbox_tool, "_cleanup_user_orphan_sandboxes", lambda *args: 0)
+    monkeypatch.setattr(Sandbox, "create", staticmethod(fake_create))
+    monkeypatch.setattr(telemetry, "record_sandbox_create", fake_record_sandbox_create)
+    monkeypatch.setattr("huggingface_hub.metadata_update", lambda *args, **kwargs: None)
+
+    async def run():
+        await asyncio.gather(
+            sandbox_tool._ensure_sandbox(FakeSession()),
+            sandbox_tool._ensure_sandbox(FakeSession()),
+        )
+
+    asyncio.run(run())
+
+    assert max_active_creates == 1
 
 
 def test_sandbox_operation_waits_for_cpu_preload():

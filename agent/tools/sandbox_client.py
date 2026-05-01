@@ -624,6 +624,16 @@ class Sandbox:
 
         _check_cancel()
 
+        # Some template duplicates can initially inherit the template hardware.
+        # Explicitly request the target tier so automatic CPU sandboxes never
+        # silently come up on GPU hardware.
+        api.request_space_hardware(
+            space_id,
+            hardware=hardware,
+            sleep_time=sleep_time,
+        )
+        _log(f"Requested hardware: {hardware}")
+
         # Inject secrets BEFORE uploading server files (which triggers rebuild).
         # Secrets added after a Space is running aren't available until restart,
         # so they must be set before the build/start cycle.
@@ -651,6 +661,15 @@ class Sandbox:
                     continue
                 raise
             if runtime.stage == "RUNNING":
+                current_hardware = runtime.hardware or getattr(
+                    runtime, "requested_hardware", None
+                )
+                if current_hardware != hardware:
+                    _log(
+                        f"  RUNNING on {current_hardware}; waiting for {hardware}..."
+                    )
+                    time.sleep(WAIT_INTERVAL)
+                    continue
                 _log(f"Space is running (hardware: {runtime.hardware})")
                 break
             if runtime.stage in ("RUNTIME_ERROR", "BUILD_ERROR"):

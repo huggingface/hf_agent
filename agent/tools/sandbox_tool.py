@@ -15,6 +15,7 @@ import asyncio
 import logging
 import re
 import threading
+import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -37,6 +38,23 @@ _SANDBOX_NAME_RE = re.compile(r"^sandbox-[a-f0-9]{8}$")
 # Anything more recent could be tied to a still-live session in another tab,
 # so we leave it alone.
 _ORPHAN_STALE_AFTER = timedelta(hours=1)
+
+# HF Space duplication/build APIs can behave poorly when multiple private
+# sandboxes are created concurrently for the same namespace. Keep session
+# creation non-blocking, but serialize the actual Hub create path per owner.
+_SANDBOX_CREATE_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def _get_sandbox_create_lock(owner: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    locks = _SANDBOX_CREATE_LOCKS.setdefault(loop, {})
+    lock = locks.get(owner)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[owner] = lock
+    return lock
 
 
 def _looks_like_path(script: str) -> bool:
@@ -126,7 +144,7 @@ def _cleanup_user_orphan_sandboxes(
     cutoff = datetime.now(timezone.utc) - _ORPHAN_STALE_AFTER
     deleted = 0
     try:
-        spaces = list(api.list_spaces(author=owner, limit=200))
+        spaces = list(api.list_spaces(author=owner, limit=200, full=True))
     except Exception as e:
         log(f"orphan sweep: list_spaces failed: {e}")
         return 0
@@ -142,6 +160,9 @@ def _cleanup_user_orphan_sandboxes(
                 last_mod = datetime.fromisoformat(last_mod.replace("Z", "+00:00"))
             except ValueError:
                 last_mod = None
+        if last_mod is None:
+            log(f"orphan sweep: skipping {space.id}; missing lastModified")
+            continue
         if last_mod and last_mod > cutoff:
             # Recent — could be a concurrent live session. Skip.
             continue
@@ -187,6 +208,45 @@ async def _ensure_sandbox(
     if not owner:
         return None, "Could not determine HF username from token."
 
+    create_lock = _get_sandbox_create_lock(owner)
+    if create_lock.locked():
+        await session.send_event(
+            Event(
+                event_type="tool_log",
+                data={
+                    "tool": "sandbox",
+                    "log": "Waiting for sandbox creation slot...",
+                },
+            )
+        )
+
+    async with create_lock:
+        if getattr(session, "sandbox", None):
+            return session.sandbox, None
+
+        return await _create_sandbox_locked(
+            session,
+            api=api,
+            owner=owner,
+            hardware=hardware,
+            extra_secrets=extra_secrets,
+            cancel_event=cancel_event,
+            **create_kwargs,
+        )
+
+
+async def _create_sandbox_locked(
+    session: Any,
+    *,
+    api: HfApi,
+    owner: str,
+    hardware: str,
+    extra_secrets: dict[str, str] | None = None,
+    cancel_event: threading.Event | None = None,
+    **create_kwargs,
+) -> tuple[Sandbox | None, str | None]:
+    """Create the Space while the per-owner sandbox creation lock is held."""
+    token = session.hf_token
     await session.send_event(
         Event(
             event_type="tool_log",
@@ -205,23 +265,6 @@ async def _ensure_sandbox(
             session.event_queue.put_nowait,
             Event(event_type="tool_log", data={"tool": "sandbox", "log": msg}),
         )
-
-    # Before we create a new sandbox, sweep this user's stale sandboxes from
-    # prior sessions. ``_cleanup_sandbox`` in session_manager fires only on
-    # clean session exit; pod kills, WebSocket drops, etc. leave orphans
-    # behind, and they accumulate on every new session forever (observed
-    # 2310 leaked across the Hub on 2026-04-27). Doing the cleanup here at
-    # session start = self-healing, no separate cron needed.
-    #
-    # The 1h staleness filter is the safety: a sandbox modified in the last
-    # hour might still be tied to a live session in another tab, so we skip.
-    # Anything older has no realistic chance of being active given typical
-    # session lengths.
-    try:
-        await asyncio.to_thread(_cleanup_user_orphan_sandboxes, api, owner, _log)
-    except Exception as e:
-        # Cleanup is best-effort — never block sandbox_create on it.
-        _log(f"orphan sandbox sweep failed (non-fatal): {e}")
 
     # Bridge asyncio cancel event to a threading.Event for the blocking create call.
     # We poll session._cancelled from the main loop in a background task and set
