@@ -116,6 +116,10 @@ class Session:
         self._cancelled = asyncio.Event()
         self.pending_approval: Optional[dict[str, Any]] = None
         self.sandbox = None
+        self.sandbox_hardware: Optional[str] = None
+        self.sandbox_preload_task: Optional[asyncio.Task] = None
+        self.sandbox_preload_error: Optional[str] = None
+        self.sandbox_preload_cancel_event: Any | None = None
         self._running_job_ids: set[str] = set()  # HF job IDs currently executing
         self.notification_gateway = notification_gateway
         self.notification_destinations = list(notification_destinations or [])

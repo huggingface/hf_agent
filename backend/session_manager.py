@@ -322,6 +322,20 @@ class SessionManager:
         return agent_session
 
     @staticmethod
+    def _start_cpu_sandbox_preload(agent_session: AgentSession) -> None:
+        """Kick off a best-effort cpu-basic sandbox for the session."""
+        try:
+            from agent.tools.sandbox_tool import start_cpu_sandbox_preload
+
+            start_cpu_sandbox_preload(agent_session.session)
+        except Exception as e:
+            logger.warning(
+                "Failed to start CPU sandbox preload for %s: %s",
+                agent_session.session_id,
+                e,
+            )
+
+    @staticmethod
     def _can_access_session(agent_session: AgentSession, user_id: str) -> bool:
         return (
             user_id == "dev"
@@ -482,6 +496,7 @@ class SessionManager:
                 hf_username=hf_username,
             )
             return started
+        self._start_cpu_sandbox_preload(agent_session)
         logger.info("Restored session %s for user %s", session_id, owner or user_id)
         return agent_session
 
@@ -562,6 +577,7 @@ class SessionManager:
             event_queue=event_queue,
             tool_router=tool_router,
         )
+        self._start_cpu_sandbox_preload(agent_session)
         await self.persist_session_snapshot(agent_session, runtime_state="idle")
 
         if is_pro is not None and user_id and user_id != "dev":
@@ -668,27 +684,9 @@ class SessionManager:
         with exponential backoff. A single missed delete = a permanently
         orphaned Space, so the cost of an extra retry beats the alternative.
         """
-        sandbox = getattr(session, "sandbox", None)
-        if not (sandbox and getattr(sandbox, "_owns_space", False)):
-            return
+        from agent.tools.sandbox_tool import teardown_session_sandbox
 
-        space_id = getattr(sandbox, "space_id", None)
-        last_err: Exception | None = None
-        for attempt in range(3):
-            try:
-                logger.info(f"Deleting sandbox {space_id} (attempt {attempt + 1}/3)...")
-                await asyncio.to_thread(sandbox.delete)
-                from agent.core import telemetry
-                await telemetry.record_sandbox_destroy(session, sandbox)
-                return
-            except Exception as e:
-                last_err = e
-                if attempt < 2:
-                    await asyncio.sleep(2 ** attempt)
-        logger.error(
-            f"Failed to delete sandbox {space_id} after 3 attempts: {last_err}. "
-            f"Orphan — sweep script will pick it up."
-        )
+        await teardown_session_sandbox(session)
 
     async def _run_session(
         self,
@@ -866,6 +864,18 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
 
+        return True
+
+    async def teardown_sandbox(self, session_id: str) -> bool:
+        """Delete only this session's sandbox runtime, preserving chat state."""
+        async with self._lock:
+            agent_session = self.sessions.get(session_id)
+
+        if not agent_session or not agent_session.is_active:
+            return False
+
+        await self._cleanup_sandbox(agent_session.session)
+        await self.persist_session_snapshot(agent_session, runtime_state="idle")
         return True
 
     async def update_session_title(self, session_id: str, title: str | None) -> None:

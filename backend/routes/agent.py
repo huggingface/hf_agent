@@ -538,6 +538,16 @@ async def list_sessions(user: dict = Depends(get_current_user)) -> list[SessionI
     return [SessionInfo(**s) for s in sessions]
 
 
+@router.post("/session/{session_id}/sandbox/teardown")
+async def teardown_session_sandbox(
+    session_id: str, user: dict = Depends(get_current_user)
+) -> dict:
+    """Best-effort sandbox teardown that preserves durable chat history."""
+    await _check_session_access(session_id, user)
+    asyncio.create_task(session_manager.teardown_sandbox(session_id))
+    return {"status": "teardown_requested", "session_id": session_id}
+
+
 @router.delete("/session/{session_id}")
 async def delete_session(
     session_id: str, user: dict = Depends(get_current_user)

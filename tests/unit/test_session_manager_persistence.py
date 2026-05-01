@@ -169,6 +169,27 @@ async def test_concurrent_lazy_restore_starts_only_one_agent_task():
 
 
 @pytest.mark.asyncio
+async def test_create_session_schedules_cpu_sandbox_preload():
+    manager = _manager_with_store(NoopSessionStore())
+    stop = _install_fake_runtime(manager)
+    scheduled: list[str] = []
+
+    def fake_start_cpu_sandbox_preload(agent_session: AgentSession) -> None:
+        scheduled.append(agent_session.session_id)
+
+    manager._start_cpu_sandbox_preload = fake_start_cpu_sandbox_preload  # type: ignore[method-assign]
+
+    try:
+        session_id = await manager.create_session(user_id="owner", hf_token="token")
+
+        assert scheduled == [session_id]
+        assert session_id in manager.sessions
+    finally:
+        stop.set()
+        await _cancel_runtime_tasks(manager)
+
+
+@pytest.mark.asyncio
 async def test_lazy_restore_preserves_pending_approval_tool_calls():
     store = RestoreStore(
         metadata={

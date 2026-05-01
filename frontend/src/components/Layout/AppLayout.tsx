@@ -121,6 +121,39 @@ export default function AppLayout() {
     };
   }, [isConnected, activeSessionId]);
 
+  // Best-effort sandbox cleanup when the browser tab/window closes. This
+  // preserves durable chat history; explicit delete still removes the session.
+  useEffect(() => {
+    const teardownSandboxes = () => {
+      const liveSessionIds = useSessionStore
+        .getState()
+        .sessions
+        .filter((session) => session.isActive && !session.expired)
+        .map((session) => session.id);
+
+      for (const sessionId of liveSessionIds) {
+        const url = `/api/session/${sessionId}/sandbox/teardown`;
+        const body = '{}';
+        const blob = new Blob([body], { type: 'application/json' });
+
+        if (navigator.sendBeacon?.(url, blob)) {
+          continue;
+        }
+
+        fetch(url, {
+          method: 'POST',
+          body,
+          keepalive: true,
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        }).catch(() => {});
+      }
+    };
+
+    window.addEventListener('pagehide', teardownSandboxes);
+    return () => window.removeEventListener('pagehide', teardownSandboxes);
+  }, []);
+
   const handleSessionDead = useCallback(
     (deadSessionId: string) => {
       // Backend lost this session — mark it expired so the chat shows a
