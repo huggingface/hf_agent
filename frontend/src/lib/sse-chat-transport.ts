@@ -26,7 +26,15 @@ export interface SideChannelCallbacks {
   onToolLog: (tool: string, log: string, agentId?: string, label?: string) => void;
   onConnectionChange: (connected: boolean) => void;
   onSessionDead: (sessionId: string) => void;
-  onApprovalRequired: (tools: Array<{ tool: string; arguments: Record<string, unknown>; tool_call_id: string }>) => void;
+  onApprovalRequired: (tools: Array<{
+    tool: string;
+    arguments: Record<string, unknown>;
+    tool_call_id: string;
+    auto_approval_blocked?: boolean;
+    block_reason?: string | null;
+    estimated_cost_usd?: number | null;
+    remaining_cap_usd?: number | null;
+  }>) => void;
   onToolCallPanel: (tool: string, args: Record<string, unknown>) => void;
   onToolOutputPanel: (tool: string, toolCallId: string, output: string, success: boolean) => void;
   onStreaming: () => void;
@@ -236,13 +244,28 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
             tool: string;
             arguments: Record<string, unknown>;
             tool_call_id: string;
+            auto_approval_blocked?: boolean;
+            block_reason?: string | null;
+            estimated_cost_usd?: number | null;
+            remaining_cap_usd?: number | null;
           }>;
           if (!tools) break;
 
           endTextPart(controller);
           for (const t of tools) {
+            const input = t.auto_approval_blocked
+              ? {
+                  ...t.arguments,
+                  _auto_approval: {
+                    blocked: true,
+                    reason: t.block_reason,
+                    estimated_cost_usd: t.estimated_cost_usd,
+                    remaining_cap_usd: t.remaining_cap_usd,
+                  },
+                }
+              : t.arguments;
             controller.enqueue({ type: 'tool-input-start', toolCallId: t.tool_call_id, toolName: t.tool, dynamic: true });
-            controller.enqueue({ type: 'tool-input-available', toolCallId: t.tool_call_id, toolName: t.tool, input: t.arguments, dynamic: true });
+            controller.enqueue({ type: 'tool-input-available', toolCallId: t.tool_call_id, toolName: t.tool, input, dynamic: true });
             controller.enqueue({ type: 'tool-approval-request', approvalId: `approval-${t.tool_call_id}`, toolCallId: t.tool_call_id });
           }
           sideChannel.onApprovalRequired(tools);
