@@ -19,12 +19,14 @@ import asyncio
 import logging
 import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pymongo.errors import PyMongoError
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
 if str(_BACKEND_DIR) not in sys.path:
@@ -384,3 +386,210 @@ async def test_close_cancels_heartbeat_task():
     await manager.close()
     assert cancelled.is_set()
     assert manager._heartbeat_task is None
+
+
+# ── G. P0 #2: per-session requeue scope on lease loss ────────────────────
+
+
+async def test_on_lease_lost_passes_session_id_to_requeue():
+    """``_on_lease_lost(A)`` must pass ``session_id=A`` to
+    ``requeue_claimed_for`` so other sessions held by the same holder are
+    NOT requeued. Otherwise a transient lease loss on A double-executes B.
+    """
+    manager = _bare_manager()
+    store = _make_enabled_mock_store()
+    store.requeue_claimed_for = AsyncMock(return_value=1)
+    manager.persistence_store = store
+    manager.sessions["sess-A"] = _runtime_agent_session("sess-A")
+    manager.sessions["sess-B"] = _runtime_agent_session("sess-B")
+
+    await manager._on_lease_lost("sess-A")
+
+    store.requeue_claimed_for.assert_awaited_once()
+    call = store.requeue_claimed_for.await_args
+    assert call.args[0] == manager._holder_id
+    assert call.kwargs.get("session_id") == "sess-A"
+    assert "sess-A" not in manager.sessions
+    # B must remain — losing A's lease doesn't kick B.
+    assert "sess-B" in manager.sessions
+
+
+# ── H. P1 #1: heartbeat tolerates transient PyMongoError ─────────────────
+
+
+async def test_heartbeat_skips_session_on_pymongo_error_other_session_renewed(
+    caplog,
+):
+    """A transient ``PyMongoError`` on one session must NOT trigger
+    ``_on_lease_lost`` for that session, and must NOT prevent the loop
+    from renewing other sessions in the same tick.
+    """
+    manager = _bare_manager()
+    store = _make_enabled_mock_store()
+
+    async def fake_renew(session_id: str, holder_id: str, ttl_s: int = 30):
+        if session_id == "sess-A":
+            raise PyMongoError("transient")
+        return {"lease": {"holder_id": holder_id}}
+
+    store.renew_lease = AsyncMock(side_effect=fake_renew)
+    requeue_calls: list[Any] = []
+
+    async def track_requeue(*args: Any, **kwargs: Any) -> int:
+        requeue_calls.append((args, kwargs))
+        return 0
+
+    store.requeue_claimed_for = AsyncMock(side_effect=track_requeue)
+    manager.persistence_store = store
+    manager.sessions["sess-A"] = _runtime_agent_session("sess-A")
+    manager.sessions["sess-B"] = _runtime_agent_session("sess-B")
+
+    with caplog.at_level(logging.WARNING):
+        await _drive_heartbeat_one_tick(manager)
+
+    # Both sessions remain in the map; the erroring one is just skipped.
+    assert "sess-A" in manager.sessions
+    assert "sess-B" in manager.sessions
+    # No lease-loss path taken — no requeue triggered.
+    assert requeue_calls == []
+    # Other session was successfully renewed.
+    renewed_ids = {c.args[0] for c in store.renew_lease.await_args_list}
+    assert "sess-B" in renewed_ids
+    assert any(
+        "transient error" in r.message or "transient" in r.message
+        for r in caplog.records
+    )
+
+
+# ── I. P0 #1: ensure_session_loaded returns stub for foreign-held sessions
+
+
+async def test_ensure_session_loaded_returns_stub_when_lease_held_elsewhere():
+    """When ``claim_lease`` returns ``None`` because another holder owns
+    the lease, ``ensure_session_loaded`` returns a stub ``AgentSession``
+    carrying the foreign holder_id, and does NOT add it to ``self.sessions``.
+    """
+    manager = _bare_manager()
+    store = _make_enabled_mock_store()
+    foreign_holder = "worker:other-host:beadface"
+    store.claim_lease = AsyncMock(return_value=None)
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    store.load_session = AsyncMock(
+        return_value={
+            "metadata": {
+                "user_id": "u1",
+                "lease": {"holder_id": foreign_holder},
+                "created_at": created_at,
+            },
+            "messages": [],
+        }
+    )
+    manager.persistence_store = store
+
+    result = await manager.ensure_session_loaded(
+        "sess-foreign", user_id="u1", hf_token=None, hf_username=None
+    )
+
+    assert result is not None
+    assert result.session_id == "sess-foreign"
+    assert result.holder_id == foreign_holder
+    assert result.is_active is True
+    assert result.user_id == "u1"
+    assert result.session is None
+    assert result.tool_router is None
+    assert result.broadcaster is None
+    assert result.task is None
+    assert result.created_at == created_at
+    # Stub is NOT in the in-memory map — only the actual holder owns that.
+    assert "sess-foreign" not in manager.sessions
+
+
+async def test_ensure_session_loaded_returns_none_when_lease_doc_missing_holder():
+    """Defensive: when the Mongo doc has no lease subdoc and ``claim_lease``
+    returns ``None`` (shouldn't happen post-backfill), preserve legacy
+    behaviour and return ``None`` rather than build a stub with no holder.
+    """
+    manager = _bare_manager()
+    store = _make_enabled_mock_store()
+    store.claim_lease = AsyncMock(return_value=None)
+    store.load_session = AsyncMock(
+        return_value={
+            "metadata": {
+                "user_id": "u1",
+                # no "lease" key
+            },
+            "messages": [],
+        }
+    )
+    manager.persistence_store = store
+
+    result = await manager.ensure_session_loaded(
+        "sess-no-lease", user_id="u1", hf_token=None, hf_username=None
+    )
+    assert result is None
+    assert "sess-no-lease" not in manager.sessions
+
+
+# ── J. P1 #3: shutdown_session does not hold lock during external I/O ────
+
+
+async def test_shutdown_session_releases_lock_before_external_io():
+    """``shutdown_session`` must release ``self._lock`` before awaiting
+    ``release_lease`` (Mongo I/O) and ``wait_for(task)`` (agent loop drain),
+    so concurrent operations that take the lock aren't serialized for up
+    to 5 s behind us.
+    """
+    manager = _bare_manager()
+    store = _make_enabled_mock_store()
+    manager.persistence_store = store
+
+    # Stub _enqueue_or_false so we don't touch the real path.
+    manager._enqueue_or_false = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    release_started = asyncio.Event()
+    release_done = asyncio.Event()
+
+    async def slow_release(_session_id: str, _holder_id: str) -> None:
+        release_started.set()
+        await asyncio.sleep(0.5)
+        release_done.set()
+
+    store.release_lease = AsyncMock(side_effect=slow_release)
+
+    # Pre-populate a session with a never-finishing task so wait_for would
+    # otherwise hang on the lock.
+    async def forever() -> None:
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(forever())
+    agent_session = _runtime_agent_session("sess-shutdown")
+    agent_session.task = task
+    manager.sessions["sess-shutdown"] = agent_session
+
+    shutdown_task = asyncio.create_task(manager.shutdown_session("sess-shutdown"))
+
+    # Wait for slow release to actually start.
+    await release_started.wait()
+    # While release_lease is still in flight, _lock must be acquirable
+    # quickly by another caller.
+    lock_acquired = asyncio.Event()
+
+    async def try_lock() -> None:
+        async with manager._lock:
+            lock_acquired.set()
+
+    locker = asyncio.create_task(try_lock())
+    try:
+        await asyncio.wait_for(lock_acquired.wait(), timeout=0.2)
+    except asyncio.TimeoutError:  # pragma: no cover - failure surface
+        pytest.fail("Lock was held during release_lease — regression.")
+    finally:
+        await locker
+
+    # Cancel the long-running task so shutdown_session can complete.
+    task.cancel()
+    try:
+        await asyncio.wait_for(shutdown_task, timeout=2.0)
+    except asyncio.CancelledError:
+        pass
+    assert release_done.is_set()

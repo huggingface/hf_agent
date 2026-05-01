@@ -615,29 +615,38 @@ class MongoSessionStore(NoopSessionStore):
     async def renew_lease(
         self, session_id: str, holder_id: str, ttl_s: int = 30
     ) -> dict[str, Any] | None:
-        """Atomic renew. Returns updated doc, or ``None`` if we lost it."""
+        """Atomic renew. Returns updated doc, or ``None`` if we lost it.
+
+        Raises ``PyMongoError`` on transient Mongo failures so callers can
+        distinguish "we lost the lease" (return value ``None``) from "Mongo
+        flapped" (exception). The heartbeat loop catches the exception and
+        skips this tick for the affected session; only ``None`` triggers
+        ``_on_lease_lost``.
+        """
         if not self._ready():
             return None
         now = _now()
-        try:
-            return await self.db.sessions.find_one_and_update(
-                {"_id": session_id, "lease.holder_id": holder_id},
-                {"$set": {"lease.expires_at": now + timedelta(seconds=ttl_s)}},
-                return_document=ReturnDocument.AFTER,
-            )
-        except PyMongoError as e:
-            logger.warning(f"renew_lease failed for {session_id} ({holder_id}): {e}")
-            return None
+        return await self.db.sessions.find_one_and_update(
+            {"_id": session_id, "lease.holder_id": holder_id},
+            {"$set": {"lease.expires_at": now + timedelta(seconds=ttl_s)}},
+            return_document=ReturnDocument.AFTER,
+        )
 
     async def release_lease(self, session_id: str, holder_id: str) -> None:
-        """Atomic release. No-op if we no longer hold the lease."""
+        """Atomic release. No-op if we no longer hold the lease.
+
+        Clears ``lease.holder_id`` in addition to expiring the lease so the
+        renew CAS filter (``{"lease.holder_id": holder_id}``) no longer
+        matches — preventing a heartbeat tick that snapshotted the session
+        id pre-release from re-extending the lease 30 s into the future.
+        """
         if not self._ready():
             return
         now = _now()
         try:
             await self.db.sessions.update_one(
                 {"_id": session_id, "lease.holder_id": holder_id},
-                {"$set": {"lease.expires_at": now}},
+                {"$set": {"lease.expires_at": now, "lease.holder_id": None}},
             )
         except PyMongoError as e:
             logger.warning(f"release_lease failed for {session_id} ({holder_id}): {e}")
@@ -707,17 +716,29 @@ class MongoSessionStore(NoopSessionStore):
         except PyMongoError as e:
             logger.warning(f"mark_submission_done failed for {submission_id}: {e}")
 
-    async def requeue_claimed_for(self, holder_id: str) -> int:
-        """Flip every ``claimed`` submission for ``holder_id`` back to ``pending``.
+    async def requeue_claimed_for(
+        self, holder_id: str, session_id: str | None = None
+    ) -> int:
+        """Flip ``claimed`` submissions for ``holder_id`` back to ``pending``.
+
+        When ``session_id`` is provided, only submissions for that session
+        are flipped — used by ``_on_lease_lost`` so losing one session's
+        lease doesn't disturb the holder's other sessions. When ``None``
+        (default), every claimed submission for this holder is flipped —
+        the correct behaviour for ``release_session_to_background`` and the
+        lifespan shutdown sweep.
 
         Must NOT modify ``created_at`` — FIFO ordering is preserved across
-        handovers (e.g. lease loss, lifespan shutdown sweep).
+        handovers.
         """
         if not self._ready():
             return 0
+        query: dict[str, Any] = {"status": "claimed", "claimed_by": holder_id}
+        if session_id is not None:
+            query["session_id"] = session_id
         try:
             result = await self.db.pending_submissions.update_many(
-                {"status": "claimed", "claimed_by": holder_id},
+                query,
                 {
                     "$set": {"status": "pending", "claimed_by": None},
                     "$unset": {"claimed_at": ""},

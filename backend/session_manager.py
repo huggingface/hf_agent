@@ -84,11 +84,19 @@ class EventBroadcaster:
 
 @dataclass
 class AgentSession:
-    """Wrapper for an agent session with its associated resources."""
+    """Wrapper for an agent session with its associated resources.
+
+    ``session`` and ``tool_router`` are ``Optional`` to support cross-process
+    *stubs* — lightweight placeholders for sessions held by another holder
+    (Worker). A stub carries enough identity (``session_id``, ``user_id``,
+    ``holder_id``) to satisfy access checks and the SSE non-holder slow
+    path, but no live runtime resources. Only the actual lease holder ever
+    constructs a fully populated ``AgentSession``.
+    """
 
     session_id: str
-    session: Session
-    tool_router: ToolRouter
+    session: Session | None
+    tool_router: ToolRouter | None
     user_id: str = "dev"  # Owner of this session
     hf_username: str | None = None  # HF namespace used for personal trace uploads
     hf_token: str | None = None  # User's HF OAuth token for tool execution
@@ -232,9 +240,12 @@ class SessionManager:
     async def _lease_heartbeat_loop(self) -> None:
         """Renew leases every TTL/3 seconds for sessions held by this process.
 
-        On renewal failure for a session: requeue claimed submissions, drop
-        the session, log WARN. The loop must never crash — any unexpected
-        exception is logged and the loop sleeps before retrying.
+        On CAS-mismatch for a session (``renew_lease`` returns ``None``):
+        requeue that session's claimed submissions, drop the session, log
+        WARN. On a transient ``PyMongoError`` from ``renew_lease``: log a
+        warning and skip this tick for the affected session — do NOT treat
+        a Mongo flap as lease theft. The loop must never crash; any other
+        unexpected exception is logged and the loop sleeps before retrying.
         """
         HEARTBEAT_INTERVAL_S = 10  # TTL=30s, renew at TTL/3
         while True:
@@ -247,9 +258,16 @@ class SessionManager:
                 async with self._lock:
                     session_ids = list(self.sessions.keys())
                 for session_id in session_ids:
-                    renewed = await store.renew_lease(
-                        session_id, self._holder_id, ttl_s=30
-                    )
+                    try:
+                        renewed = await store.renew_lease(
+                            session_id, self._holder_id, ttl_s=30
+                        )
+                    except PyMongoError as e:
+                        logger.warning(
+                            f"renew_lease transient error for {session_id} "
+                            f"({self._holder_id}); skipping tick: {e}"
+                        )
+                        continue
                     if renewed is None:
                         # Lease lost — someone else holds it now.
                         await self._on_lease_lost(session_id)
@@ -263,13 +281,17 @@ class SessionManager:
     async def _on_lease_lost(self, session_id: str) -> None:
         """Called when our lease for ``session_id`` has been taken by another holder.
 
-        Per plan Step 1.5: requeue our claimed submissions, drop the session,
-        log WARN. The heartbeat loop must keep going, so we don't await the
-        cancelled task here.
+        Requeue claimed submissions for THIS session only, drop the session,
+        log WARN. We must NOT requeue all claimed submissions for this
+        holder — losing one session's lease shouldn't cause double-execution
+        on every other session this Main still holds. The heartbeat loop
+        must keep going, so we don't await the cancelled task here.
         """
         store = self._store()
         try:
-            requeued = await store.requeue_claimed_for(self._holder_id)
+            requeued = await store.requeue_claimed_for(
+                self._holder_id, session_id=session_id
+            )
             logger.warning(
                 "Lease lost for session %s (held_by=%s); requeued %d claimed submissions",
                 session_id, self._holder_id, requeued,
@@ -872,10 +894,43 @@ class SessionManager:
                 session_id, self._holder_id, ttl_s=30
             )
             if claimed is None:
+                # Another holder owns an unexpired lease. Return a stub so
+                # the route layer's access check passes and the SSE slow
+                # path / submission-enqueue paths can deliver to the actual
+                # holder. The stub is NOT inserted into ``self.sessions`` —
+                # only the real holder owns that map entry.
+                foreign_lease = (meta.get("lease") or {})
+                foreign_holder = foreign_lease.get("holder_id")
+                if not foreign_holder:
+                    # Defensive: post-backfill every active session has a
+                    # lease subdoc; if it's missing we can't safely build a
+                    # stub. Preserve the legacy behaviour and return None.
+                    logger.info(
+                        f"Refusing restore of {session_id}: lease "
+                        "held by another process (no holder_id on doc)"
+                    )
+                    return None
+                created_at = meta.get("created_at")
+                if not isinstance(created_at, datetime):
+                    created_at = datetime.utcnow()
                 logger.info(
-                    f"Refusing restore of {session_id}: lease held by another process"
+                    f"ensure_session_loaded stub session_id={session_id} "
+                    f"foreign_holder={foreign_holder} (lease held elsewhere)"
                 )
-                return None
+                return AgentSession(
+                    session_id=session_id,
+                    session=None,
+                    tool_router=None,
+                    user_id=owner or user_id,
+                    hf_username=hf_username,
+                    hf_token=hf_token,
+                    task=None,
+                    created_at=created_at,
+                    is_active=True,
+                    is_processing=False,
+                    broadcaster=None,
+                    holder_id=foreign_holder,
+                )
             logger.info(f"lease_claim session_id={session_id} holder_id={self._holder_id}")
 
         agent_session = await self._rebuild_agent_session_from_store(
@@ -1469,6 +1524,11 @@ class SessionManager:
         Enqueues a ``shutdown`` op (the consumer drains it inline by setting
         ``session.is_running = False``), then releases the lease and awaits
         the task locally so ``DELETE`` callers see a clean stop.
+
+        We only acquire ``self._lock`` for the dict lookup — external I/O
+        (``release_lease`` Mongo round-trip, ``wait_for(task)`` agent loop
+        drain) runs without the lock so heartbeat snapshots, grace sweeps,
+        idle eviction, and other shutdowns aren't serialized behind us.
         """
         success = await self._enqueue_or_false(
             session_id, op_type="shutdown", payload={}
@@ -1477,20 +1537,20 @@ class SessionManager:
         if success:
             async with self._lock:
                 agent_session = self.sessions.get(session_id)
-                if agent_session and agent_session.task:
-                    try:
-                        await self._store().release_lease(
-                            session_id, self._holder_id
-                        )
-                    except Exception as e:
-                        logger.debug(
-                            f"release_lease failed during shutdown of {session_id}: {e}"
-                        )
-                    # Wait for task to complete
-                    try:
-                        await asyncio.wait_for(agent_session.task, timeout=5.0)
-                    except asyncio.TimeoutError:
-                        agent_session.task.cancel()
+            if agent_session and agent_session.task:
+                try:
+                    await self._store().release_lease(
+                        session_id, self._holder_id
+                    )
+                except Exception as e:
+                    logger.debug(
+                        f"release_lease failed during shutdown of {session_id}: {e}"
+                    )
+                # Wait for task to complete
+                try:
+                    await asyncio.wait_for(agent_session.task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    agent_session.task.cancel()
 
         return success
 

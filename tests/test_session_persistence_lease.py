@@ -179,6 +179,109 @@ async def test_requeue_claimed_for_preserves_created_at_and_order():
 
 
 @pytest.mark.asyncio
+async def test_requeue_claimed_for_with_session_id_only_flips_that_session():
+    """P0 #2: ``session_id=`` arg scopes the requeue to one session.
+
+    Other sessions held by the same holder must remain ``claimed`` so a
+    transient lease loss on session A doesn't cause double-execution on
+    session B.
+    """
+    store = _make_store()
+    await _seed_session(store, "sess-A")
+    await _seed_session(store, "sess-B")
+
+    # Two pending submissions per session, claimed by the same holder.
+    for _ in range(2):
+        await store.enqueue_pending_submission("sess-A", "op", {})
+        await store.claim_pending_submission("sess-A", "holder-X")
+        await store.enqueue_pending_submission("sess-B", "op", {})
+        await store.claim_pending_submission("sess-B", "holder-X")
+
+    n = await store.requeue_claimed_for("holder-X", session_id="sess-A")
+    assert n == 2
+
+    # Session A's submissions are now pending again.
+    a_pending = await store.db.pending_submissions.count_documents(
+        {"session_id": "sess-A", "status": "pending"}
+    )
+    assert a_pending == 2
+    # Session B's submissions are still claimed by holder-X.
+    b_claimed = await store.db.pending_submissions.count_documents(
+        {"session_id": "sess-B", "status": "claimed", "claimed_by": "holder-X"}
+    )
+    assert b_claimed == 2
+
+
+@pytest.mark.asyncio
+async def test_requeue_claimed_for_no_session_id_flips_all_for_holder():
+    """``requeue_claimed_for(holder)`` (no session_id) keeps existing
+    behaviour: every claimed submission for that holder is flipped.
+    """
+    store = _make_store()
+    await _seed_session(store, "sess-A")
+    await _seed_session(store, "sess-B")
+
+    for _ in range(2):
+        await store.enqueue_pending_submission("sess-A", "op", {})
+        await store.claim_pending_submission("sess-A", "holder-X")
+        await store.enqueue_pending_submission("sess-B", "op", {})
+        await store.claim_pending_submission("sess-B", "holder-X")
+
+    n = await store.requeue_claimed_for("holder-X")
+    assert n == 4
+
+    still_claimed = await store.db.pending_submissions.count_documents(
+        {"status": "claimed", "claimed_by": "holder-X"}
+    )
+    assert still_claimed == 0
+
+
+@pytest.mark.asyncio
+async def test_renew_lease_propagates_pymongo_error():
+    """P1 #1: ``renew_lease`` must NOT swallow ``PyMongoError`` — the
+    heartbeat loop relies on the exception to distinguish transient flaps
+    from real lease theft.
+    """
+    from unittest.mock import AsyncMock
+
+    from pymongo.errors import PyMongoError
+
+    store = _make_store()
+    await _seed_session(store)
+    await store.claim_lease("s1", "holder-A", ttl_s=30)
+
+    store.db.sessions = AsyncMock()
+    store.db.sessions.find_one_and_update = AsyncMock(
+        side_effect=PyMongoError("transient")
+    )
+
+    with pytest.raises(PyMongoError):
+        await store.renew_lease("s1", "holder-A", ttl_s=30)
+
+
+@pytest.mark.asyncio
+async def test_release_lease_clears_holder_id_and_blocks_renew():
+    """P1 #2: After ``release_lease``, a stale heartbeat tick that calls
+    ``renew_lease`` with the old holder must NOT match the CAS filter.
+    """
+    store = _make_store()
+    await _seed_session(store)
+    claimed = await store.claim_lease("s1", "holder-A", ttl_s=30)
+    assert claimed is not None
+
+    await store.release_lease("s1", "holder-A")
+
+    # holder_id is cleared on the doc.
+    doc = await store.db.sessions.find_one({"_id": "s1"})
+    assert doc is not None
+    assert doc["lease"]["holder_id"] is None
+
+    # A renew attempt by the (now-former) holder no longer matches.
+    result = await store.renew_lease("s1", "holder-A", ttl_s=30)
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_mark_submission_done_marks_status_done():
     store = _make_store()
     await _seed_session(store)
