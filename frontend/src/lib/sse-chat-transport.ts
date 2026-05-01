@@ -253,19 +253,8 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
 
           endTextPart(controller);
           for (const t of tools) {
-            const input = t.auto_approval_blocked
-              ? {
-                  ...t.arguments,
-                  _auto_approval: {
-                    blocked: true,
-                    reason: t.block_reason,
-                    estimated_cost_usd: t.estimated_cost_usd,
-                    remaining_cap_usd: t.remaining_cap_usd,
-                  },
-                }
-              : t.arguments;
             controller.enqueue({ type: 'tool-input-start', toolCallId: t.tool_call_id, toolName: t.tool, dynamic: true });
-            controller.enqueue({ type: 'tool-input-available', toolCallId: t.tool_call_id, toolName: t.tool, input, dynamic: true });
+            controller.enqueue({ type: 'tool-input-available', toolCallId: t.tool_call_id, toolName: t.tool, input: t.arguments, dynamic: true });
             controller.enqueue({ type: 'tool-approval-request', approvalId: `approval-${t.tool_call_id}`, toolCallId: t.tool_call_id });
           }
           sideChannel.onApprovalRequired(tools);

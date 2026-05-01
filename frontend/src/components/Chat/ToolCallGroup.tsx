@@ -502,12 +502,7 @@ function InlineApproval({
 }) {
   const [feedback, setFeedback] = useState('');
   const args = input as Record<string, unknown> | undefined;
-  const autoApproval = args?._auto_approval as {
-    blocked?: boolean;
-    reason?: string | null;
-    estimated_cost_usd?: number | null;
-    remaining_cap_usd?: number | null;
-  } | undefined;
+  const autoApproval = useAgentStore((state) => state.budgetBlocks[toolCallId]);
   const { setPanel, getEditedScript } = useAgentStore();
   const { setRightPanelOpen, setLeftSidebarOpen } = useLayoutStore();
   const hasEditedScript = !!getEditedScript(toolCallId);
@@ -527,7 +522,7 @@ function InlineApproval({
 
   return (
     <Box sx={{ px: 1.5, py: 1.5, borderTop: '1px solid var(--tool-border)' }}>
-      {autoApproval?.blocked && (
+      {autoApproval && (
         <Alert
           severity="warning"
           sx={{

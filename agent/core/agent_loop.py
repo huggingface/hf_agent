@@ -19,6 +19,10 @@ from litellm import (
 from litellm.exceptions import ContextWindowExceededError
 
 from agent.config import Config
+from agent.core.approval_policy import (
+    is_scheduled_operation,
+    normalize_tool_operation,
+)
 from agent.core.cost_estimation import CostEstimate, estimate_tool_cost
 from agent.messaging.gateway import NotificationGateway
 from agent.core import telemetry
@@ -112,8 +116,6 @@ def _validate_tool_args(tool_args: dict) -> tuple[bool, str | None]:
 
 
 _IMMEDIATE_HF_JOB_RUNS = {"run", "uv"}
-_SCHEDULED_HF_JOB_RUNS = {"scheduled run", "scheduled uv"}
-
 
 @dataclass(frozen=True)
 class ApprovalDecision:
@@ -127,7 +129,7 @@ class ApprovalDecision:
 
 
 def _operation(tool_args: dict) -> str:
-    return str(tool_args.get("operation") or "").strip().lower()
+    return normalize_tool_operation(tool_args.get("operation"))
 
 
 def _is_immediate_hf_job_run(tool_name: str, tool_args: dict) -> bool:
@@ -135,7 +137,7 @@ def _is_immediate_hf_job_run(tool_name: str, tool_args: dict) -> bool:
 
 
 def _is_scheduled_hf_job_run(tool_name: str, tool_args: dict) -> bool:
-    return tool_name == "hf_jobs" and _operation(tool_args) in _SCHEDULED_HF_JOB_RUNS
+    return tool_name == "hf_jobs" and is_scheduled_operation(_operation(tool_args))
 
 
 def _is_budgeted_auto_approval_target(tool_name: str, tool_args: dict) -> bool:
@@ -157,10 +159,10 @@ def _base_needs_approval(
 
     if tool_name == "hf_jobs":
         operation = _operation(tool_args)
-        if operation not in _IMMEDIATE_HF_JOB_RUNS | _SCHEDULED_HF_JOB_RUNS:
-            return False
-        if operation in _SCHEDULED_HF_JOB_RUNS:
+        if is_scheduled_operation(operation):
             return True
+        if operation not in _IMMEDIATE_HF_JOB_RUNS:
+            return False
 
         # Check if this is a CPU-only job
         # hardware_flavor is at top level of tool_args, not nested in args
@@ -326,6 +328,26 @@ def _record_estimated_spend(session: Session, decision: ApprovalDecision) -> Non
             + float(decision.estimated_cost_usd),
             4,
         )
+
+
+async def _record_manual_approved_spend_if_needed(
+    session: Session,
+    tool_name: str,
+    tool_args: dict,
+) -> None:
+    if not _session_auto_approval_enabled(session):
+        return
+    if not _is_budgeted_auto_approval_target(tool_name, tool_args):
+        return
+    estimate = await estimate_tool_cost(tool_name, tool_args, session=session)
+    _record_estimated_spend(
+        session,
+        ApprovalDecision(
+            requires_approval=False,
+            billable=estimate.billable,
+            estimated_cost_usd=estimate.estimated_cost_usd,
+        ),
+    )
 
 
 # -- LLM retry constants --------------------------------------------------
@@ -1578,16 +1600,7 @@ class Handlers:
                 )
             )
 
-            if _is_budgeted_auto_approval_target(tool_name, tool_args):
-                estimate = await estimate_tool_cost(tool_name, tool_args, session=session)
-                _record_estimated_spend(
-                    session,
-                    ApprovalDecision(
-                        requires_approval=False,
-                        billable=estimate.billable,
-                        estimated_cost_usd=estimate.estimated_cost_usd,
-                    ),
-                )
+            await _record_manual_approved_spend_if_needed(session, tool_name, tool_args)
 
             output, success = await session.tool_router.call_tool(
                 tool_name, tool_args, session=session, tool_call_id=tc.id

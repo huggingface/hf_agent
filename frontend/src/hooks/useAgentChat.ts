@@ -186,6 +186,20 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
         if (!tools.length) return;
         setNeedsAttention(sessionId, true);
 
+        const store = useAgentStore.getState();
+        for (const tool of tools) {
+          store.setToolBudgetBlock(
+            tool.tool_call_id,
+            tool.auto_approval_blocked
+              ? {
+                  reason: tool.block_reason ?? null,
+                  estimatedCostUsd: tool.estimated_cost_usd ?? null,
+                  remainingCapUsd: tool.remaining_cap_usd ?? null,
+                }
+              : null,
+          );
+        }
+
         updateSession(sessionId, { activityStatus: { type: 'waiting-approval' } });
 
         // Build panel data for this session's pending approval

@@ -21,6 +21,7 @@ import litellm
 from prompt_toolkit import PromptSession
 
 from agent.config import load_config
+from agent.core.approval_policy import is_scheduled_operation
 from agent.core.agent_loop import submission_loop
 from agent.core import model_switcher
 from agent.core.hf_tokens import resolve_hf_token
@@ -66,7 +67,7 @@ def _is_scheduled_hf_job_tool(tool_info: dict[str, Any]) -> bool:
             return False
     if not isinstance(arguments, dict):
         return False
-    return str(arguments.get("operation") or "").strip().lower().startswith("scheduled ")
+    return is_scheduled_operation(arguments.get("operation"))
 
 
 def _configure_runtime_logging() -> None:

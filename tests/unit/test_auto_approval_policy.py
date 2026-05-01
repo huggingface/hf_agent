@@ -41,20 +41,24 @@ async def test_session_yolo_auto_approves_non_costed_approval_tool():
 
 
 @pytest.mark.asyncio
-async def test_scheduled_hf_jobs_always_require_manual_approval():
+@pytest.mark.parametrize(
+    "operation",
+    ["scheduled run", "scheduled uv", "scheduled  run"],
+)
+async def test_scheduled_hf_jobs_always_require_manual_approval(operation):
     session = _session()
     session.config.yolo_mode = True
 
     decision = await agent_loop._approval_decision(
         "hf_jobs",
-        {"operation": "scheduled run", "script": "print(1)"},
+        {"operation": operation, "script": "print(1)"},
         session,
     )
 
     assert decision.requires_approval is True
     assert decision.auto_approval_blocked is True
     assert "Scheduled HF jobs" in decision.block_reason
-    assert agent_loop._needs_approval("hf_jobs", {"operation": "scheduled run"}, session.config)
+    assert agent_loop._needs_approval("hf_jobs", {"operation": operation}, session.config)
 
 
 @pytest.mark.asyncio
@@ -140,3 +144,42 @@ async def test_batch_reservation_blocks_second_over_budget_job(monkeypatch):
     assert first.requires_approval is False
     assert second.requires_approval is True
     assert second.remaining_cap_usd == 2.0
+
+
+@pytest.mark.asyncio
+async def test_manual_approval_does_not_record_spend_when_session_yolo_disabled(monkeypatch):
+    called = False
+
+    async def fake_estimate(*args, **kwargs):
+        nonlocal called
+        called = True
+        return CostEstimate(estimated_cost_usd=2.0, billable=True)
+
+    monkeypatch.setattr(agent_loop, "estimate_tool_cost", fake_estimate)
+    session = _session(enabled=False, cap=5.0, spent=0.0)
+
+    await agent_loop._record_manual_approved_spend_if_needed(
+        session,
+        "sandbox_create",
+        {"hardware": "a10g-large"},
+    )
+
+    assert called is False
+    assert session.auto_approval_estimated_spend_usd == 0.0
+
+
+@pytest.mark.asyncio
+async def test_manual_approval_records_spend_when_session_yolo_enabled(monkeypatch):
+    async def fake_estimate(*args, **kwargs):
+        return CostEstimate(estimated_cost_usd=1.25, billable=True)
+
+    monkeypatch.setattr(agent_loop, "estimate_tool_cost", fake_estimate)
+    session = _session(enabled=True, cap=5.0, spent=0.5)
+
+    await agent_loop._record_manual_approved_spend_if_needed(
+        session,
+        "sandbox_create",
+        {"hardware": "a10g-large"},
+    )
+
+    assert session.auto_approval_estimated_spend_usd == 1.75
