@@ -185,6 +185,7 @@ async def _check_session_access(
         session_id,
         user["user_id"],
         hf_token=hf_token,
+        hf_username=user.get("username"),
     )
     if not agent_session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -369,6 +370,7 @@ async def create_session(
     try:
         session_id = await session_manager.create_session(
             user_id=user["user_id"],
+            hf_username=user.get("username"),
             hf_token=hf_token,
             model=model,
             is_pro=user.get("plan") == "pro",
@@ -408,6 +410,7 @@ async def restore_session_summary(
     try:
         session_id = await session_manager.create_session(
             user_id=user["user_id"],
+            hf_username=user.get("username"),
             hf_token=hf_token,
             model=model,
             is_pro=user.get("plan") == "pro",

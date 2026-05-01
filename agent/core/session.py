@@ -89,10 +89,12 @@ class Session:
         defer_turn_complete_notification: bool = False,
         session_id: str | None = None,
         user_id: str | None = None,
+        hf_username: str | None = None,
         persistence_store: Any | None = None,
     ):
         self.hf_token: Optional[str] = hf_token
         self.user_id: Optional[str] = user_id
+        self.hf_username: Optional[str] = hf_username
         self.persistence_store = persistence_store
         self.tool_router = tool_router
         self.stream = stream
@@ -363,6 +365,7 @@ class Session:
         return {
             "session_id": self.session_id,
             "user_id": self.user_id,
+            "hf_username": self.hf_username,
             "session_start_time": self.session_start_time,
             "session_end_time": datetime.now().isoformat(),
             "model_name": self.config.model_name,
@@ -458,7 +461,7 @@ class Session:
             return False
 
     def _personal_trace_repo_id(self) -> Optional[str]:
-        """Resolve the per-user trace repo id from config + user_id.
+        """Resolve the per-user trace repo id from config + HF username.
 
         Returns ``None`` when sharing is disabled, the user is anonymous,
         or the template is missing — caller skips the personal upload in
@@ -466,13 +469,14 @@ class Session:
         """
         if not getattr(self.config, "share_traces", False):
             return None
-        if not self.user_id:
+        hf_user = self.hf_username or self.user_id
+        if not hf_user:
             return None
         template = getattr(self.config, "personal_trace_repo_template", None)
         if not template:
             return None
         try:
-            return template.format(hf_user=self.user_id)
+            return template.format(hf_user=hf_user)
         except (KeyError, IndexError):
             logger.debug("personal_trace_repo_template format failed: %r", template)
             return None
