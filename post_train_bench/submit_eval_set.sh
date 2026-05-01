@@ -9,7 +9,7 @@ Usage:
   bash post_train_bench/submit_eval_set.sh full --dry-run
 
 Modes:
-  smoke  Submit one 5-minute validation job.
+  smoke  Submit one 10-minute validation job.
   full   Submit the full 4-model x 7-benchmark matrix. This is documented for manual use.
 
 Options:
@@ -141,7 +141,7 @@ from pathlib import Path
 rows = [{
     "benchmark": "gsm8k",
     "model_to_train": "Qwen/Qwen3-1.7B-Base",
-    "num_hours": "0.083",
+    "num_hours": "0.167",
     "eval_limit": 8,
 }]
 Path(sys.argv[1]).write_text("\n".join(json.dumps(row) for row in rows) + "\n")

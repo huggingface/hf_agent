@@ -59,7 +59,7 @@ Override the path if the cluster seed cache moves.
 
 ## Smoke Test
 
-Submit one 5-minute GSM8K / Qwen3-1.7B job:
+Submit one 10-minute GSM8K / Qwen3-1.7B job:
 
 ```bash
 bash post_train_bench/submit_eval_set.sh smoke
@@ -69,7 +69,7 @@ The smoke mode is meant to validate the Slurm, Docker, agent launch, artifact
 collection, judge, and evaluation plumbing quickly. It is not a faithful
 quality estimate; use the full matrix for leaderboard runs.
 
-Smoke uses a 5-minute solve budget, evaluates 8 GSM8K samples, and requests a
+Smoke uses a 10-minute solve budget, evaluates 8 GSM8K samples, and requests a
 1-hour Slurm allocation by default so the judge, evaluation, and artifact
 collection have room to finish. Override the scheduler allocation with:
 
