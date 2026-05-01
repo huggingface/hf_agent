@@ -77,7 +77,7 @@
       "id": "US-005",
       "title": "Holder-local fast-path overlay for SSE (Step 4)",
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "EventBroadcaster class is RETAINED at backend/session_manager.py (not deleted)",
         "Session.send_event durability path is unchanged — append_event called BEFORE in-process broadcaster push",

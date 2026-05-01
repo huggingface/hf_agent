@@ -98,9 +98,35 @@ Verification:
 
 Edge case flagged by executor: standalone agent/main.py CLI uses its own submission_loop/asyncio.Queue (untouched). When MongoSessionStore is disabled at boot but a session was created earlier (CLI/test), submit* returns False rather than queuing in-memory. Acceptable for hosted backend (Mongo is required there).
 
-## Iteration 4: starting US-005 (Step 4 — holder-local fast-path overlay for SSE)
+## Iteration 4: US-005 (Step 4 — holder-local fast-path overlay) — COMPLETE
 
-EventBroadcaster KEPT as opt-in read-side cache. Branch SSE generators on holder match. Non-holder SSE falls through to Mongo change_stream_events. Replay-from-Mongo first in both branches.
+backend/session_manager.py:
+- Added time import.
+- Added holder_id: str | None = None to AgentSession dataclass; set when lease claimed in create_session and ensure_session_loaded.
+- Added _subscriber_counts: dict[str, int] and _no_subscriber_since: dict[str, float] to __init__.
+- Added _attach_subscriber and _detach_subscriber methods (used by US-006's grace sweeper).
+
+backend/routes/agent.py:
+- Added PyMongoError import.
+- _sse_response signature is now (session_id, agent_session, *, replay_events, after_seq). Replay-then-live with two transport branches:
+  - Holder fast path: subscribe to agent_session.broadcaster (in-process)
+  - Non-holder slow path: tail store.change_stream_events; fall back to 500ms load_events_after poll on PyMongoError/NotImplementedError
+- Both branches call _attach_subscriber/_detach_subscriber. Keepalives every 15s preserved.
+- chat_sse no longer subscribes pre-submit (Mongo durability makes it unnecessary). Enqueues, then loads replay events, calls new _sse_response.
+- subscribe_events updated to new signature.
+
+agent/core/session.py: durability invariant verified — send_event calls append_event BEFORE event_queue.put (lines 157-165). No changes needed there.
+
+tests/test_sse_holder_overlay.py NEW (7 tests): holder fast path uses broadcaster; non-holder uses change stream; non-holder falls back to poll on PyMongoError; subscriber counter attach/detach for both paths; replay phase skips seqs ≤ after_seq; terminal event in replay ends stream.
+
+Verification:
+- ruff: clean on session_manager.py + tests; routes/agent.py has 2 pre-existing errors (os import unused line 10, agent_session unused line 572) verified via git stash as predating this PR
+- pytest: 62 passing in cumulative suite (12 + 12 + 18 + 7 + 5 + 5 + 3)
+
+## Iteration 5: starting US-006 (Step 5 — lifespan sweep + grace sweeper + /background route + migrating event)
+
+Multi-file, complex. Touches backend/main.py (lifespan), backend/session_manager.py (grace sweeper task), backend/routes/agent.py (new /api/session/{id}/background route).
+
 
 
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -105,6 +106,13 @@ class AgentSession:
     # session — used by US-007's idle eviction. Updated in one place
     # inside ``_drain_and_process``.
     last_submission_at: float = field(default_factory=lambda: 0.0)
+    # Holder identity that owns this session's lease. Set when the lease
+    # is claimed in ``create_session`` / ``ensure_session_loaded`` to
+    # ``SessionManager._holder_id``. The SSE fast path branches on
+    # ``holder_id == session_manager._holder_id`` to decide whether to
+    # subscribe to the in-process broadcaster (this process holds it) or
+    # tail the Mongo change stream (a different process holds it).
+    holder_id: str | None = None
 
 
 class SessionCapacityError(Exception):
@@ -146,11 +154,41 @@ class SessionManager:
         self.mode: str = raw_mode
         self._holder_id: str = make_holder_id(self.mode)
         self._heartbeat_task: asyncio.Task | None = None
+        # SSE subscriber bookkeeping — used by the US-006 grace-period
+        # sweeper to decide when a session has had no readers for long
+        # enough to be evicted. Populated by ``_attach_subscriber`` /
+        # ``_detach_subscriber`` from both SSE transport branches.
+        self._subscriber_counts: dict[str, int] = {}
+        # Wall-clock timestamp (``time.time()``) of when ``session_id``'s
+        # subscriber count last hit zero. Cleared the moment a new
+        # subscriber attaches.
+        self._no_subscriber_since: dict[str, float] = {}
         logger.info(
             "SessionManager init: mode=%s holder_id=%s",
             self.mode,
             self._holder_id,
         )
+
+    def _attach_subscriber(self, session_id: str) -> None:
+        """Increment the subscriber count for ``session_id``.
+
+        Called from both SSE transport branches (holder fast-path and
+        non-holder slow-path) when a stream attaches.
+        """
+        self._subscriber_counts[session_id] = (
+            self._subscriber_counts.get(session_id, 0) + 1
+        )
+        self._no_subscriber_since.pop(session_id, None)
+
+    def _detach_subscriber(self, session_id: str) -> None:
+        """Decrement the subscriber count; record the zero-point on transitions."""
+        n = self._subscriber_counts.get(session_id, 0)
+        n = max(0, n - 1)
+        if n == 0:
+            self._subscriber_counts.pop(session_id, None)
+            self._no_subscriber_since[session_id] = time.time()
+        else:
+            self._subscriber_counts[session_id] = n
 
     async def start(self) -> None:
         """Start shared background resources."""
@@ -566,6 +604,10 @@ class SessionManager:
             is_processing=False,
             claude_counted=bool(meta.get("claude_counted")),
             title=meta.get("title"),
+            # We just claimed the lease (or persistence is disabled and
+            # we're the only process) — tag so the SSE fast-path branch
+            # picks the in-process broadcaster.
+            holder_id=self._holder_id,
         )
         started = await self._start_agent_session(
             agent_session=agent_session,
@@ -670,6 +712,11 @@ class SessionManager:
             raise RuntimeError(
                 f"Failed to claim lease for new session {session_id}"
             )
+        # Tag the session with our holder identity so the SSE fast-path
+        # branch knows we own it. Always safe to set: either we just
+        # claimed (Mongo path) or persistence is disabled (single-process
+        # local dev — we are trivially the only holder).
+        agent_session.holder_id = self._holder_id
 
         await self._start_agent_session(
             agent_session=agent_session,

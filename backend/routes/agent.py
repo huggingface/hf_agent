@@ -19,6 +19,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from litellm import acompletion
+from pymongo.errors import PyMongoError
 from models import (
     ApprovalRequest,
     HealthResponse,
@@ -591,20 +592,19 @@ async def chat_sse(
     request: Request,
     user: dict = Depends(get_current_user),
 ) -> StreamingResponse:
-    """SSE endpoint: submit input or approval, then stream events until turn ends."""
+    """SSE endpoint: submit input or approval, then stream events until turn ends.
+
+    With the Mongo durability layer (US-001..US-004), every emitted event is
+    persisted via ``append_event`` before being fanned out, so the
+    replay-then-live pattern in ``_sse_response`` catches anything the
+    submission produces — there's no need to subscribe pre-submit anymore.
+    """
     agent_session = await _check_session_access(session_id, user, request)
     if not agent_session or not agent_session.is_active:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
 
     # Parse body
     body = await request.json()
-
-    # Subscribe BEFORE submitting so we never miss events — even if the
-    # agent loop processes the submission before this coroutine continues.
-    broadcaster = agent_session.broadcaster
-    sub_id, event_queue = broadcaster.subscribe()
-
-    # Submit the operation
     text = body.get("text")
     approvals = body.get("approvals")
 
@@ -612,42 +612,39 @@ async def chat_sse(
     # continuations of an in-progress turn — the session was already charged
     # on its first message, so we skip the gate there.
     if text is not None and not approvals:
-        try:
-            await _enforce_gated_model_quota(user, agent_session)
-        except HTTPException:
-            broadcaster.unsubscribe(sub_id)
-            raise
+        await _enforce_gated_model_quota(user, agent_session)
 
-    try:
-        if approvals:
-            formatted = [
-                {
-                    "tool_call_id": a["tool_call_id"],
-                    "approved": a["approved"],
-                    "feedback": a.get("feedback"),
-                    "edited_script": a.get("edited_script"),
-                    "namespace": a.get("namespace"),
-                }
-                for a in approvals
-            ]
-            success = await session_manager.submit_approval(session_id, formatted)
-        elif text is not None:
-            success = await session_manager.submit_user_input(session_id, text)
-        else:
-            broadcaster.unsubscribe(sub_id)
-            raise HTTPException(status_code=400, detail="Must provide 'text' or 'approvals'")
+    after_seq = _last_event_seq(request)
 
-        if not success:
-            broadcaster.unsubscribe(sub_id)
-            raise HTTPException(status_code=404, detail="Session not found or inactive")
-    except HTTPException:
-        broadcaster.unsubscribe(sub_id)
-        raise
-    except Exception:
-        broadcaster.unsubscribe(sub_id)
-        raise
+    if approvals:
+        formatted = [
+            {
+                "tool_call_id": a["tool_call_id"],
+                "approved": a["approved"],
+                "feedback": a.get("feedback"),
+                "edited_script": a.get("edited_script"),
+                "namespace": a.get("namespace"),
+            }
+            for a in approvals
+        ]
+        success = await session_manager.submit_approval(session_id, formatted)
+    elif text is not None:
+        success = await session_manager.submit_user_input(session_id, text)
+    else:
+        raise HTTPException(status_code=400, detail="Must provide 'text' or 'approvals'")
 
-    return _sse_response(broadcaster, event_queue, sub_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or inactive")
+
+    replay_events = await session_manager._store().load_events_after(
+        session_id, after_seq
+    )
+    return _sse_response(
+        session_id,
+        agent_session,
+        replay_events=replay_events,
+        after_seq=after_seq,
+    )
 
 
 @router.post("/pro-click/{session_id}")
@@ -705,42 +702,135 @@ def _event_doc_to_msg(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sse_response(
-    broadcaster,
-    event_queue,
-    sub_id,
+    session_id: str,
+    agent_session: AgentSession | None,
     *,
     replay_events: list[dict[str, Any]] | None = None,
     after_seq: int = 0,
 ) -> StreamingResponse:
-    """Build a StreamingResponse that drains *event_queue* as SSE,
-    sending keepalive comments every 15 s to prevent proxy timeouts."""
+    """Build a StreamingResponse that:
+
+    1. Yields ``replay_events`` first (events from Mongo that the client missed,
+       filtered to ``seq > after_seq``).
+    2. Picks the live transport based on lease ownership:
+       - Holder fast-path: subscribe to the in-process ``EventBroadcaster``.
+       - Non-holder slow-path: tail Mongo via ``change_stream_events`` and fall
+         back to a 500 ms poll loop on ``PyMongoError``.
+    3. Sends keepalive comments every 15 s to prevent proxy timeouts.
+
+    Subscriber bookkeeping (``_attach_subscriber`` / ``_detach_subscriber``) is
+    called from BOTH branches so US-006's grace-period sweeper can see when a
+    session has had no readers.
+    """
 
     async def event_generator():
-        try:
-            for doc in replay_events or []:
-                msg = _event_doc_to_msg(doc)
-                seq = msg.get("seq")
-                if isinstance(seq, int) and seq <= after_seq:
-                    continue
-                yield _format_sse(msg)
-                if msg.get("event_type", "") in _TERMINAL_EVENTS:
-                    return
+        # ── Phase 1: replay events the client missed ────────────────────────
+        last_seen_seq = after_seq
+        for doc in replay_events or []:
+            msg = _event_doc_to_msg(doc)
+            seq = msg.get("seq")
+            if isinstance(seq, int) and seq <= after_seq:
+                continue
+            if isinstance(seq, int):
+                last_seen_seq = max(last_seen_seq, seq)
+            yield _format_sse(msg)
+            if msg.get("event_type", "") in _TERMINAL_EVENTS:
+                return
 
-            while True:
-                try:
-                    msg = await asyncio.wait_for(
-                        event_queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
-                    )
-                except asyncio.TimeoutError:
-                    # SSE comment — ignored by parsers, keeps connection alive
-                    yield ": keepalive\n\n"
-                    continue
-                event_type = msg.get("event_type", "")
-                yield _format_sse(msg)
-                if event_type in _TERMINAL_EVENTS:
-                    break
-        finally:
-            broadcaster.unsubscribe(sub_id)
+        # ── Phase 2: live tail ──────────────────────────────────────────────
+        is_holder = (
+            agent_session is not None
+            and agent_session.is_active
+            and agent_session.holder_id == session_manager._holder_id
+            and agent_session.broadcaster is not None
+        )
+
+        if is_holder:
+            # Fast path: in-process broadcaster fan-out. The wholesale write
+            # path still goes through Mongo first (Session.send_event calls
+            # append_event before put-on-event_queue), so this is purely a
+            # latency win for the holder process.
+            broadcaster = agent_session.broadcaster
+            session_manager._attach_subscriber(session_id)
+            sub_id, queue = broadcaster.subscribe()
+            try:
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(
+                            queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield _format_sse(msg)
+                    if msg.get("event_type", "") in _TERMINAL_EVENTS:
+                        break
+            finally:
+                broadcaster.unsubscribe(sub_id)
+                session_manager._detach_subscriber(session_id)
+        else:
+            # Slow path: cross-process — tail Mongo. On stream open failure
+            # (no replica set, etc.) fall back to 500 ms polling.
+            session_manager._attach_subscriber(session_id)
+            try:
+                store = session_manager._store()
+                use_stream = bool(getattr(store, "enabled", False))
+                if use_stream:
+                    try:
+                        async for doc in store.change_stream_events(
+                            session_id, after_seq=last_seen_seq
+                        ):
+                            msg = _event_doc_to_msg(doc)
+                            seq = msg.get("seq")
+                            if isinstance(seq, int):
+                                last_seen_seq = max(last_seen_seq, seq)
+                            yield _format_sse(msg)
+                            if msg.get("event_type", "") in _TERMINAL_EVENTS:
+                                return
+                        # Stream closed without yielding terminal — fall
+                        # through to the polling loop below to keep tailing.
+                        use_stream = False
+                    except PyMongoError as e:
+                        logger.warning(
+                            f"Change stream failed for {session_id}, "
+                            f"falling back to polling: {e}"
+                        )
+                        use_stream = False
+                    except NotImplementedError:
+                        # NoopSessionStore (or any store without watch()).
+                        use_stream = False
+                if not use_stream:
+                    # 500 ms poll loop — emits a keepalive every 15 s of silence.
+                    silence_since = asyncio.get_event_loop().time()
+                    while True:
+                        if not getattr(store, "enabled", False):
+                            await asyncio.sleep(0.5)
+                            now = asyncio.get_event_loop().time()
+                            if now - silence_since >= _SSE_KEEPALIVE_SECONDS:
+                                yield ": keepalive\n\n"
+                                silence_since = now
+                            continue
+                        new_events = await store.load_events_after(
+                            session_id, last_seen_seq
+                        )
+                        if not new_events:
+                            await asyncio.sleep(0.5)
+                            now = asyncio.get_event_loop().time()
+                            if now - silence_since >= _SSE_KEEPALIVE_SECONDS:
+                                yield ": keepalive\n\n"
+                                silence_since = now
+                            continue
+                        silence_since = asyncio.get_event_loop().time()
+                        for doc in new_events:
+                            msg = _event_doc_to_msg(doc)
+                            seq = msg.get("seq")
+                            if isinstance(seq, int):
+                                last_seen_seq = max(last_seen_seq, seq)
+                            yield _format_sse(msg)
+                            if msg.get("event_type", "") in _TERMINAL_EVENTS:
+                                return
+            finally:
+                session_manager._detach_subscriber(session_id)
 
     return StreamingResponse(
         event_generator(),
@@ -770,12 +860,9 @@ async def subscribe_events(
 
     after_seq = _last_event_seq(request)
     replay_events = await session_manager._store().load_events_after(session_id, after_seq)
-    broadcaster = agent_session.broadcaster
-    sub_id, event_queue = broadcaster.subscribe()
     return _sse_response(
-        broadcaster,
-        event_queue,
-        sub_id,
+        session_id,
+        agent_session,
         replay_events=replay_events,
         after_seq=after_seq,
     )
