@@ -336,8 +336,6 @@ class SessionManager:
         hf_token: str | None,
         hf_username: str | None,
     ) -> None:
-        if not hf_token:
-            hf_token = None
         if hf_token:
             agent_session.hf_token = hf_token
             agent_session.session.hf_token = hf_token
