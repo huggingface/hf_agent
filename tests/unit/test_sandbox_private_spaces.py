@@ -91,6 +91,55 @@ def test_sandbox_client_retries_transient_runtime_404(monkeypatch):
     assert runtime_calls == 2
 
 
+def test_sandbox_client_retries_transient_hardware_401(monkeypatch):
+    hardware_calls = 0
+    logs: list[str] = []
+
+    class FakeResponse:
+        status_code = 401
+
+    class FakeHardware401(Exception):
+        response = FakeResponse()
+
+        def __str__(self):
+            return "401 Client Error: Repository Not Found"
+
+    class FakeApi:
+        def __init__(self, token=None):
+            self.token = token
+
+        def duplicate_space(self, **kwargs):
+            pass
+
+        def request_space_hardware(self, space_id, hardware, sleep_time=None):
+            nonlocal hardware_calls
+            hardware_calls += 1
+            if hardware_calls == 1:
+                raise FakeHardware401()
+            return SimpleNamespace(stage="BUILDING", hardware=None)
+
+        def add_space_secret(self, *args, **kwargs):
+            pass
+
+        def get_space_runtime(self, space_id):
+            return SimpleNamespace(stage="RUNNING", hardware="cpu-basic")
+
+    monkeypatch.setattr(sandbox_client, "HfApi", FakeApi)
+    monkeypatch.setattr(sandbox_client.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        Sandbox,
+        "_setup_server",
+        staticmethod(lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(Sandbox, "_wait_for_api", lambda self, *args, **kwargs: None)
+
+    sandbox = Sandbox.create(owner="alice", token="hf-token", log=logs.append)
+
+    assert sandbox.space_id.startswith("alice/sandbox-")
+    assert hardware_calls == 2
+    assert any("Hardware request not accepted yet (HTTP 401)" in log for log in logs)
+
+
 def test_sandbox_tool_forces_private_spaces(monkeypatch):
     captured_kwargs = {}
 
