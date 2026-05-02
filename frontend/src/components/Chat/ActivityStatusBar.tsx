@@ -112,6 +112,7 @@ function statusLabel(status: ActivityStatus): string {
     }
     case 'waiting-approval': return 'Waiting for approval';
     case 'cancelled': return 'What should the agent do instead?';
+    case 'migrating': return 'Running in background';
     default: return '';
   }
 }

@@ -16,6 +16,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
 import { apiFetch } from '@/utils/api';
@@ -255,14 +256,25 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
                   },
                 }}
               >
-                <ChatBubbleOutlineIcon
-                  sx={{
-                    fontSize: 15,
-                    color: isSelected ? 'var(--text)' : 'var(--muted-text)',
-                    opacity: isSelected ? 0.8 : 0.4,
-                    flexShrink: 0,
-                  }}
-                />
+                {session.isBackgrounded ? (
+                  <CloudOutlinedIcon
+                    sx={{
+                      fontSize: 15,
+                      color: isSelected ? 'var(--text)' : 'var(--muted-text)',
+                      opacity: isSelected ? 0.8 : 0.4,
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : (
+                  <ChatBubbleOutlineIcon
+                    sx={{
+                      fontSize: 15,
+                      color: isSelected ? 'var(--text)' : 'var(--muted-text)',
+                      opacity: isSelected ? 0.8 : 0.4,
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
 
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography

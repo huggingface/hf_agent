@@ -3,11 +3,13 @@ import { Box, TextField, IconButton, CircularProgress, Typography, Menu, MenuIte
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import StopIcon from '@mui/icons-material/Stop';
+import BedtimeOutlinedIcon from '@mui/icons-material/BedtimeOutlined';
 import { apiFetch } from '@/utils/api';
 import { useUserQuota } from '@/hooks/useUserQuota';
 import ClaudeCapDialog from '@/components/ClaudeCapDialog';
 import JobsUpgradeDialog from '@/components/JobsUpgradeDialog';
 import { useAgentStore } from '@/store/agentStore';
+import { useSessionStore } from '@/store/sessionStore';
 import {
   CLAUDE_MODEL_PATH,
   FIRST_FREE_MODEL_PATH,
@@ -86,7 +88,9 @@ interface ChatInputProps {
   sessionId?: string;
   onSend: (text: string) => void;
   onStop?: () => void;
+  onBackground?: () => Promise<void>;
   isProcessing?: boolean;
+  hasPendingApproval?: boolean;
   disabled?: boolean;
   placeholder?: string;
 }
@@ -95,10 +99,12 @@ const isClaudeModel = (m: ModelOption) => isClaudePath(m.modelPath);
 const isPremiumModel = (m: ModelOption) => isPremiumPath(m.modelPath);
 const firstFreeModel = (options: ModelOption[]) => options.find(m => !isPremiumModel(m)) ?? options[0];
 
-export default function ChatInput({ sessionId, onSend, onStop, isProcessing = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
+export default function ChatInput({ sessionId, onSend, onStop, onBackground, isProcessing = false, hasPendingApproval = false, disabled = false, placeholder = 'Ask anything...' }: ChatInputProps) {
   const [input, setInput] = useState('');
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
+  const isBackgrounded = useSessionStore((s) => s.sessions.find((sess) => sess.id === sessionId)?.isBackgrounded ?? false);
   const modelOptionsRef = useRef<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
   const sessionIdRef = useRef<string | undefined>(sessionId);
   const [selectedModelId, setSelectedModelId] = useState<string>(DEFAULT_MODEL_OPTIONS[0].id);
@@ -230,6 +236,16 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
       if (res.ok) setSelectedModelId(model.id);
     } catch { /* ignore */ }
   };
+
+  const handleBackground = useCallback(async () => {
+    if (!onBackground) return;
+    setIsBackgroundLoading(true);
+    try {
+      await onBackground();
+    } finally {
+      setIsBackgroundLoading(false);
+    }
+  }, [onBackground]);
 
   // Dialog close: just clear the flag. The typed text is already restored.
   const handleCapDialogClose = useCallback(() => {
@@ -385,6 +401,32 @@ export default function ChatInput({ sessionId, onSend, onStop, isProcessing = fa
                 }
             }}
           />
+          {(isProcessing || hasPendingApproval) && !isBackgrounded && onBackground ? (
+            <IconButton
+              onClick={handleBackground}
+              disabled={isBackgroundLoading}
+              title="Run in background"
+              sx={{
+                mt: 1,
+                p: 1.5,
+                borderRadius: '10px',
+                color: 'var(--muted-text)',
+                transition: 'all 0.2s',
+                position: 'relative',
+                '&:hover': {
+                  bgcolor: 'var(--hover-bg)',
+                  color: 'var(--accent-yellow)',
+                },
+              }}
+            >
+              <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {isBackgroundLoading && (
+                  <CircularProgress size={28} thickness={3} sx={{ color: 'inherit', position: 'absolute' }} />
+                )}
+                <BedtimeOutlinedIcon sx={{ fontSize: 16 }} />
+              </Box>
+            </IconButton>
+          ) : null}
           {isProcessing ? (
             <IconButton
               onClick={onStop}

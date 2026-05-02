@@ -6,6 +6,7 @@
  * UI (MessageList + ChatInput).
  */
 import { useCallback, useEffect } from 'react';
+import { Box, Typography } from '@mui/material';
 import { useAgentChat } from '@/hooks/useAgentChat';
 import { useAgentStore } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
@@ -23,8 +24,9 @@ interface SessionChatProps {
 
 export default function SessionChat({ sessionId, isActive, onSessionDead }: SessionChatProps) {
   const { isConnected, isProcessing, activityStatus, updateSession } = useAgentStore();
-  const { updateSessionTitle, sessions } = useSessionStore();
+  const { updateSessionTitle, sessions, setBackgrounded } = useSessionStore();
   const isExpired = sessions.find((s) => s.id === sessionId)?.expired === true;
+  const isBackgrounded = sessions.find((s) => s.id === sessionId)?.isBackgrounded === true;
 
   const { messages, sendMessage, stop, status, undoLastTurn, editAndRegenerate, approveTools } = useAgentChat({
     sessionId,
@@ -62,6 +64,20 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
     stop();
     updateSession(sessionId, { activityStatus: { type: 'cancelled' } });
   }, [stop, updateSession, sessionId]);
+
+  const handleBackground = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/session/${sessionId}/background`, { method: 'POST' });
+      if (!res.ok) {
+        console.error(`Background request failed: ${res.status}`);
+        return;
+      }
+      updateSession(sessionId, { activityStatus: { type: 'migrating' } });
+      setBackgrounded(sessionId, true);
+    } catch (e) {
+      console.error('Failed to send session to background:', e);
+    }
+  }, [sessionId, updateSession, setBackgrounded]);
 
   // SDK status is the ground truth — if it's streaming/submitted, agent is busy
   const sdkBusy = status === 'streaming' || status === 'submitted';
@@ -107,6 +123,27 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
         onUndoLastTurn={undoLastTurn}
         onEditAndRegenerate={editAndRegenerate}
       />
+      {(isBackgrounded || activityStatus.type === 'migrating') && (
+        <Box
+          sx={{
+            mx: { xs: 2, md: 'auto' },
+            my: 1,
+            maxWidth: 720,
+            px: 2,
+            py: 1,
+            borderRadius: 1.5,
+            border: '1px solid',
+            borderColor: 'divider',
+            bgcolor: 'background.paper',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            Running in background — you can close this tab and come back anytime.
+          </Typography>
+        </Box>
+      )}
       {isExpired ? (
         <ExpiredBanner sessionId={sessionId} />
       ) : (
@@ -114,7 +151,9 @@ export default function SessionChat({ sessionId, isActive, onSessionDead }: Sess
           sessionId={sessionId}
           onSend={handleSendMessage}
           onStop={handleStop}
+          onBackground={handleBackground}
           isProcessing={busy}
+          hasPendingApproval={activityStatus.type === 'waiting-approval'}
           disabled={!isConnected || activityStatus.type === 'waiting-approval'}
           placeholder={
             activityStatus.type === 'waiting-approval'

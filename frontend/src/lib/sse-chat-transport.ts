@@ -40,6 +40,7 @@ export interface SideChannelCallbacks {
   onStreaming: () => void;
   onToolRunning: (toolName: string, description?: string) => void;
   onInterrupted: () => void;
+  onMigrating: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +318,13 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
           sideChannel.onProcessingDone();
           break;
         }
+
+        case 'migrating':
+          endTextPart(controller);
+          controller.enqueue({ type: 'finish-step' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop' });
+          sideChannel.onMigrating();
+          break;
 
         default:
           logger.log('SSE transport: unknown event', event);

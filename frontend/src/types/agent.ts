@@ -25,6 +25,7 @@ export interface SessionMeta {
   autoApprovalCostCapUsd?: number | null;
   autoApprovalEstimatedSpendUsd?: number;
   autoApprovalRemainingUsd?: number | null;
+  isBackgrounded?: boolean;
 }
 
 export interface ToolApproval {

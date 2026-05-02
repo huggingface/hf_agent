@@ -62,7 +62,8 @@ export type ActivityStatus =
   | { type: 'tool'; toolName: string; description?: string }
   | { type: 'waiting-approval' }
   | { type: 'streaming' }
-  | { type: 'cancelled' };
+  | { type: 'cancelled' }
+  | { type: 'migrating' };
 
 export interface ResearchAgentStats {
   toolCount: number;

@@ -36,7 +36,7 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
   const isActiveRef = useRef(isActive);
   isActiveRef.current = isActive;
 
-  const { setNeedsAttention, updateSessionYolo } = useSessionStore();
+  const { setNeedsAttention, updateSessionYolo, setBackgrounded } = useSessionStore();
 
   // Helper: update this session's state (mirrors to globals if active)
   const updateSession = useAgentStore.getState().updateSession;
@@ -308,6 +308,14 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
         updateSession(sessionId, updates);
       },
       onInterrupted: () => { /* no-op — handled by stop() caller */ },
+      onMigrating: () => {
+        updateSession(sessionId, { activityStatus: { type: 'migrating' } });
+        setBackgrounded(sessionId, true);
+        // Reconnect to the slow path (change-stream SSE) is handled in US-FE-002;
+        // the transport's reconnectToStream() will route to the non-holder path
+        // because holder_id !== session_manager._holder_id after backgrounding.
+        transportRef.current?.reconnectToStream();
+      },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionId],
@@ -396,6 +404,14 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
         if (infoRes.status === 404 && msgsRes.status === 404) {
           callbacksRef.current.onSessionDead?.(sessionId);
           return;
+        }
+
+        // If session info 404s but messages exist, the session was backgrounded
+        // and its in-memory state was cleaned up. Treat as backgrounded rather
+        // than expired so the banner renders and the user can reload without
+        // losing their conversation.
+        if (infoRes.status === 404 && msgsRes.ok) {
+          setBackgrounded(sessionId, true);
         }
 
         let pendingIds: Set<string> | undefined;
@@ -564,6 +580,10 @@ export function useAgentChat({ sessionId, isActive, onReady, onError, onSessionD
             const state = event.data?.state as string;
             const toolName = event.data?.tool as string;
             if (state === 'running' && toolName) sideChannel.onToolRunning(toolName);
+          } else if (et === 'migrating') {
+            sideChannel.onMigrating();
+            stopReconnect();
+            return true;
           } else if (et === 'turn_complete' || et === 'error' || et === 'interrupted') {
             sideChannel.onProcessingDone();
             stopReconnect();

@@ -44,6 +44,8 @@ interface SessionStore {
    *  Used when we rehydrate an expired session into a freshly-created backend
    *  session — preserves title, timestamps, and messages. */
   renameSession: (oldId: string, newId: string) => void;
+  /** Mark a session as backgrounded (sticky — no path back to false). */
+  setBackgrounded: (id: string, value: boolean) => void;
 }
 
 export const useSessionStore = create<SessionStore>()(
@@ -209,6 +211,14 @@ export const useSessionStore = create<SessionStore>()(
         set((state) => ({
           sessions: state.sessions.map((s) =>
             s.id === id ? { ...s, needsAttention: needs } : s
+          ),
+        }));
+      },
+
+      setBackgrounded: (id: string, value: boolean) => {
+        set((state) => ({
+          sessions: state.sessions.map((s) =>
+            s.id === id ? { ...s, isBackgrounded: value } : s
           ),
         }));
       },

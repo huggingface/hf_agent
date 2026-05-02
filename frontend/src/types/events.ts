@@ -18,6 +18,7 @@ export type EventType =
   | 'error'
   | 'shutdown'
   | 'interrupted'
+  | 'migrating'
   | 'undo_complete'
   | 'plan_update';
 
