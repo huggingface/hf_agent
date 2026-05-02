@@ -65,6 +65,7 @@ MAX_TIMEOUT = 1200
 WAIT_TIMEOUT = 600
 WAIT_INTERVAL = 5
 API_WAIT_TIMEOUT = 180
+HARDWARE_REQUEST_TIMEOUT = 60
 
 
 def _is_transient_space_visibility_error(error: Exception) -> bool:
@@ -74,6 +75,59 @@ def _is_transient_space_visibility_error(error: Exception) -> bool:
         return True
     message = str(error)
     return "Repository Not Found" in message or "404 Client Error" in message
+
+
+def _is_transient_space_management_error(error: Exception) -> bool:
+    """Return True when a just-created private Space is not manageable yet."""
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) in {401, 404}:
+        return True
+    message = str(error)
+    return (
+        "Repository Not Found" in message
+        or "401 Client Error" in message
+        or "404 Client Error" in message
+    )
+
+
+def _request_space_hardware_with_retry(
+    api: HfApi,
+    space_id: str,
+    *,
+    hardware: str,
+    sleep_time: int | None,
+    log: Callable[[str], object],
+    check_cancel: Callable[[], object],
+) -> None:
+    """Request hardware, retrying while Hub permissions propagate for a new Space."""
+    deadline = time.time() + HARDWARE_REQUEST_TIMEOUT
+    attempt = 0
+    while True:
+        check_cancel()
+        try:
+            api.request_space_hardware(
+                space_id,
+                hardware=hardware,
+                sleep_time=sleep_time,
+            )
+            return
+        except Exception as e:
+            if not _is_transient_space_management_error(e):
+                raise
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise
+
+            attempt += 1
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            status = f"HTTP {status_code}" if status_code else type(e).__name__
+            log(
+                f"  Hardware request not accepted yet ({status}); "
+                f"retrying ({attempt})..."
+            )
+            time.sleep(min(WAIT_INTERVAL, remaining))
+
 
 _DOCKERFILE = """\
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
@@ -627,10 +681,13 @@ class Sandbox:
         # Some template duplicates can initially inherit the template hardware.
         # Explicitly request the target tier so automatic CPU sandboxes never
         # silently come up on GPU hardware.
-        api.request_space_hardware(
+        _request_space_hardware_with_retry(
+            api,
             space_id,
             hardware=hardware,
             sleep_time=sleep_time,
+            log=_log,
+            check_cancel=_check_cancel,
         )
         _log(f"Requested hardware: {hardware}")
 
