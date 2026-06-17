@@ -1,10 +1,11 @@
 import asyncio
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agent.config import Config
+from agent.context_manager.manager import ContextManager
 from agent.core import agent_loop
 from agent.core.agent_loop import _base_needs_approval
 from agent.core.session import OpType
@@ -81,6 +82,8 @@ def test_prompt_has_identity_contract():
         in prompt
     )
     assert "hub_model_id, trackio_space_id" in prompt
+    assert "identity/whoami" not in prompt
+    assert "ask for the namespace before creating Hub resources" in prompt
 
 
 def test_prompt_has_tool_calling_contract():
@@ -99,13 +102,62 @@ def test_prompt_has_tool_calling_contract():
 def test_prompt_gates_autonomous_headless_mode():
     prompt = Path("agent/prompts/system_prompt_v3.yaml").read_text()
 
+    assert "{% if autonomous_mode %}" in prompt
+    assert "Autonomous mode is active for this session" in prompt
     assert (
-        "Apply this section only when the task explicitly says the session is "
-        "autonomous, headless, benchmarked, or running with a fixed time budget"
-        in prompt
+        "Apply this section even if the user prompt does not contain those words"
+        in (prompt)
     )
-    assert "In normal interactive chat, text-only answers are allowed" in prompt
+    assert "Autonomous mode is not active for this session" in prompt
+    assert "text-only answers are allowed for simple questions" in prompt
     assert "NEVER respond with only text" in prompt
+
+
+def test_context_manager_renders_interactive_autonomous_context(monkeypatch):
+    monkeypatch.setattr(
+        "agent.context_manager.manager._get_hf_username", lambda _token=None: "tester"
+    )
+
+    context_manager = ContextManager(
+        tool_specs=[],
+        hf_token="hf-token",
+        autonomous_mode=False,
+    )
+
+    assert "Autonomous=false" in context_manager.system_prompt
+    assert "Autonomous mode is not active for this session" in (
+        context_manager.system_prompt
+    )
+    assert "Autonomous mode is active for this session" not in (
+        context_manager.system_prompt
+    )
+    assert "text-only answers are allowed for simple questions" in (
+        context_manager.system_prompt
+    )
+
+
+def test_context_manager_renders_headless_autonomous_context(monkeypatch):
+    monkeypatch.setattr(
+        "agent.context_manager.manager._get_hf_username", lambda _token=None: "tester"
+    )
+
+    context_manager = ContextManager(
+        tool_specs=[],
+        hf_token="hf-token",
+        autonomous_mode=True,
+    )
+
+    assert "Autonomous=true" in context_manager.system_prompt
+    assert "Autonomous mode is active for this session" in (
+        context_manager.system_prompt
+    )
+    assert "Autonomous mode is not active for this session" not in (
+        context_manager.system_prompt
+    )
+    assert (
+        "Apply this section even if the user prompt does not contain those words"
+        in (context_manager.system_prompt)
+    )
 
 
 def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
@@ -196,6 +248,9 @@ async def test_cli_sandbox_runtime_preloads_and_tears_down_sandbox(monkeypatch):
     monkeypatch.setattr(
         agent_loop, "teardown_session_sandbox", fake_teardown_session_sandbox
     )
+    monkeypatch.setattr(
+        "agent.context_manager.manager._get_hf_username", lambda _token=None: "tester"
+    )
 
     submission_queue = asyncio.Queue()
     event_queue = asyncio.Queue()
@@ -221,6 +276,8 @@ async def test_cli_sandbox_runtime_preloads_and_tears_down_sandbox(monkeypatch):
     assert ready.event_type == "ready"
     assert started == [session_holder[0]]
     assert session_holder[0].local_mode is False
+    assert session_holder[0].autonomous_mode is False
+    assert "Autonomous=false" in session_holder[0].context_manager.system_prompt
 
     await submission_queue.put(
         SimpleNamespace(
