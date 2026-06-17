@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import httpx
@@ -207,4 +208,53 @@ async def test_streaming_call_does_not_retry_after_partial_output(monkeypatch):
     assert [event.event_type for event in events] == [
         "assistant_chunk",
         "assistant_stream_end",
+        "llm_call",
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_call_stops_retry_when_cancelled_during_delay(monkeypatch):
+    async def timeout_stream():
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+        yield  # pragma: no cover
+
+    attempts = 0
+
+    async def fake_acompletion(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return timeout_stream()
+
+    events = []
+
+    class CancellableSession:
+        def __init__(self):
+            self.config = SimpleNamespace(model_name="MiniMaxAI/MiniMax-M3:novita")
+            self._cancelled = asyncio.Event()
+
+        @property
+        def is_cancelled(self):
+            return self._cancelled.is_set()
+
+        def cancel(self):
+            self._cancelled.set()
+
+        async def send_event(self, event):
+            events.append(event)
+            if event.event_type == "tool_log":
+                self.cancel()
+
+    session = CancellableSession()
+    monkeypatch.setattr("agent.core.agent_loop.acompletion", fake_acompletion)
+
+    result = await _call_llm_streaming(
+        session,
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        llm_params={"model": "openai/MiniMaxAI/MiniMax-M3:novita"},
+    )
+
+    assert attempts == 1
+    assert result.content is None
+    assert session.is_cancelled is True
+    assert [event.event_type for event in events] == ["tool_log"]

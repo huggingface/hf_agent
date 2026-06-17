@@ -1106,8 +1106,9 @@ HF_JOBS_TOOL_SPEC = {
         "Scripts based on your internal knowledge WILL use outdated APIs and fail.\n"
         "- You MUST have validated dataset format via hf_inspect_dataset or hub_repo_details.\n"
         "- For non-trivial scripts, write the script in the session sandbox, run syntax/import validation, "
-        "run a tiny smoke test, and for training scripts make sure one training and evaluation step succeeds "
-        "without error, then submit the exact tested script source or exact tested sandbox file. "
+        "run a tiny smoke test, and for training scripts make sure one training step succeeds, plus one "
+        "evaluation step when the final workflow includes evaluation or an eval split is available, then "
+        "submit the exact tested script source or exact tested sandbox file. "
         "Do NOT reconstruct a similar script from memory.\n"
         "- If the job runs on GPU, or the script loads a model, uses CUDA, bf16/fp16, quantization, flash attention, "
         "or torch.compile, you MUST create a GPU sandbox with sandbox_create first, run a tiny smoke test there, "
@@ -1122,7 +1123,8 @@ HF_JOBS_TOOL_SPEC = {
         "accelerate, trackio, peft, bitsandbytes, kernels, sentencepiece, or protobuf when used.\n"
         "- Include trackio monitoring and provide the dashboard URL to the user. "
         "When the script uses report_to='trackio', also pass `trackio_space_id` "
-        "(e.g. '<username>/ml-intern-<8char>') and `trackio_project` as tool args — "
+        "(pattern only: '<username>/ml-intern-<8char>'; replace <username>, e.g. 'alice/ml-intern-a1b2c3d4') "
+        "and `trackio_project` as tool args — "
         "they are injected as TRACKIO_SPACE_ID/TRACKIO_PROJECT env vars and let the UI embed the live dashboard.\n\n"
         "BATCH/ABLATION JOBS: Submit ONE job first. Check logs to confirm it starts training successfully. "
         "Only then submit the remaining jobs. Never submit all at once — if there's a bug, all jobs fail.\n\n"
@@ -1136,8 +1138,8 @@ HF_JOBS_TOOL_SPEC = {
         "3. Upgrade to larger GPU (a10g→a100→h100)\n"
         "Do NOT switch training methods (e.g. full SFT to LoRA) or reduce max_length — those change what the user gets and require explicit approval.\n\n"
         "Examples:\n"
-        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['transformers', 'trl', 'torch', 'datasets', 'trackio'], 'hardware_flavor': 'a100-large', 'timeout': '8h'}\n"
-        "Monitor: {'operation': 'ps'}, {'operation': 'logs', 'job_id': 'xxx'}, {'operation': 'cancel', 'job_id': 'xxx'}"
+        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['transformers', 'trl', 'torch', 'datasets', 'trackio', 'accelerate'], 'hardware_flavor': 'a100-large', 'timeout': '8h'}\n"
+        "Monitor: {'operation': 'ps'}, {'operation': 'logs', 'job_id': 'xxx'}, {'operation': 'cancel', 'job_id': 'xxx'}\n"
         "Docker: {'operation': 'run', 'command': ['duckdb', '-c', 'select 1 + 2'], 'image': 'duckdb/duckdb', 'hardware_flavor': 'cpu-basic', 'timeout': '1h'}\n"
     ),
     "parameters": {
@@ -1214,7 +1216,7 @@ HF_JOBS_TOOL_SPEC = {
                 "type": "string",
                 "description": (
                     "Optional. The HF Space hosting the trackio dashboard for this run "
-                    "(e.g. '<username>/ml-intern-<8char>', under YOUR HF namespace). "
+                    "(pattern only: '<username>/ml-intern-<8char>'; replace <username>, e.g. 'alice/ml-intern-a1b2c3d4'). "
                     "Injected as TRACKIO_SPACE_ID env var and used by the UI to embed "
                     "the live dashboard. Set this whenever the script uses "
                     "report_to='trackio'. The Space is auto-created and seeded with the "

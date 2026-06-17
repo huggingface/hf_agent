@@ -378,6 +378,7 @@ async def test_interactive_main_passes_user_plan_to_submission_loop(monkeypatch)
     async def fake_submission_loop(submission_queue, _event_queue, **kwargs):
         seen["user_plan"] = kwargs.get("user_plan")
         seen["hf_token"] = kwargs.get("hf_token")
+        seen["hf_username"] = kwargs.get("hf_username")
         seen["autonomous_mode"] = kwargs.get("autonomous_mode")
         while True:
             submission = await submission_queue.get()
@@ -433,6 +434,7 @@ async def test_interactive_main_passes_user_plan_to_submission_loop(monkeypatch)
         "plan_token": "hf-token",
         "user_plan": "free",
         "hf_token": "hf-token",
+        "hf_username": "tester",
         "autonomous_mode": False,
     }
 
@@ -466,6 +468,7 @@ async def test_headless_main_passes_user_plan_to_submission_loop(monkeypatch):
     async def fake_submission_loop(submission_queue, event_queue, **kwargs):
         seen["user_plan"] = kwargs.get("user_plan")
         seen["hf_token"] = kwargs.get("hf_token")
+        seen["hf_username"] = kwargs.get("hf_username")
         seen["autonomous_mode"] = kwargs.get("autonomous_mode")
         await event_queue.put(Event(event_type="ready"))
         submission = await submission_queue.get()
@@ -500,6 +503,7 @@ async def test_headless_main_passes_user_plan_to_submission_loop(monkeypatch):
         "plan_token": "hf-token",
         "user_plan": "pro",
         "hf_token": "hf-token",
+        "hf_username": "tester",
         "autonomous_mode": True,
         "prompt": "train a model",
     }

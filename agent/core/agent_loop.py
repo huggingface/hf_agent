@@ -793,6 +793,33 @@ class LLMResult:
     usage: dict = field(default_factory=dict)
 
 
+def _session_cancelled(session: Any) -> bool:
+    return bool(getattr(session, "is_cancelled", False))
+
+
+async def _sleep_for_retry_or_cancel(session: Session, delay: float) -> bool:
+    """Sleep for a retry delay, waking early if the session is interrupted."""
+    if _session_cancelled(session):
+        return True
+
+    cancel_event = getattr(session, "_cancelled", None)
+    if cancel_event is None or not hasattr(cancel_event, "wait"):
+        await asyncio.sleep(delay)
+        return _session_cancelled(session)
+
+    sleep_task = asyncio.create_task(asyncio.sleep(delay))
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    done, pending = await asyncio.wait(
+        {sleep_task, cancel_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    return cancel_task in done or _session_cancelled(session)
+
+
 def _is_invalid_thinking_signature_error(exc: Exception) -> bool:
     """Return True when a provider rejected replayed thinking metadata."""
     text = str(exc)
@@ -915,6 +942,13 @@ async def _call_llm_streaming(
     _healed_thinking_signature = False
     t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
+        if _session_cancelled(session):
+            return LLMResult(
+                content=None,
+                tool_calls_acc={},
+                token_count=0,
+                finish_reason=None,
+            )
         full_content = ""
         tool_calls_acc: dict[int, dict] = {}
         token_count = 0
@@ -1016,6 +1050,13 @@ async def _call_llm_streaming(
                     "to avoid duplicating assistant output/tool calls: %s",
                     e,
                 )
+                await telemetry.record_llm_call(
+                    session,
+                    model=llm_params.get("model", session.config.model_name),
+                    response=final_usage_chunk,
+                    latency_ms=int((time.monotonic() - t_start) * 1000),
+                    finish_reason=finish_reason or "error",
+                )
                 raise
             if _is_context_overflow_error(e):
                 raise ContextWindowExceededError(str(e)) from e
@@ -1060,7 +1101,13 @@ async def _call_llm_streaming(
                         },
                     )
                 )
-                await asyncio.sleep(_delay)
+                if await _sleep_for_retry_or_cancel(session, _delay):
+                    return LLMResult(
+                        content=None,
+                        tool_calls_acc={},
+                        token_count=0,
+                        finish_reason=None,
+                    )
                 continue
             raise
 
@@ -1074,6 +1121,13 @@ async def _call_llm_non_streaming(
     _healed_thinking_signature = False
     t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
+        if _session_cancelled(session):
+            return LLMResult(
+                content=None,
+                tool_calls_acc={},
+                token_count=0,
+                finish_reason=None,
+            )
         try:
             request_llm_params = with_prompt_cache_params(
                 llm_params,
@@ -1137,7 +1191,13 @@ async def _call_llm_non_streaming(
                         },
                     )
                 )
-                await asyncio.sleep(_delay)
+                if await _sleep_for_retry_or_cancel(session, _delay):
+                    return LLMResult(
+                        content=None,
+                        tool_calls_acc={},
+                        token_count=0,
+                        finish_reason=None,
+                    )
                 continue
             raise
 
@@ -2569,6 +2629,7 @@ async def submission_loop(
     session_holder: list | None = None,
     hf_token: str | None = None,
     user_id: str | None = None,
+    hf_username: str | None = None,
     local_mode: bool = False,
     autonomous_mode: bool = False,
     stream: bool = True,
@@ -2589,6 +2650,7 @@ async def submission_loop(
         tool_router=tool_router,
         hf_token=hf_token,
         user_id=user_id,
+        hf_username=hf_username,
         user_plan=user_plan,
         local_mode=local_mode,
         autonomous_mode=autonomous_mode,

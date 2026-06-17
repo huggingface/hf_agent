@@ -201,18 +201,21 @@ class ContextManager:
         tool_specs: list[dict[str, Any]] | None = None,
         prompt_file_suffix: str = "system_prompt_v3.yaml",
         hf_token: str | None = None,
+        hf_username: str | None = None,
         local_mode: bool = False,
         autonomous_mode: bool = False,
     ):
         self.prompt_file_suffix = prompt_file_suffix
         self.tool_specs = tool_specs or []
         self.hf_token = hf_token
+        self.hf_username = hf_username
         self.local_mode = local_mode
         self.autonomous_mode = autonomous_mode
         self.system_prompt = self._load_system_prompt(
             self.tool_specs,
             prompt_file_suffix=self.prompt_file_suffix,
             hf_token=hf_token,
+            hf_username=hf_username,
             local_mode=local_mode,
             autonomous_mode=autonomous_mode,
         )
@@ -234,6 +237,7 @@ class ContextManager:
         *,
         tool_specs: list[dict[str, Any]] | None = None,
         hf_token: str | None = None,
+        hf_username: str | None = None,
         local_mode: bool | None = None,
         autonomous_mode: bool | None = None,
     ) -> Message:
@@ -242,6 +246,8 @@ class ContextManager:
             self.tool_specs = tool_specs
         if hf_token is not None:
             self.hf_token = hf_token
+        if hf_username is not None:
+            self.hf_username = hf_username
         if local_mode is not None:
             self.local_mode = local_mode
         if autonomous_mode is not None:
@@ -252,6 +258,7 @@ class ContextManager:
                 self, "prompt_file_suffix", "system_prompt_v3.yaml"
             ),
             hf_token=getattr(self, "hf_token", None),
+            hf_username=getattr(self, "hf_username", None),
             local_mode=getattr(self, "local_mode", False),
             autonomous_mode=getattr(self, "autonomous_mode", False),
         )
@@ -262,6 +269,7 @@ class ContextManager:
         tool_specs: list[dict[str, Any]],
         prompt_file_suffix: str = "system_prompt.yaml",
         hf_token: str | None = None,
+        hf_username: str | None = None,
         local_mode: bool = False,
         autonomous_mode: bool = False,
     ):
@@ -279,8 +287,9 @@ class ContextManager:
         current_time = now.strftime("%H:%M:%S.%f")[:-3]
         current_timezone = f"{now.strftime('%Z')} (UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
 
-        # Get HF user info from OAuth token
-        hf_user_info = _get_hf_username(hf_token)
+        # Prefer the username already resolved by the caller; fall back to a
+        # token lookup for contexts that construct ContextManager directly.
+        hf_user_info = hf_username or _get_hf_username(hf_token)
 
         template = Template(template_str)
         static_prompt = template.render(

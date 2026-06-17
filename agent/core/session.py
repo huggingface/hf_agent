@@ -137,6 +137,7 @@ class Session:
             untouched_messages=5,
             tool_specs=tool_specs,
             hf_token=hf_token,
+            hf_username=hf_username,
             local_mode=local_mode,
             autonomous_mode=autonomous_mode,
         )
@@ -503,6 +504,7 @@ class Session:
             return refresh(
                 tool_specs=tool_specs,
                 hf_token=self.hf_token,
+                hf_username=self.hf_username,
                 local_mode=self.local_mode,
                 autonomous_mode=self.autonomous_mode,
             )
