@@ -124,7 +124,6 @@ const modelOptionId = (modelPath: string) => (
 const modelOptionFromApi = (model: {
   id?: string;
   label?: string;
-  provider?: string;
   recommended?: boolean;
 }): ModelOption | null => {
   if (!model.id) return null;

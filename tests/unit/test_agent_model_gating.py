@@ -27,6 +27,7 @@ def test_available_models_exclude_sonnet_and_have_no_pro_gate():
     assert models["moonshotai/Kimi-K2.7-Code:novita"]["label"] == "Kimi K2.7 Code"
     assert models["MiniMaxAI/MiniMax-M3:novita"]["label"] == "MiniMax M3"
     assert "recommended" not in models[agent.DEFAULT_FREE_MODEL_ID]
+    assert all("provider" not in model for model in models.values())
     assert all("minimum_plan" not in model for model in models.values())
     assert all("tier" not in model for model in models.values())
 
