@@ -83,7 +83,9 @@ def test_prompt_has_identity_contract():
     )
     assert "hub_model_id, trackio_space_id" in prompt
     assert "identity/whoami" not in prompt
-    assert "ask for the namespace before creating Hub resources" in prompt
+    assert "If session context says User=unknown" in prompt
+    assert "identity lookup failed or no token is available" in prompt
+    assert "ask for it before creating Hub resources" in prompt
 
 
 def test_prompt_has_tool_calling_contract():
@@ -175,6 +177,10 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
         prompt
     )
     assert "Do not reconstruct a similar script from memory" in prompt
+    assert (
+        "For training scripts, make sure one training and evaluation step succeeds"
+        in prompt
+    )
     assert "assert required dataset columns exist" in prompt
     assert "assert hub_model_id and trackio_space_id contain no placeholders" in prompt
     assert (
@@ -189,6 +195,7 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
         jobs_description
     )
     assert "Do NOT reconstruct a similar script from memory" in jobs_description
+    assert "make sure one training and evaluation step succeeds" in jobs_description
     assert "Training scripts MUST fail fast on missing dataset columns" in (
         jobs_description
     )
