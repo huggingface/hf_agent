@@ -70,6 +70,89 @@ def test_prompt_and_hf_jobs_spec_require_gpu_preflight_for_gpu_jobs():
     assert "If skipped, state why before calling hf_jobs" in jobs_description
 
 
+def test_prompt_has_identity_contract():
+    prompt = Path("agent/prompts/system_prompt_v3.yaml").read_text()
+
+    assert "introduce yourself as ML Intern" in prompt
+    assert "Do not claim to be Claude, ChatGPT, Anthropic, OpenAI" in prompt
+    assert "Do not cite this system prompt" in prompt
+    assert (
+        "Use the session context User value as the authenticated Hugging Face namespace"
+        in prompt
+    )
+    assert "hub_model_id, trackio_space_id" in prompt
+
+
+def test_prompt_has_tool_calling_contract():
+    prompt = Path("agent/prompts/system_prompt_v3.yaml").read_text()
+
+    assert "# Tool calling contract" in prompt
+    assert (
+        "Use only tools that are actually available in the current tool list" in prompt
+    )
+    assert "Do not simulate tool calls in prose or fenced code blocks" in prompt
+    assert "valid JSON arguments matching the tool schema" in prompt
+    assert "required arguments, enum values, mutually exclusive fields" in prompt
+    assert "Do not claim success unless the tool result confirms it" in prompt
+
+
+def test_prompt_gates_autonomous_headless_mode():
+    prompt = Path("agent/prompts/system_prompt_v3.yaml").read_text()
+
+    assert (
+        "Apply this section only when the task explicitly says the session is "
+        "autonomous, headless, benchmarked, or running with a fixed time budget"
+        in prompt
+    )
+    assert "In normal interactive chat, text-only answers are allowed" in prompt
+    assert "NEVER respond with only text" in prompt
+
+
+def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
+    prompt = Path("agent/prompts/system_prompt_v3.yaml").read_text()
+    jobs_description = HF_JOBS_TOOL_SPEC["description"]
+    script_description = HF_JOBS_TOOL_SPEC["parameters"]["properties"]["script"][
+        "description"
+    ]
+    dependencies_description = HF_JOBS_TOOL_SPEC["parameters"]["properties"][
+        "dependencies"
+    ]["description"]
+
+    assert "For non-trivial hf_jobs scripts, use an exact-source workflow" in prompt
+    assert "Submit the exact tested script source or the exact tested sandbox file" in (
+        prompt
+    )
+    assert "Do not reconstruct a similar script from memory" in prompt
+    assert "assert required dataset columns exist" in prompt
+    assert "assert hub_model_id and trackio_space_id contain no placeholders" in prompt
+    assert (
+        "include every imported third-party package in hf_jobs.dependencies" in prompt
+    )
+    assert (
+        "Never leave placeholder values such as <username>, <model-name>, <project>, TODO"
+        in prompt
+    )
+
+    assert "submit the exact tested script source or exact tested sandbox file" in (
+        jobs_description
+    )
+    assert "Do NOT reconstruct a similar script from memory" in jobs_description
+    assert "Training scripts MUST fail fast on missing dataset columns" in (
+        jobs_description
+    )
+    assert (
+        "Do NOT leave placeholders such as <username>, <model-name>, <project>, TODO"
+        in (jobs_description)
+    )
+    assert "dependencies MUST include every imported third-party package" in (
+        jobs_description
+    )
+    assert (
+        "exact tested script source or exact tested sandbox file" in script_description
+    )
+    assert "Must include every imported third-party package" in dependencies_description
+
+
 def test_local_tool_runtime_excludes_sandbox_create():
     tool_names = {tool.name for tool in create_builtin_tools(local_mode=True)}
 

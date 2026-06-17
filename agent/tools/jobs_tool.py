@@ -1105,11 +1105,20 @@ HF_JOBS_TOOL_SPEC = {
         "- You MUST have called github_find_examples + github_read_file to find a working reference implementation. "
         "Scripts based on your internal knowledge WILL use outdated APIs and fail.\n"
         "- You MUST have validated dataset format via hf_inspect_dataset or hub_repo_details.\n"
+        "- For non-trivial scripts, write the script in the session sandbox, run syntax/import validation, "
+        "run a tiny smoke test, then submit the exact tested script source or exact tested sandbox file. "
+        "Do NOT reconstruct a similar script from memory.\n"
         "- If the job runs on GPU, or the script loads a model, uses CUDA, bf16/fp16, quantization, flash attention, "
         "or torch.compile, you MUST create a GPU sandbox with sandbox_create first, run a tiny smoke test there, "
         "and fix failures before submitting. If skipped, state why before calling hf_jobs.\n"
         "- Training config MUST include push_to_hub=True and hub_model_id. "
         "Job storage is EPHEMERAL — all files are deleted when the job ends. Without push_to_hub, trained models are lost permanently.\n"
+        "- Training scripts MUST fail fast on missing dataset columns, placeholder repo IDs, placeholder Trackio IDs, "
+        "missing hub_model_id, or missing push_to_hub=True.\n"
+        "- Do NOT leave placeholders such as <username>, <model-name>, <project>, TODO, "
+        "or similar unfinished values in scripts or job arguments.\n"
+        "- dependencies MUST include every imported third-party package, including common extras such as "
+        "accelerate, trackio, peft, bitsandbytes, kernels, sentencepiece, or protobuf when used.\n"
         "- Include trackio monitoring and provide the dashboard URL to the user. "
         "When the script uses report_to='trackio', also pass `trackio_space_id` "
         "(e.g. '<username>/ml-intern-<8char>') and `trackio_project` as tool args — "
@@ -1155,7 +1164,9 @@ HF_JOBS_TOOL_SPEC = {
                 "description": (
                     "Python code, sandbox file path (e.g. '/app/train.py', './train.py', or bare 'train.py'), or URL. "
                     "Triggers Python mode. For ML training: base this on a working example found via github_find_examples, not on internal knowledge. "
+                    "For non-trivial scripts, submit the exact tested script source or exact tested sandbox file. "
                     "For GPU/model-loading training scripts, smoke-test in a GPU sandbox before submission. "
+                    "Do not leave placeholders such as <username>, <model-name>, <project>, or TODO. "
                     "Mutually exclusive with 'command'."
                 ),
             },
@@ -1165,6 +1176,7 @@ HF_JOBS_TOOL_SPEC = {
                 "description": (
                     "Pip packages to install. Include ALL required packages. "
                     "Common training set: ['transformers', 'trl', 'torch', 'datasets', 'trackio', 'accelerate']. "
+                    "Must include every imported third-party package and any used extras such as peft, bitsandbytes, kernels, sentencepiece, or protobuf. "
                     "Only used with 'script'."
                 ),
             },
