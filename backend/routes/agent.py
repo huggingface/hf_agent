@@ -58,10 +58,10 @@ from agent.core.llm_params import _resolve_llm_params
 from agent.core.model_ids import (
     CLAUDE_OPUS_48_MODEL_ID,
     DEEPSEEK_V4_PRO_MODEL_ID,
-    GLM_51_MODEL_ID,
+    GLM_52_MODEL_ID,
     GPT_55_MODEL_ID,
-    KIMI_K26_MODEL_ID,
-    MINIMAX_M27_MODEL_ID,
+    KIMI_K27_CODE_MODEL_ID,
+    MINIMAX_M3_MODEL_ID,
     strip_huggingface_model_prefix,
 )
 from agent.core.prompt_caching import with_prompt_cache_params
@@ -74,7 +74,7 @@ _background_route_tasks: set[asyncio.Task] = set()
 
 DEFAULT_OPUS_MODEL_ID = CLAUDE_OPUS_48_MODEL_ID
 DEFAULT_GPT_MODEL_ID = GPT_55_MODEL_ID
-DEFAULT_FREE_MODEL_ID = KIMI_K26_MODEL_ID
+DEFAULT_FREE_MODEL_ID = GLM_52_MODEL_ID
 DATASET_UPLOAD_MULTIPART_SLACK_BYTES = 1024 * 1024
 
 
@@ -131,18 +131,18 @@ def _available_models() -> list[dict[str, Any]]:
             "provider": "huggingface",
         },
         {
+            "id": KIMI_K27_CODE_MODEL_ID,
+            "label": "Kimi K2.7 Code",
+            "provider": "huggingface",
+        },
+        {
+            "id": MINIMAX_M3_MODEL_ID,
+            "label": "MiniMax M3",
+            "provider": "huggingface",
+        },
+        {
             "id": DEFAULT_FREE_MODEL_ID,
-            "label": "Kimi K2.6",
-            "provider": "huggingface",
-        },
-        {
-            "id": MINIMAX_M27_MODEL_ID,
-            "label": "MiniMax M2.7",
-            "provider": "huggingface",
-        },
-        {
-            "id": GLM_51_MODEL_ID,
-            "label": "GLM 5.1",
+            "label": "GLM 5.2",
             "provider": "huggingface",
         },
         {
@@ -177,7 +177,7 @@ async def _model_override_for_new_session(
 ) -> str | None:
     """Return the model override to use when creating a new session.
 
-    Explicit model requests are honored. Empty web requests default to Kimi for
+    Explicit model requests are honored. Empty web requests default to GLM for
     non-Pro users and Opus for Pro users.
     """
     return requested_model or _default_model_for_user(user)
@@ -292,18 +292,22 @@ async def health_check() -> HealthResponse:
 
 
 @router.get("/health/llm", response_model=LLMHealthResponse)
-async def llm_health_check(request: Request) -> LLMHealthResponse:
+async def llm_health_check(
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> LLMHealthResponse:
     """Check if the LLM provider is reachable and the API key is valid.
 
-    Makes a minimal 1-token completion call when a token is available. For
-    token-less HF Router requests, returns ``status="skipped"`` instead of
-    making an unauthenticated probe. Catches common errors:
+    Makes a minimal 1-token completion call against the authenticated user's
+    plan-aware default model when a token is available. For token-less HF Router
+    requests, returns ``status="skipped"`` instead of making an unauthenticated
+    probe. Catches common errors:
     - 401 → invalid API key
     - 402/insufficient_quota → out of credits
     - 429 → rate limited
     - timeout / network → provider unreachable
     """
-    model = session_manager.config.model_name
+    model = _default_model_for_user(user)
     hf_token = resolve_hf_request_token(request)
     if _model_requires_hf_router_token(model) and not hf_token:
         return LLMHealthResponse(status="skipped", model=model)

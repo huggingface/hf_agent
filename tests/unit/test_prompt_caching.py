@@ -28,7 +28,7 @@ def _gpt55_fal_params() -> dict:
 
 def _kimi_novita_params() -> dict:
     return {
-        "model": "openai/moonshotai/Kimi-K2.6:novita",
+        "model": "openai/moonshotai/Kimi-K2.7-Code:novita",
         "api_base": HF_ROUTER_BASE_URL,
     }
 
@@ -158,7 +158,7 @@ def test_prompt_caching_is_noop_for_non_fal_router_model():
         {"role": "user", "content": "current question"},
     ]
     llm_params = {
-        "model": "openai/moonshotai/Kimi-K2.6",
+        "model": "openai/moonshotai/Kimi-K2.7-Code",
         "api_base": HF_ROUTER_BASE_URL,
     }
 

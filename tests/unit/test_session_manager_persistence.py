@@ -17,7 +17,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / "backend"
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from agent.core.model_ids import KIMI_K26_MODEL_ID  # noqa: E402
+from agent.core.model_ids import GLM_52_MODEL_ID  # noqa: E402
 from agent.core.session_persistence import NoopSessionStore  # noqa: E402
 from agent.core.usage_thresholds import USAGE_THRESHOLD_TOOL_NAME  # noqa: E402
 from agent.core.yolo_budget import YOLO_BUDGET_TOOL_NAME  # noqa: E402
@@ -826,10 +826,10 @@ async def test_yolo_budget_checker_uses_local_ledger_when_billing_lags(monkeypat
     assert pending["billing_source"] == "hf_billing_current_session"
 
 
-def test_unknown_saved_model_defaults_to_kimi():
+def test_unknown_saved_model_defaults_to_glm():
     model = SessionManager._model_from_saved_metadata("unsupported/model")
 
-    assert model == KIMI_K26_MODEL_ID
+    assert model == GLM_52_MODEL_ID
 
 
 @pytest.mark.asyncio

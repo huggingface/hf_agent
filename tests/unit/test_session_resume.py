@@ -60,7 +60,7 @@ class _FakeContext:
 class _FakeSession:
     def __init__(self, *, user_id: str | None = "user-a") -> None:
         self.context_manager = _FakeContext()
-        self.config = SimpleNamespace(model_name="moonshotai/Kimi-K2.6")
+        self.config = SimpleNamespace(model_name="moonshotai/Kimi-K2.7-Code")
         self.session_id = "current-session"
         self.session_start_time = "2026-01-02T00:00:00"
         self.user_id = user_id

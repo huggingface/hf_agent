@@ -48,7 +48,7 @@ def test_cli_default_model_is_opus():
 def test_model_switcher_accepts_router_model_ids():
     assert model_switcher.is_valid_model_id("openai/gpt-5.5:fal-ai")
     assert model_switcher.is_valid_model_id("openai/gpt-oss-120b")
-    assert model_switcher.is_valid_model_id("moonshotai/Kimi-K2.6")
+    assert model_switcher.is_valid_model_id("moonshotai/Kimi-K2.7-Code")
 
 
 def test_local_models_skip_hf_router_catalog_output():

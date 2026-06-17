@@ -58,7 +58,7 @@ ml-intern --sandbox-tools "your prompt"                         # use HF Space s
 ml-intern --max-iterations 100 "your prompt"
 ml-intern --no-stream "your prompt"
 # Change model
-ml-intern --model moonshotai/Kimi-K2.6 "your prompt"
+ml-intern --model moonshotai/Kimi-K2.7-Code:novita "your prompt"
 ml-intern --model openai/gpt-5.5:fal-ai "your prompt"
 ```
 

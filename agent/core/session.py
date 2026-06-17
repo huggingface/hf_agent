@@ -52,7 +52,7 @@ def _get_max_tokens_safe(model_name: str) -> int:
 
     Primary source: ``litellm.get_model_info(model)['max_input_tokens']``.
     Strips any HF routing suffix / huggingface/ prefix so tagged ids
-    ('moonshotai/Kimi-K2.6:cheapest') look up the bare model. Falls back to a
+    ('moonshotai/Kimi-K2.7-Code:novita') look up the bare model. Falls back to a
     conservative 200k default for models not in the catalog.
     """
     from litellm import get_model_info

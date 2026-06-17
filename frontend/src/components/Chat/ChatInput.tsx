@@ -26,10 +26,10 @@ import { useSessionStore } from '@/store/sessionStore';
 import {
   CLAUDE_OPUS_48_MODEL_PATH,
   DEEPSEEK_V4_PRO_MODEL_PATH,
-  GLM_51_MODEL_PATH,
+  GLM_52_MODEL_PATH,
   GPT_55_MODEL_PATH,
-  KIMI_K26_MODEL_PATH,
-  MINIMAX_M27_MODEL_PATH,
+  KIMI_K27_CODE_MODEL_PATH,
+  MINIMAX_M3_MODEL_PATH,
   isClaudePath,
 } from '@/utils/model';
 
@@ -62,22 +62,22 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
     avatarUrl: getHfAvatarUrl(GPT_55_MODEL_PATH),
   },
   {
-    id: 'kimi-k2.6',
-    name: 'Kimi K2.6',
-    modelPath: KIMI_K26_MODEL_PATH,
-    avatarUrl: getHfAvatarUrl(KIMI_K26_MODEL_PATH),
+    id: 'kimi-k2.7-code',
+    name: 'Kimi K2.7 Code',
+    modelPath: KIMI_K27_CODE_MODEL_PATH,
+    avatarUrl: getHfAvatarUrl(KIMI_K27_CODE_MODEL_PATH),
   },
   {
-    id: 'minimax-m2.7',
-    name: 'MiniMax M2.7',
-    modelPath: MINIMAX_M27_MODEL_PATH,
-    avatarUrl: getHfAvatarUrl('MiniMaxAI/MiniMax-M2.7'),
+    id: 'minimax-m3',
+    name: 'MiniMax M3',
+    modelPath: MINIMAX_M3_MODEL_PATH,
+    avatarUrl: getHfAvatarUrl(MINIMAX_M3_MODEL_PATH),
   },
   {
-    id: 'glm-5.1',
-    name: 'GLM 5.1',
-    modelPath: GLM_51_MODEL_PATH,
-    avatarUrl: getHfAvatarUrl('zai-org/GLM-5.1'),
+    id: 'glm-5.2',
+    name: 'GLM 5.2',
+    modelPath: GLM_52_MODEL_PATH,
+    avatarUrl: getHfAvatarUrl(GLM_52_MODEL_PATH),
   },
   {
     id: 'deepseek-v4-pro',
@@ -87,7 +87,7 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
   },
 ];
 
-const DEFAULT_FREE_MODEL_OPTION_ID = 'kimi-k2.6';
+const DEFAULT_FREE_MODEL_OPTION_ID = 'glm-5.2';
 
 const normalizeModelPath = (path: string | undefined) => (
   (path ?? '')

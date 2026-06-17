@@ -13,7 +13,7 @@ from typing import Any, Optional
 from agent.config import load_config
 from agent.core.agent_loop import process_submission
 from agent.core.model_ids import (
-    KIMI_K26_MODEL_ID,
+    GLM_52_MODEL_ID,
     is_known_router_model_id,
     strip_huggingface_model_prefix,
 )
@@ -269,7 +269,7 @@ class SessionManager:
         if normalized and is_known_router_model_id(normalized):
             return normalized
 
-        fallback_model = KIMI_K26_MODEL_ID
+        fallback_model = GLM_52_MODEL_ID
         logger.warning(
             "Saved session model %r failed validation; using %r",
             model,
