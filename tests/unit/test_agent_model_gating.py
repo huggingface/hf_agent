@@ -40,7 +40,7 @@ def test_default_model_for_user_is_plan_aware():
 
 
 @pytest.mark.asyncio
-async def test_llm_health_uses_request_hf_token(monkeypatch):
+async def test_llm_health_uses_plan_default_and_request_hf_token(monkeypatch):
     class Request:
         headers = {"Authorization": "Bearer user-token"}
         cookies = {}
@@ -72,10 +72,10 @@ async def test_llm_health_uses_request_hf_token(monkeypatch):
     monkeypatch.setattr(agent, "_resolve_llm_params", fake_resolve_llm_params)
     monkeypatch.setattr(agent, "acompletion", fake_acompletion)
 
-    response = await agent.llm_health_check(Request())
+    response = await agent.llm_health_check(Request(), {"user_id": "u1", "plan": "pro"})
 
     assert response.status == "ok"
-    assert resolved == [(agent.DEFAULT_FREE_MODEL_ID, "user-token", "high", False)]
+    assert resolved == [(agent.DEFAULT_OPUS_MODEL_ID, "user-token", "high", False)]
     assert completions[0]["api_key"] == "user-token"
 
 
@@ -97,12 +97,14 @@ async def test_llm_health_skips_router_probe_without_token(monkeypatch):
     monkeypatch.setattr(
         agent.session_manager,
         "config",
-        SimpleNamespace(model_name=agent.DEFAULT_FREE_MODEL_ID),
+        SimpleNamespace(model_name=agent.DEFAULT_OPUS_MODEL_ID),
     )
     monkeypatch.setattr(agent, "_resolve_llm_params", fail_resolve_llm_params)
     monkeypatch.setattr(agent, "acompletion", fail_acompletion)
 
-    response = await agent.llm_health_check(Request())
+    response = await agent.llm_health_check(
+        Request(), {"user_id": "u1", "plan": "free"}
+    )
 
     assert response.status == "skipped"
     assert response.model == agent.DEFAULT_FREE_MODEL_ID

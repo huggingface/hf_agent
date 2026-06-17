@@ -292,18 +292,22 @@ async def health_check() -> HealthResponse:
 
 
 @router.get("/health/llm", response_model=LLMHealthResponse)
-async def llm_health_check(request: Request) -> LLMHealthResponse:
+async def llm_health_check(
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> LLMHealthResponse:
     """Check if the LLM provider is reachable and the API key is valid.
 
-    Makes a minimal 1-token completion call when a token is available. For
-    token-less HF Router requests, returns ``status="skipped"`` instead of
-    making an unauthenticated probe. Catches common errors:
+    Makes a minimal 1-token completion call against the authenticated user's
+    plan-aware default model when a token is available. For token-less HF Router
+    requests, returns ``status="skipped"`` instead of making an unauthenticated
+    probe. Catches common errors:
     - 401 → invalid API key
     - 402/insufficient_quota → out of credits
     - 429 → rate limited
     - timeout / network → provider unreachable
     """
-    model = session_manager.config.model_name
+    model = _default_model_for_user(user)
     hf_token = resolve_hf_request_token(request)
     if _model_requires_hf_router_token(model) and not hf_token:
         return LLMHealthResponse(status="skipped", model=model)
