@@ -911,11 +911,15 @@ async def _call_llm_streaming(
     session: Session, messages, tools, llm_params
 ) -> LLMResult:
     """Call the LLM with streaming, emitting assistant_chunk events."""
-    response = None
     _healed_effort = False  # one-shot safety net per call
     _healed_thinking_signature = False
     t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
+        full_content = ""
+        tool_calls_acc: dict[int, dict] = {}
+        token_count = 0
+        finish_reason = None
+        final_usage_chunk = None
         try:
             request_llm_params = with_prompt_cache_params(
                 llm_params,
@@ -933,10 +937,86 @@ async def _call_llm_streaming(
                 timeout=600,
                 **request_llm_params,
             )
-            break
+
+            async for chunk in response:
+                if session.is_cancelled:
+                    tool_calls_acc.clear()
+                    break
+
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        token_count = chunk.usage.total_tokens
+                        final_usage_chunk = chunk
+                    continue
+
+                delta = choice.delta
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+
+                if delta.content:
+                    full_content += delta.content
+                    await session.send_event(
+                        Event(
+                            event_type="assistant_chunk",
+                            data={"content": delta.content},
+                        )
+                    )
+
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if tc_delta.id:
+                            tool_calls_acc[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_acc[idx]["function"]["name"] += (
+                                    tc_delta.function.name
+                                )
+                            if tc_delta.function.arguments:
+                                tool_calls_acc[idx]["function"]["arguments"] += (
+                                    tc_delta.function.arguments
+                                )
+
+                if hasattr(chunk, "usage") and chunk.usage:
+                    token_count = chunk.usage.total_tokens
+                    final_usage_chunk = chunk
+
+            usage = await telemetry.record_llm_call(
+                session,
+                model=llm_params.get("model", session.config.model_name),
+                response=final_usage_chunk,
+                latency_ms=int((time.monotonic() - t_start) * 1000),
+                finish_reason=finish_reason,
+            )
+            return LLMResult(
+                content=full_content or None,
+                tool_calls_acc=tool_calls_acc,
+                token_count=token_count,
+                finish_reason=finish_reason,
+                usage=usage,
+            )
         except ContextWindowExceededError:
             raise
         except Exception as e:
+            stream_received_output = bool(full_content or tool_calls_acc)
+            if full_content:
+                await session.send_event(
+                    Event(event_type="assistant_stream_end", data={})
+                )
+            if stream_received_output:
+                logger.warning(
+                    "Streaming LLM error after partial response; not retrying "
+                    "to avoid duplicating assistant output/tool calls: %s",
+                    e,
+                )
+                raise
             if _is_context_overflow_error(e):
                 raise ContextWindowExceededError(str(e)) from e
             if not _healed_effort and _is_effort_config_error(e):
@@ -983,74 +1063,6 @@ async def _call_llm_streaming(
                 await asyncio.sleep(_delay)
                 continue
             raise
-
-    full_content = ""
-    tool_calls_acc: dict[int, dict] = {}
-    token_count = 0
-    finish_reason = None
-    final_usage_chunk = None
-
-    async for chunk in response:
-        if session.is_cancelled:
-            tool_calls_acc.clear()
-            break
-
-        choice = chunk.choices[0] if chunk.choices else None
-        if not choice:
-            if hasattr(chunk, "usage") and chunk.usage:
-                token_count = chunk.usage.total_tokens
-                final_usage_chunk = chunk
-            continue
-
-        delta = choice.delta
-        if choice.finish_reason:
-            finish_reason = choice.finish_reason
-
-        if delta.content:
-            full_content += delta.content
-            await session.send_event(
-                Event(event_type="assistant_chunk", data={"content": delta.content})
-            )
-
-        if delta.tool_calls:
-            for tc_delta in delta.tool_calls:
-                idx = tc_delta.index
-                if idx not in tool_calls_acc:
-                    tool_calls_acc[idx] = {
-                        "id": "",
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    }
-                if tc_delta.id:
-                    tool_calls_acc[idx]["id"] = tc_delta.id
-                if tc_delta.function:
-                    if tc_delta.function.name:
-                        tool_calls_acc[idx]["function"]["name"] += (
-                            tc_delta.function.name
-                        )
-                    if tc_delta.function.arguments:
-                        tool_calls_acc[idx]["function"]["arguments"] += (
-                            tc_delta.function.arguments
-                        )
-
-        if hasattr(chunk, "usage") and chunk.usage:
-            token_count = chunk.usage.total_tokens
-            final_usage_chunk = chunk
-
-    usage = await telemetry.record_llm_call(
-        session,
-        model=llm_params.get("model", session.config.model_name),
-        response=final_usage_chunk,
-        latency_ms=int((time.monotonic() - t_start) * 1000),
-        finish_reason=finish_reason,
-    )
-    return LLMResult(
-        content=full_content or None,
-        tool_calls_acc=tool_calls_acc,
-        token_count=token_count,
-        finish_reason=finish_reason,
-        usage=usage,
-    )
 
 
 async def _call_llm_non_streaming(

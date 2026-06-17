@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from litellm import ChatCompletionMessageToolCall, Message
 
@@ -99,3 +100,111 @@ async def test_streaming_call_returns_wire_safe_result(monkeypatch):
 
     assert result.content == "done"
     assert result.token_count == 3
+
+
+@pytest.mark.asyncio
+async def test_streaming_call_retries_read_timeout_before_output(monkeypatch):
+    async def timeout_stream():
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+        yield  # pragma: no cover
+
+    async def success_stream():
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        yield SimpleNamespace(choices=[], usage=SimpleNamespace(total_tokens=2))
+
+    attempts = 0
+
+    async def fake_acompletion(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return timeout_stream()
+        return success_stream()
+
+    events = []
+
+    async def send_event(event):
+        events.append(event)
+
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    session = SimpleNamespace(
+        config=SimpleNamespace(model_name="MiniMaxAI/MiniMax-M3:novita"),
+        is_cancelled=False,
+        send_event=send_event,
+    )
+    monkeypatch.setattr("agent.core.agent_loop.acompletion", fake_acompletion)
+    monkeypatch.setattr("agent.core.agent_loop.asyncio.sleep", fake_sleep)
+
+    result = await _call_llm_streaming(
+        session,
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        llm_params={"model": "openai/MiniMaxAI/MiniMax-M3:novita"},
+    )
+
+    assert attempts == 2
+    assert sleeps == [5]
+    assert result.content == "ok"
+    assert [event.event_type for event in events] == [
+        "tool_log",
+        "assistant_chunk",
+        "llm_call",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_call_does_not_retry_after_partial_output(monkeypatch):
+    async def partial_timeout_stream():
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="partial", tool_calls=None),
+                    finish_reason=None,
+                )
+            ],
+        )
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    attempts = 0
+
+    async def fake_acompletion(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return partial_timeout_stream()
+
+    events = []
+
+    async def send_event(event):
+        events.append(event)
+
+    session = SimpleNamespace(
+        config=SimpleNamespace(model_name="MiniMaxAI/MiniMax-M3:novita"),
+        is_cancelled=False,
+        send_event=send_event,
+    )
+    monkeypatch.setattr("agent.core.agent_loop.acompletion", fake_acompletion)
+
+    with pytest.raises(httpx.ReadTimeout):
+        await _call_llm_streaming(
+            session,
+            messages=[Message(role="user", content="hi")],
+            tools=[],
+            llm_params={"model": "openai/MiniMaxAI/MiniMax-M3:novita"},
+        )
+
+    assert attempts == 1
+    assert [event.event_type for event in events] == [
+        "assistant_chunk",
+        "assistant_stream_end",
+    ]
