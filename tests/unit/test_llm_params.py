@@ -64,7 +64,7 @@ def test_router_params_fall_back_to_hf_cache_when_session_token_missing(monkeypa
 
 
 def test_router_params_never_set_bill_to_headers():
-    params = _resolve_llm_params("moonshotai/Kimi-K2.6", "session-token")
+    params = _resolve_llm_params("moonshotai/Kimi-K2.7-Code", "session-token")
 
     assert params["api_key"] == "session-token"
     assert "extra_headers" not in params
@@ -203,7 +203,7 @@ def test_hf_router_params_allow_missing_token_without_headers(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
 
-    params = _resolve_llm_params("moonshotai/Kimi-K2.6")
+    params = _resolve_llm_params("moonshotai/Kimi-K2.7-Code")
 
     assert params["api_key"] is None
     assert "extra_headers" not in params

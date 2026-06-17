@@ -216,7 +216,7 @@ async def test_interactive_main_applies_model_override_before_banner(monkeypatch
         main_mod,
         "load_config",
         lambda _path, **_kwargs: SimpleNamespace(
-            model_name="moonshotai/Kimi-K2.6",
+            model_name="moonshotai/Kimi-K2.7-Code",
             mcpServers={},
             tool_runtime="local",
         ),

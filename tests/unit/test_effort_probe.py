@@ -22,7 +22,7 @@ async def test_probe_effort_sends_session_id_to_hf_router(monkeypatch):
     monkeypatch.setattr(effort_probe, "acompletion", fake_acompletion)
 
     outcome = await effort_probe.probe_effort(
-        "moonshotai/Kimi-K2.6:novita",
+        "moonshotai/Kimi-K2.7-Code:novita",
         "high",
         "hf_fake",
         session=SimpleNamespace(

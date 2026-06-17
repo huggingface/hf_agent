@@ -369,9 +369,9 @@ def test_aggregate_sessions_by_model_split():
     s_claude = _session([], user_id="a")
     s_claude["model_name"] = "anthropic/claude-opus-4.8:fal-ai"
     s_kimi = _session([], user_id="b")
-    s_kimi["model_name"] = "moonshotai/Kimi-K2.6"
+    s_kimi["model_name"] = "moonshotai/Kimi-K2.7-Code"
     s_kimi2 = _session([], user_id="c")
-    s_kimi2["model_name"] = "moonshotai/Kimi-K2.6"
+    s_kimi2["model_name"] = "moonshotai/Kimi-K2.7-Code"
     row = mod._aggregate(
         [
             mod._session_metrics(s_claude),
@@ -381,7 +381,7 @@ def test_aggregate_sessions_by_model_split():
     )
     assert _json.loads(row["sessions_by_model_json"]) == {
         "anthropic/claude-opus-4.8:fal-ai": 1,
-        "moonshotai/Kimi-K2.6": 2,
+        "moonshotai/Kimi-K2.7-Code": 2,
     }
 
 

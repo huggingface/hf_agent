@@ -28,7 +28,7 @@ from agent.core.agent_loop import (
 
 
 def test_kimi_prompt_too_long_is_context_overflow():
-    # Verbatim error text from session 62ccfdcb (2026-04-25, Kimi K2.6).
+    # Verbatim error text from session 62ccfdcb (2026-04-25, Kimi-family model).
     err = Exception(
         "litellm.BadRequestError: OpenAIException - The prompt is too long: "
         "365407, model maximum context length: 262143"
