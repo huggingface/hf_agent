@@ -42,6 +42,8 @@ export interface SideChannelCallbacks {
   onUsageEvent: (eventType: 'llm_call' | 'hf_job_complete' | 'sandbox_destroy', data: Record<string, unknown>) => void;
   onSessionUpdate: (data: Record<string, unknown>) => void;
   onInterrupted: () => void;
+  getLastEventSeq: () => number | null;
+  onEventSeq: (seq: number) => void;
   onRecoverMessages: (context: MessageRecoveryContext) => Promise<boolean>;
 }
 
@@ -69,10 +71,6 @@ export interface RecoverySessionInfo {
 let partIdCounter = 0;
 function nextPartId(prefix: string): string {
   return `${prefix}-${Date.now()}-${++partIdCounter}`;
-}
-
-function lastEventKey(sessionId: string): string {
-  return `hf-agent-last-event:${sessionId}`;
 }
 
 async function readErrorResponse(response: Response): Promise<string> {
@@ -176,7 +174,7 @@ function approvalContinuationPrelude(parts: UIMessage['parts']): UIMessageChunk[
 }
 
 /** Parse an SSE text stream into AgentEvent objects. */
-function createSSEParserStream(sessionId: string): TransformStream<string, AgentEvent> {
+function createSSEParserStream(): TransformStream<string, AgentEvent> {
   let buffer = '';
   let eventId: string | null = null;
   let data = '';
@@ -191,8 +189,7 @@ function createSSEParserStream(sessionId: string): TransformStream<string, Agent
       const json = JSON.parse(data.trim()) as AgentEvent;
       const seq = json.seq ?? (eventId ? Number(eventId) : undefined);
       if (Number.isFinite(seq)) {
-        json.seq = seq;
-        localStorage.setItem(lastEventKey(sessionId), String(seq));
+        json.seq = Number(seq);
       }
       controller.enqueue(json);
     } catch {
@@ -257,6 +254,9 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
 
   return new TransformStream<AgentEvent, UIMessageChunk>({
     transform(event, controller) {
+      if (Number.isFinite(event.seq)) {
+        sideChannel.onEventSeq(Number(event.seq));
+      }
       switch (event.event_type) {
         // -- Side-channel only events ----------------------------------------
         case 'ready':
@@ -489,8 +489,8 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
   }
 
   private async connectToEventStream(): Promise<ReadableStream<UIMessageChunk> | null> {
-    const lastSeq = localStorage.getItem(lastEventKey(this.sessionId));
-    const qs = lastSeq ? `?after=${encodeURIComponent(lastSeq)}` : '';
+    const lastSeq = this.sideChannel.getLastEventSeq();
+    const qs = lastSeq !== null ? `?after=${encodeURIComponent(String(lastSeq))}` : '';
     const response = await apiFetch(`/api/events/${this.sessionId}${qs}`, {
       headers: { 'Accept': 'text/event-stream' },
     });
@@ -500,7 +500,7 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
 
     return response.body
       .pipeThrough(new TextDecoderStream())
-      .pipeThrough(createSSEParserStream(this.sessionId))
+      .pipeThrough(createSSEParserStream())
       .pipeThrough(createEventToChunkStream(this.sideChannel));
   }
 
@@ -645,7 +645,7 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     // Pipe: response bytes → text → SSE events → UIMessageChunks
     const stream = response.body
       .pipeThrough(new TextDecoderStream())
-      .pipeThrough(createSSEParserStream(sessionId))
+      .pipeThrough(createSSEParserStream())
       .pipeThrough(createEventToChunkStream(this.sideChannel));
     return preludeChunks.length > 0 ? prependChunks(preludeChunks, stream) : stream;
   }

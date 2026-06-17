@@ -271,47 +271,6 @@ async def test_switching_to_unknown_model_id_is_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_restore_summary_uses_default_model_without_quota_gate(monkeypatch):
-    events = []
-
-    class Request:
-        headers = {}
-        cookies = {}
-
-    async def fake_create_session(**kwargs):
-        events.append(("create", kwargs["model"], kwargs.get("user_plan")))
-        return "s1"
-
-    async def fake_check_session_access(
-        session_id, user, request, preload_sandbox=True
-    ):
-        events.append(("check", session_id, preload_sandbox))
-        return SimpleNamespace(session=SimpleNamespace(config=SimpleNamespace()))
-
-    async def fake_seed(session_id, messages):
-        events.append(("seed", session_id))
-        return len(messages)
-
-    monkeypatch.setattr(agent.session_manager, "create_session", fake_create_session)
-    monkeypatch.setattr(agent, "_check_session_access", fake_check_session_access)
-    monkeypatch.setattr(agent.session_manager, "seed_from_summary", fake_seed)
-
-    response = await agent.restore_session_summary(
-        Request(),
-        {"messages": [{"role": "user", "content": "resume this"}]},
-        {"user_id": "u1", "plan": "free"},
-    )
-
-    assert response.session_id == "s1"
-    assert response.model == agent.DEFAULT_FREE_MODEL_ID
-    assert events == [
-        ("create", agent.DEFAULT_FREE_MODEL_ID, "free"),
-        ("check", "s1", False),
-        ("seed", "s1"),
-    ]
-
-
-@pytest.mark.asyncio
 async def test_check_session_access_passes_user_plan(monkeypatch):
     seen = {}
     expected_session = SimpleNamespace(user_id="u1")

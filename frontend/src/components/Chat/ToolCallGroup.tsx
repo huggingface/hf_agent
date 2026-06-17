@@ -10,7 +10,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import { useAgentStore, type ResearchAgentState } from '@/store/agentStore';
 import { useLayoutStore } from '@/store/layoutStore';
 import { logger } from '@/utils/logger';
-import { RESEARCH_MAX_STEPS } from '@/lib/research-store';
+import { RESEARCH_MAX_STEPS } from '@/lib/research-state';
 import { useSessionStore } from '@/store/sessionStore';
 import { apiFetch } from '@/utils/api';
 import type { UIMessage } from 'ai';

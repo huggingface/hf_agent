@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Alert,
   Box,
@@ -32,23 +32,6 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
     useAgentStore();
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [capacityError, setCapacityError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await apiFetch('/api/sessions');
-        if (!response.ok) return;
-        const data = await response.json();
-        if (!cancelled && Array.isArray(data)) {
-          mergeServerSessions(data);
-        }
-      } catch {
-        /* local sidebar metadata is still usable */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [mergeServerSessions]);
 
   // -- Handlers -----------------------------------------------------------
 

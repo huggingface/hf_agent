@@ -22,13 +22,11 @@ export interface SessionMeta {
    *  GET /sessions). A processing session is already live in memory, so it
    *  keeps streaming in the background; idle sessions are NOT hydrated on app
    *  load, which is what keeps them from refilling the active-session pool.
-   *  Transient — never persisted to localStorage (always re-derived from the
-   *  server list). */
+   *  Transient and always re-derived from the server list. */
   isProcessing?: boolean;
   /** True when the backend no longer recognizes this session id (e.g.
-   *  after a backend restart). The UI shows a recovery banner and
-   *  disables input until the user chooses to restore-with-summary or
-   *  start fresh. */
+   *  after a backend restart). The UI shows a start-over banner and
+   *  disables input until the user starts fresh. */
   expired?: boolean;
   autoApprovalEnabled?: boolean;
   autoApprovalCostCapUsd?: number | null;

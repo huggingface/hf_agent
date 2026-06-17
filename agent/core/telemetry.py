@@ -96,7 +96,6 @@ async def record_llm_call(
     * ``research``    — research sub-agent inner loop (3 call sites)
     * ``compaction``  — context-window summary on overflow
     * ``effort_probe``— effort cascade walk on rejection / model switch
-    * ``restore``     — session re-seed summary after a Space restart
 
     Pre-2026-04-29 only ``main`` calls were instrumented; observed gap on
     Cost Explorer was ~67%, with the other 5 call sites accounting for
