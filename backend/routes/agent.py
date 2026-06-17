@@ -58,10 +58,10 @@ from agent.core.llm_params import _resolve_llm_params
 from agent.core.model_ids import (
     CLAUDE_OPUS_48_MODEL_ID,
     DEEPSEEK_V4_PRO_MODEL_ID,
-    GLM_51_MODEL_ID,
+    GLM_52_MODEL_ID,
     GPT_55_MODEL_ID,
-    KIMI_K26_MODEL_ID,
-    MINIMAX_M27_MODEL_ID,
+    KIMI_K27_CODE_MODEL_ID,
+    MINIMAX_M3_MODEL_ID,
     strip_huggingface_model_prefix,
 )
 from agent.core.prompt_caching import with_prompt_cache_params
@@ -74,7 +74,7 @@ _background_route_tasks: set[asyncio.Task] = set()
 
 DEFAULT_OPUS_MODEL_ID = CLAUDE_OPUS_48_MODEL_ID
 DEFAULT_GPT_MODEL_ID = GPT_55_MODEL_ID
-DEFAULT_FREE_MODEL_ID = KIMI_K26_MODEL_ID
+DEFAULT_FREE_MODEL_ID = KIMI_K27_CODE_MODEL_ID
 DATASET_UPLOAD_MULTIPART_SLACK_BYTES = 1024 * 1024
 
 
@@ -132,17 +132,17 @@ def _available_models() -> list[dict[str, Any]]:
         },
         {
             "id": DEFAULT_FREE_MODEL_ID,
-            "label": "Kimi K2.6",
+            "label": "Kimi K2.7 Code",
             "provider": "huggingface",
         },
         {
-            "id": MINIMAX_M27_MODEL_ID,
-            "label": "MiniMax M2.7",
+            "id": MINIMAX_M3_MODEL_ID,
+            "label": "MiniMax M3",
             "provider": "huggingface",
         },
         {
-            "id": GLM_51_MODEL_ID,
-            "label": "GLM 5.1",
+            "id": GLM_52_MODEL_ID,
+            "label": "GLM 5.2",
             "provider": "huggingface",
         },
         {
