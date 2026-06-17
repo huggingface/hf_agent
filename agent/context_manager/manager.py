@@ -100,6 +100,23 @@ class CompactionFailedError(Exception):
     """
 
 
+# Used when seeding a brand-new session from prior browser-cached messages.
+# Here we're writing a note to *ourselves* — so preserve the tool-call trail,
+# files produced, and planned next steps in first person. Optimized for
+# continuity, not brevity.
+_RESTORE_PROMPT = (
+    "You're about to be restored into a fresh session with no memory of the "
+    "conversation above. Write a first-person note to your future self so "
+    "you can continue right where you left off. Include:\n"
+    "  • What the user originally asked for and what progress you've made.\n"
+    "  • Every tool you called, with arguments and a one-line result summary.\n"
+    "  • Any code, files, scripts, or artifacts you produced (with paths).\n"
+    "  • Key decisions and the reasoning behind them.\n"
+    "  • What you were planning to do next.\n\n"
+    "Don't be cute. Be specific. This is the only context you'll have."
+)
+
+
 async def summarize_messages(
     messages: list[Message],
     model_name: str,
@@ -113,6 +130,9 @@ async def summarize_messages(
     """Run a summarization prompt against a list of messages.
 
     ``prompt`` defaults to the compaction prompt (terse, decision-focused).
+    Callers seeding a new session after a restart should pass ``_RESTORE_PROMPT``
+    instead — it preserves the tool-call trail so the agent can answer
+    follow-up questions about what it did.
 
     ``session`` is optional; when provided, the call is recorded via
     ``telemetry.record_llm_call`` so its cost lands in the session's

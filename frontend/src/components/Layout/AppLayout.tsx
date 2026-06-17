@@ -8,7 +8,6 @@ import {
   Alert,
   AlertTitle,
   Button,
-  CircularProgress,
   Snackbar,
   useMediaQuery,
   useTheme,
@@ -34,7 +33,7 @@ import { inferenceCreditCta, isInferenceCreditError } from '@/utils/inferenceBil
 const DRAWER_WIDTH = 260;
 
 export default function AppLayout() {
-  const { sessions, activeSessionId, markExpired, mergeServerSessions } = useSessionStore();
+  const { sessions, activeSessionId, markExpired } = useSessionStore();
   const { isConnected, llmHealthError, setLlmHealthError, user } = useAgentStore();
   const {
     isLeftSidebarOpen,
@@ -51,7 +50,6 @@ export default function AppLayout() {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   const [showExpiredToast, setShowExpiredToast] = useState(false);
-  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const disconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isResizing = useRef(false);
@@ -113,28 +111,6 @@ export default function AppLayout() {
 
   const hasAnySessions = sessions.length > 0;
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await apiFetch('/api/sessions');
-        if (response.ok) {
-          const data = await response.json();
-          if (!cancelled && Array.isArray(data)) {
-            mergeServerSessions(data);
-          }
-        }
-      } catch {
-        /* unavailable session list falls through to the welcome screen */
-      } finally {
-        if (!cancelled) {
-          setSessionsLoaded(true);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [mergeServerSessions]);
-
   // Debounced "session expired" toast
   useEffect(() => {
     if (!isConnected && activeSessionId) {
@@ -185,8 +161,9 @@ export default function AppLayout() {
   const handleSessionDead = useCallback(
     (deadSessionId: string) => {
       // Backend lost this session — mark it expired so the chat shows a
-      // start-over banner instead of either silently failing or eagerly
-      // creating a new backend session.
+      // recovery banner instead of either silently failing or eagerly
+      // creating a new backend session (which would pay a summary-call
+      // cost for sessions the user may never revisit).
       markExpired(deadSessionId);
     },
     [markExpired],
@@ -221,22 +198,6 @@ export default function AppLayout() {
       body: JSON.stringify({ source: 'llm_health_credit_error', target: 'hf_pro' }),
     }).catch(() => {});
   };
-
-  if (!sessionsLoaded) {
-    return (
-      <Box
-        sx={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <CircularProgress size={24} />
-      </Box>
-    );
-  }
 
   // -- Welcome screen: no sessions at all ---------------------------------
   if (!hasAnySessions) {

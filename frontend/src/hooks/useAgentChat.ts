@@ -11,7 +11,9 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { type UIMessage, lastAssistantMessageIsCompleteWithApprovalResponses } from 'ai';
 import { SSEChatTransport, type SideChannelCallbacks } from '@/lib/sse-chat-transport';
-import { RESEARCH_MAX_STEPS } from '@/lib/research-state';
+import { loadMessages, saveMessages } from '@/lib/chat-message-store';
+import { saveBackendMessages } from '@/lib/backend-message-store';
+import { saveResearch, loadResearch, clearResearch, RESEARCH_MAX_STEPS } from '@/lib/research-store';
 import { llmMessagesToUIMessages, type PendingApprovalItem } from '@/lib/convert-llm-messages';
 import { apiFetch } from '@/utils/api';
 import { useAgentStore } from '@/store/agentStore';
@@ -38,6 +40,16 @@ function textFromUIMessage(message: UIMessage): string {
     .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
     .map(p => p.text)
     .join('');
+}
+
+function messagesSignature(messages: UIMessage[]): string {
+  return JSON.stringify(
+    messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      parts: message.parts,
+    })),
+  );
 }
 
 function pendingApprovalItemsFromInfo(info: unknown): PendingApprovalItem[] | undefined {
@@ -89,7 +101,6 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
   const shouldReactivate = isActive || isProcessing;
   const shouldReactivateRef = useRef(shouldReactivate);
   shouldReactivateRef.current = shouldReactivate;
-  const lastEventSeqRef = useRef<number | null>(null);
 
   const { setNeedsAttention, updateSessionYolo } = useSessionStore();
 
@@ -181,6 +192,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
               researchStats: anyRunning ? agents[aid].stats : sessState.researchStats,
               activityStatus: { type: 'tool', toolName: 'research', description: label || log },
             });
+            saveResearch(sessionId, allSteps.slice(-RESEARCH_MAX_STEPS), agents[aid].stats);
           } else if (log.startsWith('tokens:')) {
             agent.stats = { ...agent.stats, tokenCount: parseInt(log.slice(7), 10) };
             agents[aid] = agent;
@@ -201,6 +213,8 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
               researchStats: anyRunning ? sessState.researchStats : agent.stats,
               activityStatus: { type: 'tool', toolName: 'research', description: log },
             });
+            // Clear persistence only when ALL agents are done
+            if (!anyRunning) clearResearch(sessionId);
           } else {
             // Regular tool call step — append to this agent
             agent.steps = [...agent.steps, log].slice(-RESEARCH_MAX_STEPS);
@@ -211,6 +225,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
               researchSteps: allSteps.slice(-RESEARCH_MAX_STEPS),
               activityStatus: { type: 'tool', toolName: 'research', description: log },
             });
+            saveResearch(sessionId, allSteps.slice(-RESEARCH_MAX_STEPS), agent.stats);
           }
           return;
         }
@@ -401,10 +416,6 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
         }
       },
       onInterrupted: () => { /* no-op — handled by stop() caller */ },
-      getLastEventSeq: () => lastEventSeqRef.current,
-      onEventSeq: (seq) => {
-        lastEventSeqRef.current = seq;
-      },
       onRecoverMessages: async ({
         submittedText,
         currentMessageCount,
@@ -441,6 +452,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
 
           const data = await msgsRes.json();
           if (!Array.isArray(data) || data.length === 0) return false;
+          saveBackendMessages(sessionId, data);
 
           let pendingItems: PendingApprovalItem[] | undefined;
           let pendingIds: Set<string> | undefined;
@@ -476,6 +488,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
           const setMsgs = chatActionsRef.current.setMessages;
           if (setMsgs && uiMsgs.length >= currentMessageCount) {
             setMsgs(uiMsgs);
+            saveMessages(sessionId, uiMsgs);
           }
 
           if (backendIsProcessing) {
@@ -517,8 +530,11 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
     };
   }, []);
 
-  // -- Initial messages are hydrated from the backend when needed ----------
-  const initialMessages = useMemo<UIMessage[]>(() => [], []);
+  // -- Restore persisted messages for this session ------------------------
+  const initialMessages = useMemo(
+    () => loadMessages(sessionId),
+    [sessionId],
+  );
 
   // -- Ref for chat actions (used by sideChannel callbacks) ---------------
   const chatActionsRef = useRef<{
@@ -556,9 +572,9 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
   chatActionsRef.current.messages = chat.messages;
 
   // -- Hydrate from backend on mount (page refresh recovery) --------------
-  // Gated on shouldReactivate: an idle backgrounded session renders from the
-  // sidebar list payload, with no per-session fetch that would reactivate its
-  // runtime/sandbox. Re-runs when a session
+  // Gated on shouldReactivate: an idle backgrounded session renders from its
+  // localStorage message cache + the sidebar list payload, with no per-session
+  // fetch that would reactivate its runtime/sandbox. Re-runs when a session
   // becomes active (user selects it) or the list reports it processing, which
   // is exactly when reactivation is wanted.
   useEffect(() => {
@@ -598,6 +614,9 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
         if (msgsRes.ok) {
           const data = await msgsRes.json();
           if (cancelled || !Array.isArray(data) || data.length === 0) return;
+          // Cache the raw backend messages so we can restore this session
+          // into a fresh backend if the Space restarts.
+          saveBackendMessages(sessionId, data);
           const uiMsgs = llmMessagesToUIMessages(
             data,
             pendingIds,
@@ -606,6 +625,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
           );
           if (uiMsgs.length > 0) {
             chat.setMessages(uiMsgs);
+            saveMessages(sessionId, uiMsgs);
           }
         }
 
@@ -614,16 +634,28 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
         // results make tools look "done" even when the agent is still
         // mid-turn and about to call more tools.
         if (backendIsProcessing) {
+          // Restore research sub-agent state alongside isProcessing in one
+          // atomic update so the UI never sees isProcessing=false with stale
+          // tool states (which would coerce them to 'output-available').
+          const savedResearch = loadResearch(sessionId);
           setProcessingState(true, {
-            activityStatus: { type: 'thinking' },
+            activityStatus: savedResearch?.stats.startedAt
+              ? { type: 'tool', toolName: 'research', description: 'Resuming research...' }
+              : { type: 'thinking' },
+            ...(savedResearch && {
+              researchSteps: savedResearch.steps,
+              researchStats: savedResearch.stats,
+            }),
           });
         } else if (pendingIds && pendingIds.size > 0) {
           setProcessingState(false, { activityStatus: waitingApprovalStatus(pendingItems) });
+          clearResearch(sessionId);
         } else {
           setProcessingState(false);
+          clearResearch(sessionId);
         }
       } catch {
-        /* backend unreachable */
+        /* backend unreachable -- localStorage fallback is fine */
       }
     })();
     return () => { cancelled = true; };
@@ -651,6 +683,10 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
         if (!msgsRes.ok) return null;
         const data = await msgsRes.json();
         if (!Array.isArray(data) || data.length === 0) return null;
+
+        // Cache the raw backend messages so we can restore this session
+        // into a fresh backend if the Space restarts.
+        saveBackendMessages(sessionId, data);
 
         let pendingItems: PendingApprovalItem[] | undefined;
         let pendingIds: Set<string> | undefined;
@@ -683,8 +719,9 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
     /** Read the event stream from GET /api/events and forward to side-channel. */
     const consumeEventStream = async (signal: AbortSignal) => {
       try {
-        const lastSeq = lastEventSeqRef.current;
-        const qs = lastSeq !== null ? `?after=${encodeURIComponent(String(lastSeq))}` : '';
+        const lastEventKey = `hf-agent-last-event:${sessionId}`;
+        const lastSeq = localStorage.getItem(lastEventKey);
+        const qs = lastSeq ? `?after=${encodeURIComponent(lastSeq)}` : '';
         const res = await apiFetch(`/api/events/${sessionId}${qs}`, {
           headers: { 'Accept': 'text/event-stream' },
           signal,
@@ -704,7 +741,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
           const event = JSON.parse(eventData.trim());
           const seq = event.seq ?? (eventId ? Number(eventId) : undefined);
           if (Number.isFinite(seq)) {
-            sideChannel.onEventSeq(Number(seq));
+            localStorage.setItem(lastEventKey, String(seq));
           }
           eventId = null;
           eventData = '';
@@ -754,6 +791,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
               );
               if (uiMsgs.length > 0) {
                 chat.setMessages(uiMsgs);
+                saveMessages(sessionId, uiMsgs);
               }
             }
             return true;
@@ -780,6 +818,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
               );
               if (uiMsgs.length > 0) {
                 chat.setMessages(uiMsgs);
+                saveMessages(sessionId, uiMsgs);
               }
             }
             return true;
@@ -835,6 +874,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
       );
       if (uiMsgs.length > 0) {
         chat.setMessages(uiMsgs);
+        saveMessages(sessionId, uiMsgs);
       }
 
       // If the backend is still processing, reconnect to the live event stream
@@ -864,6 +904,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
           const currentCount = chatActionsRef.current.messages.length;
           if (msgs.length > currentCount || currentCount === 0) {
             chat.setMessages(msgs);
+            saveMessages(sessionId, msgs);
           } 
 
           // If backend stopped processing, clean up
@@ -881,6 +922,17 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
       stopReconnect();
     };
   }, [sessionId, setProcessingState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -- Persist messages ---------------------------------------------------
+  const prevMessagesSignatureRef = useRef(messagesSignature(initialMessages));
+  useEffect(() => {
+    if (chat.messages.length === 0) return;
+    const signature = messagesSignature(chat.messages);
+    if (signature !== prevMessagesSignatureRef.current) {
+      prevMessagesSignatureRef.current = signature;
+      saveMessages(sessionId, chat.messages);
+    }
+  }, [sessionId, chat.messages]);
 
   // -- Undo last turn (REST call + client-side message removal) -----------
   // With SSE there's no persistent connection to receive the undo_complete
@@ -903,6 +955,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
         }
         const updated = lastUserIdx > 0 ? msgs.slice(0, lastUserIdx) : [];
         setMsgs(updated);
+        saveMessages(sessionId, updated);
       }
       setProcessingState(false);
     } catch (e) {
@@ -936,6 +989,10 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
           activityStatus: { type: 'thinking' },
         });
       }
+
+      // Persist updated tool states so a page refresh during execution
+      // won't restore stale approval-requested state from localStorage.
+      saveMessages(sessionId, chatActionsRef.current.messages);
 
       return true;
     },
@@ -981,6 +1038,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
       // 2. Truncate frontend messages
       const truncated = msgs.slice(0, msgIndex);
       setMsgs(truncated);
+      saveMessages(sessionId, truncated);
 
       // 3. Send the edited message (reuses existing transport + /api/chat)
       chat.sendMessage({ text: newText, metadata: { createdAt: new Date().toISOString() } });
@@ -999,6 +1057,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
 
       const data = await msgsRes.json();
       if (!Array.isArray(data) || data.length === 0) return false;
+      saveBackendMessages(sessionId, data);
 
       let pendingItems: PendingApprovalItem[] | undefined;
       let pendingIds: Set<string> | undefined;
@@ -1021,6 +1080,7 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
       const setMsgs = chatActionsRef.current.setMessages;
       if (setMsgs && uiMsgs.length > 0) {
         setMsgs(uiMsgs);
+        saveMessages(sessionId, uiMsgs);
       }
       return true;
     } catch {
