@@ -8,9 +8,9 @@
 
 export const CLAUDE_OPUS_48_MODEL_PATH = 'anthropic/claude-opus-4.8:fal-ai';
 export const GPT_55_MODEL_PATH = 'openai/gpt-5.5:fal-ai';
-export const KIMI_K27_CODE_MODEL_PATH = 'moonshotai/Kimi-K2.7-Code';
-export const MINIMAX_M3_MODEL_PATH = 'MiniMaxAI/MiniMax-M3';
-export const GLM_52_MODEL_PATH = 'zai-org/GLM-5.2';
+export const KIMI_K27_CODE_MODEL_PATH = 'moonshotai/Kimi-K2.7-Code:novita';
+export const MINIMAX_M3_MODEL_PATH = 'MiniMaxAI/MiniMax-M3:novita';
+export const GLM_52_MODEL_PATH = 'zai-org/GLM-5.2:novita';
 export const DEEPSEEK_V4_PRO_MODEL_PATH = 'deepseek-ai/DeepSeek-V4-Pro:novita';
 
 export function isClaudePath(modelPath: string | undefined): boolean {

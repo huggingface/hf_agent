@@ -38,7 +38,7 @@ from agent.core.model_ids import (
 
 
 # Suggested models shown by `/model` (not a gate). Users can paste any HF
-# Router model id (e.g. "MiniMaxAI/MiniMax-M3"). Append ":fastest",
+# Router model id (e.g. "MiniMaxAI/MiniMax-M3:novita"). Append ":fastest",
 # ":cheapest", ":preferred", or ":<provider>" to override the default routing
 # policy (auto = fastest with failover).
 SUGGESTED_MODELS = [
@@ -161,7 +161,7 @@ def print_model_listing(config, console) -> None:
         marker = " [dim]<-- current[/dim]" if m["id"] == current else ""
         console.print(f"  {m['id']}  [dim]({m['label']})[/dim]{marker}")
     console.print(
-        "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M3').\n"
+        "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M3:novita').\n"
         "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"
         "Use 'ollama/<model>', 'vllm/<model>', 'lm_studio/<model>', or "
         "'llamacpp/<model>' for local OpenAI-compatible endpoints.[/dim]"
