@@ -87,7 +87,7 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
   },
 ];
 
-const DEFAULT_FREE_MODEL_OPTION_ID = 'kimi-k2.7-code';
+const DEFAULT_FREE_MODEL_OPTION_ID = 'glm-5.2';
 
 const normalizeModelPath = (path: string | undefined) => (
   (path ?? '')

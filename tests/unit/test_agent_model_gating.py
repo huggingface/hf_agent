@@ -23,9 +23,9 @@ def test_available_models_exclude_sonnet_and_have_no_pro_gate():
 
     assert models[agent.DEFAULT_OPUS_MODEL_ID]["label"] == "Claude Opus 4.8"
     assert models[agent.DEFAULT_OPUS_MODEL_ID]["recommended"] is True
-    assert models[agent.DEFAULT_FREE_MODEL_ID]["label"] == "Kimi K2.7 Code"
+    assert models[agent.DEFAULT_FREE_MODEL_ID]["label"] == "GLM 5.2"
+    assert models["moonshotai/Kimi-K2.7-Code:novita"]["label"] == "Kimi K2.7 Code"
     assert models["MiniMaxAI/MiniMax-M3:novita"]["label"] == "MiniMax M3"
-    assert models["zai-org/GLM-5.2:novita"]["label"] == "GLM 5.2"
     assert "recommended" not in models[agent.DEFAULT_FREE_MODEL_ID]
     assert all("minimum_plan" not in model for model in models.values())
     assert all("tier" not in model for model in models.values())

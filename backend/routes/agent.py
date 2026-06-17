@@ -74,7 +74,7 @@ _background_route_tasks: set[asyncio.Task] = set()
 
 DEFAULT_OPUS_MODEL_ID = CLAUDE_OPUS_48_MODEL_ID
 DEFAULT_GPT_MODEL_ID = GPT_55_MODEL_ID
-DEFAULT_FREE_MODEL_ID = KIMI_K27_CODE_MODEL_ID
+DEFAULT_FREE_MODEL_ID = GLM_52_MODEL_ID
 DATASET_UPLOAD_MULTIPART_SLACK_BYTES = 1024 * 1024
 
 
@@ -131,7 +131,7 @@ def _available_models() -> list[dict[str, Any]]:
             "provider": "huggingface",
         },
         {
-            "id": DEFAULT_FREE_MODEL_ID,
+            "id": KIMI_K27_CODE_MODEL_ID,
             "label": "Kimi K2.7 Code",
             "provider": "huggingface",
         },
@@ -141,7 +141,7 @@ def _available_models() -> list[dict[str, Any]]:
             "provider": "huggingface",
         },
         {
-            "id": GLM_52_MODEL_ID,
+            "id": DEFAULT_FREE_MODEL_ID,
             "label": "GLM 5.2",
             "provider": "huggingface",
         },
@@ -177,7 +177,7 @@ async def _model_override_for_new_session(
 ) -> str | None:
     """Return the model override to use when creating a new session.
 
-    Explicit model requests are honored. Empty web requests default to Kimi for
+    Explicit model requests are honored. Empty web requests default to GLM for
     non-Pro users and Opus for Pro users.
     """
     return requested_model or _default_model_for_user(user)
