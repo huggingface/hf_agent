@@ -32,10 +32,8 @@ def test_available_models_exclude_sonnet_and_have_no_pro_gate():
     assert all("tier" not in model for model in models.values())
 
 
-def test_default_model_for_user_is_glm_for_all_plans():
-    assert agent._default_model_for_user({"plan": "pro"}) == agent.DEFAULT_MODEL_ID
-    assert agent._default_model_for_user({"plan": "free"}) == agent.DEFAULT_MODEL_ID
-    assert agent._default_model_for_user({}) == agent.DEFAULT_MODEL_ID
+def test_default_model_is_glm():
+    assert agent._default_model() == agent.DEFAULT_MODEL_ID
 
 
 @pytest.mark.asyncio
@@ -170,24 +168,12 @@ async def test_generate_title_omits_session_id_from_hf_router(monkeypatch):
     assert titles == [("session-1", "Clean title")]
 
 
-@pytest.mark.asyncio
-async def test_empty_session_model_uses_glm_default():
-    assert (
-        await agent._model_override_for_new_session(None, {"plan": "pro"})
-        == agent.DEFAULT_MODEL_ID
-    )
-    assert (
-        await agent._model_override_for_new_session(None, {"plan": "free"})
-        == agent.DEFAULT_MODEL_ID
-    )
+def test_empty_session_model_uses_glm_default():
+    assert agent._model_override_for_new_session(None) == agent.DEFAULT_MODEL_ID
 
 
-@pytest.mark.asyncio
-async def test_explicit_session_model_is_honored():
-    model = await agent._model_override_for_new_session(
-        agent.DEFAULT_GPT_MODEL_ID,
-        {"plan": "free"},
-    )
+def test_explicit_session_model_is_honored():
+    model = agent._model_override_for_new_session(agent.DEFAULT_GPT_MODEL_ID)
 
     assert model == agent.DEFAULT_GPT_MODEL_ID
 
