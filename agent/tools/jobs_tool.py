@@ -1118,8 +1118,9 @@ HF_JOBS_TOOL_SPEC = {
         "kernels-community/flash-attn2, and smoke-test the exact same attn_implementation.\n"
         "- Do NOT rely on preinstalled ML packages. Install/upgrade the latest compatible core stack "
         "in the sandbox and include the same packages in dependencies: torch, transformers, trl, "
-        "accelerate, datasets, trackio, and kernels when using Hub kernels. Use unpinned latest "
-        "stable versions by default; pin only when current docs/examples require a specific "
+        "accelerate, datasets, trackio, and kernels>=0.12.0,<0.13 when using Hub kernels. "
+        "Use unpinned latest stable versions by default for the rest of the core stack; constrain "
+        "kernels to kernels>=0.12.0,<0.13. Pin other versions only when current docs/examples require a specific "
         "compatibility set or a smoke test shows latest is incompatible. Print installed versions "
         "before model loading. If kernels and transformers are incompatible, fix the package set "
         "or choose another compatible Hub kernel, then rerun the smoke test.\n"
@@ -1130,7 +1131,7 @@ HF_JOBS_TOOL_SPEC = {
         "- Do NOT leave placeholders such as <username>, <model-name>, <project>, TODO, "
         "or similar unfinished values in scripts or job arguments.\n"
         "- dependencies MUST include every imported third-party package, including the core ML stack "
-        "torch, transformers, trl, accelerate, datasets, trackio, kernels when using Hub kernels, "
+        "torch, transformers, trl, accelerate, datasets, trackio, kernels>=0.12.0,<0.13 when using Hub kernels, "
         "and extras such as peft, bitsandbytes, sentencepiece, or protobuf when used.\n"
         "- Include trackio monitoring and provide the dashboard URL to the user. "
         "When the script uses report_to='trackio', also pass `trackio_space_id` "
@@ -1149,7 +1150,7 @@ HF_JOBS_TOOL_SPEC = {
         "3. Upgrade to larger GPU (a10g→a100→h100)\n"
         "Do NOT switch training methods (e.g. full SFT to LoRA) or reduce max_length — those change what the user gets and require explicit approval.\n\n"
         "Examples:\n"
-        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['torch', 'transformers', 'trl', 'accelerate', 'datasets', 'trackio', 'kernels'], 'hardware_flavor': 'a100-large', 'timeout': '8h'}\n"
+        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['torch', 'transformers', 'trl', 'accelerate', 'datasets', 'trackio', 'kernels>=0.12.0,<0.13'], 'hardware_flavor': 'a100-large', 'timeout': '8h'}\n"
         "Monitor: {'operation': 'ps'}, {'operation': 'logs', 'job_id': 'xxx'}, {'operation': 'cancel', 'job_id': 'xxx'}\n"
         "Docker: {'operation': 'run', 'command': ['duckdb', '-c', 'select 1 + 2'], 'image': 'duckdb/duckdb', 'hardware_flavor': 'cpu-basic', 'timeout': '1h'}\n"
     ),
@@ -1189,8 +1190,9 @@ HF_JOBS_TOOL_SPEC = {
                 "items": {"type": "string"},
                 "description": (
                     "Pip packages to install. Include ALL required packages. "
-                    "Common training set: ['torch', 'transformers', 'trl', 'accelerate', 'datasets', 'trackio', 'kernels']. "
-                    "Use unpinned latest stable versions by default; pin only when current docs/examples require a compatibility set or a smoke test shows latest is incompatible. "
+                    "Common training set: ['torch', 'transformers', 'trl', 'accelerate', 'datasets', 'trackio', 'kernels>=0.12.0,<0.13']. "
+                    "Use unpinned latest stable versions by default for the rest of the core stack; constrain kernels to kernels>=0.12.0,<0.13. "
+                    "Pin other versions only when current docs/examples require a compatibility set or a smoke test shows latest is incompatible. "
                     "Must include every imported third-party package and any used extras such as peft, bitsandbytes, sentencepiece, or protobuf. "
                     "Only used with 'script'."
                 ),

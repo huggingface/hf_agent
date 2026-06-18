@@ -210,6 +210,7 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
     assert "CORE ML DEPENDENCY FRESHNESS" in prompt
     assert "Do not rely on preinstalled packages in sandboxes or HF Jobs" in prompt
     assert "Use unpinned latest stable versions by default" in prompt
+    assert "kernels>=0.12.0,<0.13" in prompt
     assert "Do NOT fall back to default attention or compiled flash-attn" in prompt
     assert (
         "Never leave placeholder values such as <username>, <model-name>, <project>, TODO"
@@ -235,6 +236,7 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
     assert "Do NOT install compiled flash-attn" in jobs_description
     assert "Do NOT rely on preinstalled ML packages" in jobs_description
     assert "Use unpinned latest stable versions by default" in jobs_description
+    assert "kernels>=0.12.0,<0.13" in jobs_description
     assert "torch, transformers, trl, accelerate, datasets, trackio" in (
         jobs_description
     )
@@ -245,6 +247,7 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
     assert "Common training set: ['torch', 'transformers', 'trl'" in (
         dependencies_description
     )
+    assert "kernels>=0.12.0,<0.13" in dependencies_description
 
 
 def test_rendered_prompt_contains_hf_jobs_safety_guidance(monkeypatch):
@@ -263,6 +266,7 @@ def test_rendered_prompt_contains_hf_jobs_safety_guidance(monkeypatch):
     )
     assert "CORE ML DEPENDENCY FRESHNESS" in prompt
     assert "Print the installed versions before model loading" in prompt
+    assert "kernels>=0.12.0,<0.13" in prompt
 
 
 def test_local_tool_runtime_excludes_sandbox_create():
