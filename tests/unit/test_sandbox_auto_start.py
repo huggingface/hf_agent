@@ -67,6 +67,8 @@ def test_prompt_and_hf_jobs_spec_require_gpu_preflight_for_gpu_jobs():
     assert "GPU preflight is mandatory before hf_jobs" in prompt
     assert "GPU sandbox smoke test" in prompt
     assert "If you skip GPU sandbox preflight" in prompt
+    assert "for flash-attention kernels use Ampere-or-newer hardware" in prompt
+    assert "never T4" in prompt
     assert "you MUST create a GPU sandbox with sandbox_create first" in jobs_description
     assert "If skipped, state why before calling hf_jobs" in jobs_description
 
@@ -212,6 +214,8 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
     assert "Use unpinned latest stable versions by default" in prompt
     assert "kernels>=0.12.0,<0.13" in prompt
     assert "Do NOT fall back to default attention or compiled flash-attn" in prompt
+    assert "never choose T4 sandboxes or T4 HF Jobs" in prompt
+    assert "T4 is pre-Ampere" in prompt
     assert (
         "Never leave placeholder values such as <username>, <model-name>, <project>, TODO"
         in prompt
@@ -234,6 +238,8 @@ def test_prompt_and_hf_jobs_spec_require_exact_tested_scripts():
         jobs_description
     )
     assert "Do NOT install compiled flash-attn" in jobs_description
+    assert "never choose T4 sandboxes or T4 HF Jobs" in jobs_description
+    assert "T4 is pre-Ampere" in jobs_description
     assert "Do NOT rely on preinstalled ML packages" in jobs_description
     assert "Use unpinned latest stable versions by default" in jobs_description
     assert "kernels>=0.12.0,<0.13" in jobs_description
@@ -267,6 +273,7 @@ def test_rendered_prompt_contains_hf_jobs_safety_guidance(monkeypatch):
     assert "CORE ML DEPENDENCY FRESHNESS" in prompt
     assert "Print the installed versions before model loading" in prompt
     assert "kernels>=0.12.0,<0.13" in prompt
+    assert "never choose T4 sandboxes or T4 HF Jobs" in prompt
 
 
 def test_local_tool_runtime_excludes_sandbox_create():
