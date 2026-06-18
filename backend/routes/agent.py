@@ -122,7 +122,6 @@ def _available_models() -> list[dict[str, Any]]:
         {
             "id": DEFAULT_OPUS_MODEL_ID,
             "label": "Claude Opus 4.8",
-            "recommended": True,
         },
         {
             "id": DEFAULT_GPT_MODEL_ID,
@@ -139,6 +138,7 @@ def _available_models() -> list[dict[str, Any]]:
         {
             "id": DEFAULT_FREE_MODEL_ID,
             "label": "GLM 5.2",
+            "recommended": True,
         },
         {
             "id": DEEPSEEK_V4_PRO_MODEL_ID,
@@ -162,7 +162,7 @@ def _validate_model_id(model_id: str | None) -> None:
 
 
 def _default_model_for_user(user: dict[str, Any]) -> str:
-    return DEFAULT_OPUS_MODEL_ID if user.get("plan") == "pro" else DEFAULT_FREE_MODEL_ID
+    return DEFAULT_FREE_MODEL_ID
 
 
 async def _model_override_for_new_session(
@@ -171,8 +171,7 @@ async def _model_override_for_new_session(
 ) -> str | None:
     """Return the model override to use when creating a new session.
 
-    Explicit model requests are honored. Empty web requests default to GLM for
-    non-Pro users and Opus for Pro users.
+    Explicit model requests are honored. Empty web requests default to GLM 5.2.
     """
     return requested_model or _default_model_for_user(user)
 
@@ -293,9 +292,9 @@ async def llm_health_check(
     """Check if the LLM provider is reachable and the API key is valid.
 
     Makes a minimal 1-token completion call against the authenticated user's
-    plan-aware default model when a token is available. For token-less HF Router
-    requests, returns ``status="skipped"`` instead of making an unauthenticated
-    probe. Catches common errors:
+    default model when a token is available. For token-less HF Router requests,
+    returns ``status="skipped"`` instead of making an unauthenticated probe.
+    Catches common errors:
     - 401 → invalid API key
     - 402/insufficient_quota → out of credits
     - 429 → rate limited

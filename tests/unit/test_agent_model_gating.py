@@ -22,18 +22,18 @@ def test_available_models_exclude_sonnet_and_have_no_pro_gate():
     models = {model["id"]: model for model in agent.AVAILABLE_MODELS}
 
     assert models[agent.DEFAULT_OPUS_MODEL_ID]["label"] == "Claude Opus 4.8"
-    assert models[agent.DEFAULT_OPUS_MODEL_ID]["recommended"] is True
     assert models[agent.DEFAULT_FREE_MODEL_ID]["label"] == "GLM 5.2"
     assert models["moonshotai/Kimi-K2.7-Code:novita"]["label"] == "Kimi K2.7 Code"
     assert models["MiniMaxAI/MiniMax-M3:novita"]["label"] == "MiniMax M3"
-    assert "recommended" not in models[agent.DEFAULT_FREE_MODEL_ID]
+    assert "recommended" not in models[agent.DEFAULT_OPUS_MODEL_ID]
+    assert models[agent.DEFAULT_FREE_MODEL_ID]["recommended"] is True
     assert all("provider" not in model for model in models.values())
     assert all("minimum_plan" not in model for model in models.values())
     assert all("tier" not in model for model in models.values())
 
 
-def test_default_model_for_user_is_plan_aware():
-    assert agent._default_model_for_user({"plan": "pro"}) == agent.DEFAULT_OPUS_MODEL_ID
+def test_default_model_for_user_is_glm_for_all_plans():
+    assert agent._default_model_for_user({"plan": "pro"}) == agent.DEFAULT_FREE_MODEL_ID
     assert (
         agent._default_model_for_user({"plan": "free"}) == agent.DEFAULT_FREE_MODEL_ID
     )
@@ -41,7 +41,7 @@ def test_default_model_for_user_is_plan_aware():
 
 
 @pytest.mark.asyncio
-async def test_llm_health_uses_plan_default_and_request_hf_token(monkeypatch):
+async def test_llm_health_uses_default_and_request_hf_token(monkeypatch):
     class Request:
         headers = {"Authorization": "Bearer user-token"}
         cookies = {}
@@ -76,7 +76,7 @@ async def test_llm_health_uses_plan_default_and_request_hf_token(monkeypatch):
     response = await agent.llm_health_check(Request(), {"user_id": "u1", "plan": "pro"})
 
     assert response.status == "ok"
-    assert resolved == [(agent.DEFAULT_OPUS_MODEL_ID, "user-token", "high", False)]
+    assert resolved == [(agent.DEFAULT_FREE_MODEL_ID, "user-token", "high", False)]
     assert completions[0]["api_key"] == "user-token"
 
 
@@ -173,10 +173,10 @@ async def test_generate_title_omits_session_id_from_hf_router(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_session_model_uses_plan_default():
+async def test_empty_session_model_uses_glm_default():
     assert (
         await agent._model_override_for_new_session(None, {"plan": "pro"})
-        == agent.DEFAULT_OPUS_MODEL_ID
+        == agent.DEFAULT_FREE_MODEL_ID
     )
     assert (
         await agent._model_override_for_new_session(None, {"plan": "free"})

@@ -383,7 +383,7 @@ Edit `configs/cli_agent_config.json` for CLI defaults, or
 
 ```json
 {
-  "model_name": "anthropic/claude-opus-4.8:fal-ai",
+  "model_name": "zai-org/GLM-5.2:novita",
   "mcpServers": {
     "your-server-name": {
       "transport": "http",

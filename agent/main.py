@@ -86,7 +86,7 @@ def _validate_cli_model_override(model: str) -> str:
     if not model_switcher.is_valid_model_id(model):
         raise ValueError(
             "Invalid model id. Use an HF Router id like "
-            "'anthropic/claude-opus-4.8:fal-ai' or a supported local prefix."
+            "'zai-org/GLM-5.2:novita' or a supported local prefix."
         )
     return model.removeprefix("huggingface/")
 

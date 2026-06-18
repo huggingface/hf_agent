@@ -39,10 +39,10 @@ def test_suggested_models_include_router_claude_models_and_no_native_ids():
     assert all(model_id.count("/") >= 1 for model_id in ids)
 
 
-def test_cli_default_model_is_opus():
+def test_cli_default_model_is_glm():
     config = load_config(CLI_CONFIG_PATH)
 
-    assert config.model_name == "anthropic/claude-opus-4.8:fal-ai"
+    assert config.model_name == "zai-org/GLM-5.2:novita"
 
 
 def test_model_switcher_accepts_router_model_ids():

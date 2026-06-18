@@ -53,7 +53,6 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
     name: 'Claude Opus 4.8',
     modelPath: CLAUDE_OPUS_48_MODEL_PATH,
     avatarUrl: getHfAvatarUrl(CLAUDE_OPUS_48_MODEL_PATH),
-    recommended: true,
   },
   {
     id: 'gpt-5.5',
@@ -78,6 +77,7 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
     name: 'GLM 5.2',
     modelPath: GLM_52_MODEL_PATH,
     avatarUrl: getHfAvatarUrl(GLM_52_MODEL_PATH),
+    recommended: true,
   },
   {
     id: 'deepseek-v4-pro',
