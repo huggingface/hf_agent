@@ -108,6 +108,7 @@ class Session:
         context_manager: ContextManager | None = None,
         hf_token: str | None = None,
         local_mode: bool = False,
+        autonomous_mode: bool = False,
         stream: bool = True,
         notification_gateway: NotificationGateway | None = None,
         notification_destinations: list[str] | None = None,
@@ -123,6 +124,7 @@ class Session:
         self.hf_username: Optional[str] = hf_username
         self.user_plan: str | None = user_plan
         self.local_mode = local_mode
+        self.autonomous_mode = autonomous_mode
         self.persistence_store = persistence_store
         self.tool_router = tool_router
         self.stream = stream
@@ -135,7 +137,9 @@ class Session:
             untouched_messages=5,
             tool_specs=tool_specs,
             hf_token=hf_token,
+            hf_username=hf_username,
             local_mode=local_mode,
+            autonomous_mode=autonomous_mode,
         )
         self.event_queue = event_queue
         self.session_id = session_id or str(uuid.uuid4())
@@ -500,7 +504,9 @@ class Session:
             return refresh(
                 tool_specs=tool_specs,
                 hf_token=self.hf_token,
+                hf_username=self.hf_username,
                 local_mode=self.local_mode,
+                autonomous_mode=self.autonomous_mode,
             )
         except Exception as e:
             logger.warning("Failed to refresh system prompt for new chat: %s", e)

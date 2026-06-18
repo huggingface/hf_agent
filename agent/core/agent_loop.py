@@ -793,6 +793,33 @@ class LLMResult:
     usage: dict = field(default_factory=dict)
 
 
+def _session_cancelled(session: Any) -> bool:
+    return bool(getattr(session, "is_cancelled", False))
+
+
+async def _sleep_for_retry_or_cancel(session: Session, delay: float) -> bool:
+    """Sleep for a retry delay, waking early if the session is interrupted."""
+    if _session_cancelled(session):
+        return True
+
+    cancel_event = getattr(session, "_cancelled", None)
+    if cancel_event is None or not hasattr(cancel_event, "wait"):
+        await asyncio.sleep(delay)
+        return _session_cancelled(session)
+
+    sleep_task = asyncio.create_task(asyncio.sleep(delay))
+    cancel_task = asyncio.create_task(cancel_event.wait())
+    done, pending = await asyncio.wait(
+        {sleep_task, cancel_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    return cancel_task in done or _session_cancelled(session)
+
+
 def _is_invalid_thinking_signature_error(exc: Exception) -> bool:
     """Return True when a provider rejected replayed thinking metadata."""
     text = str(exc)
@@ -911,11 +938,22 @@ async def _call_llm_streaming(
     session: Session, messages, tools, llm_params
 ) -> LLMResult:
     """Call the LLM with streaming, emitting assistant_chunk events."""
-    response = None
     _healed_effort = False  # one-shot safety net per call
     _healed_thinking_signature = False
     t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
+        if _session_cancelled(session):
+            return LLMResult(
+                content=None,
+                tool_calls_acc={},
+                token_count=0,
+                finish_reason=None,
+            )
+        full_content = ""
+        tool_calls_acc: dict[int, dict] = {}
+        token_count = 0
+        finish_reason = None
+        final_usage_chunk = None
         try:
             request_llm_params = with_prompt_cache_params(
                 llm_params,
@@ -933,10 +971,93 @@ async def _call_llm_streaming(
                 timeout=600,
                 **request_llm_params,
             )
-            break
+
+            async for chunk in response:
+                if session.is_cancelled:
+                    tool_calls_acc.clear()
+                    break
+
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        token_count = chunk.usage.total_tokens
+                        final_usage_chunk = chunk
+                    continue
+
+                delta = choice.delta
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+
+                if delta.content:
+                    full_content += delta.content
+                    await session.send_event(
+                        Event(
+                            event_type="assistant_chunk",
+                            data={"content": delta.content},
+                        )
+                    )
+
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if tc_delta.id:
+                            tool_calls_acc[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_acc[idx]["function"]["name"] += (
+                                    tc_delta.function.name
+                                )
+                            if tc_delta.function.arguments:
+                                tool_calls_acc[idx]["function"]["arguments"] += (
+                                    tc_delta.function.arguments
+                                )
+
+                if hasattr(chunk, "usage") and chunk.usage:
+                    token_count = chunk.usage.total_tokens
+                    final_usage_chunk = chunk
+
+            usage = await telemetry.record_llm_call(
+                session,
+                model=llm_params.get("model", session.config.model_name),
+                response=final_usage_chunk,
+                latency_ms=int((time.monotonic() - t_start) * 1000),
+                finish_reason=finish_reason,
+            )
+            return LLMResult(
+                content=full_content or None,
+                tool_calls_acc=tool_calls_acc,
+                token_count=token_count,
+                finish_reason=finish_reason,
+                usage=usage,
+            )
         except ContextWindowExceededError:
             raise
         except Exception as e:
+            stream_received_output = bool(full_content or tool_calls_acc)
+            if full_content:
+                await session.send_event(
+                    Event(event_type="assistant_stream_end", data={})
+                )
+            if stream_received_output:
+                logger.warning(
+                    "Streaming LLM error after partial response; not retrying "
+                    "to avoid duplicating assistant output/tool calls: %s",
+                    e,
+                )
+                await telemetry.record_llm_call(
+                    session,
+                    model=llm_params.get("model", session.config.model_name),
+                    response=final_usage_chunk,
+                    latency_ms=int((time.monotonic() - t_start) * 1000),
+                    finish_reason=finish_reason or "error",
+                )
+                raise
             if _is_context_overflow_error(e):
                 raise ContextWindowExceededError(str(e)) from e
             if not _healed_effort and _is_effort_config_error(e):
@@ -980,77 +1101,15 @@ async def _call_llm_streaming(
                         },
                     )
                 )
-                await asyncio.sleep(_delay)
+                if await _sleep_for_retry_or_cancel(session, _delay):
+                    return LLMResult(
+                        content=None,
+                        tool_calls_acc={},
+                        token_count=0,
+                        finish_reason=None,
+                    )
                 continue
             raise
-
-    full_content = ""
-    tool_calls_acc: dict[int, dict] = {}
-    token_count = 0
-    finish_reason = None
-    final_usage_chunk = None
-
-    async for chunk in response:
-        if session.is_cancelled:
-            tool_calls_acc.clear()
-            break
-
-        choice = chunk.choices[0] if chunk.choices else None
-        if not choice:
-            if hasattr(chunk, "usage") and chunk.usage:
-                token_count = chunk.usage.total_tokens
-                final_usage_chunk = chunk
-            continue
-
-        delta = choice.delta
-        if choice.finish_reason:
-            finish_reason = choice.finish_reason
-
-        if delta.content:
-            full_content += delta.content
-            await session.send_event(
-                Event(event_type="assistant_chunk", data={"content": delta.content})
-            )
-
-        if delta.tool_calls:
-            for tc_delta in delta.tool_calls:
-                idx = tc_delta.index
-                if idx not in tool_calls_acc:
-                    tool_calls_acc[idx] = {
-                        "id": "",
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    }
-                if tc_delta.id:
-                    tool_calls_acc[idx]["id"] = tc_delta.id
-                if tc_delta.function:
-                    if tc_delta.function.name:
-                        tool_calls_acc[idx]["function"]["name"] += (
-                            tc_delta.function.name
-                        )
-                    if tc_delta.function.arguments:
-                        tool_calls_acc[idx]["function"]["arguments"] += (
-                            tc_delta.function.arguments
-                        )
-
-        if hasattr(chunk, "usage") and chunk.usage:
-            token_count = chunk.usage.total_tokens
-            final_usage_chunk = chunk
-
-    usage = await telemetry.record_llm_call(
-        session,
-        model=llm_params.get("model", session.config.model_name),
-        response=final_usage_chunk,
-        latency_ms=int((time.monotonic() - t_start) * 1000),
-        finish_reason=finish_reason,
-    )
-    return LLMResult(
-        content=full_content or None,
-        tool_calls_acc=tool_calls_acc,
-        token_count=token_count,
-        finish_reason=finish_reason,
-        usage=usage,
-    )
 
 
 async def _call_llm_non_streaming(
@@ -1062,6 +1121,13 @@ async def _call_llm_non_streaming(
     _healed_thinking_signature = False
     t_start = time.monotonic()
     for _llm_attempt in range(_MAX_LLM_RETRIES):
+        if _session_cancelled(session):
+            return LLMResult(
+                content=None,
+                tool_calls_acc={},
+                token_count=0,
+                finish_reason=None,
+            )
         try:
             request_llm_params = with_prompt_cache_params(
                 llm_params,
@@ -1125,7 +1191,13 @@ async def _call_llm_non_streaming(
                         },
                     )
                 )
-                await asyncio.sleep(_delay)
+                if await _sleep_for_retry_or_cancel(session, _delay):
+                    return LLMResult(
+                        content=None,
+                        tool_calls_acc={},
+                        token_count=0,
+                        finish_reason=None,
+                    )
                 continue
             raise
 
@@ -2557,7 +2629,9 @@ async def submission_loop(
     session_holder: list | None = None,
     hf_token: str | None = None,
     user_id: str | None = None,
+    hf_username: str | None = None,
     local_mode: bool = False,
+    autonomous_mode: bool = False,
     stream: bool = True,
     notification_gateway: NotificationGateway | None = None,
     notification_destinations: list[str] | None = None,
@@ -2576,8 +2650,10 @@ async def submission_loop(
         tool_router=tool_router,
         hf_token=hf_token,
         user_id=user_id,
+        hf_username=hf_username,
         user_plan=user_plan,
         local_mode=local_mode,
+        autonomous_mode=autonomous_mode,
         stream=stream,
         notification_gateway=notification_gateway,
         notification_destinations=notification_destinations,

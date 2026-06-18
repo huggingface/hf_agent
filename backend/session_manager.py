@@ -2012,6 +2012,22 @@ class SessionManager:
             )
         return self.get_session_info(session_id)
 
+    async def activate_session(self, session_id: str) -> dict[str, Any] | None:
+        """Mark a session as revisited without resetting its usage window."""
+        agent_session = self.sessions.get(session_id)
+        if not agent_session:
+            return None
+
+        self._touch(agent_session)
+
+        store = self._store()
+        if getattr(store, "enabled", False):
+            await store.update_session_fields(
+                session_id,
+                last_active_at=agent_session.last_active_at,
+            )
+        return self.get_session_info(session_id)
+
     def set_notification_destinations(
         self, session_id: str, destinations: list[str]
     ) -> list[str]:
