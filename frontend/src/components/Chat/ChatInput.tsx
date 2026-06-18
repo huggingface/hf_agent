@@ -87,7 +87,7 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
   },
 ];
 
-const DEFAULT_FREE_MODEL_OPTION_ID = 'glm-5.2';
+const DEFAULT_MODEL_PATH = GLM_52_MODEL_PATH;
 
 const normalizeModelPath = (path: string | undefined) => (
   (path ?? '')
@@ -198,10 +198,10 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
   const modelOptionsRef = useRef<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
   const sessionIdRef = useRef<string | undefined>(sessionId);
-  const [selectedModelId, setSelectedModelId] = useState<string>(
+  const [selectedModelPath, setSelectedModelPath] = useState<string>(
     () => (
-      findModelByPath(initialModelPath ?? '', DEFAULT_MODEL_OPTIONS)?.id
-      ?? DEFAULT_FREE_MODEL_OPTION_ID
+      findModelByPath(initialModelPath ?? '', DEFAULT_MODEL_OPTIONS)?.modelPath
+      ?? DEFAULT_MODEL_PATH
     ),
   );
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
@@ -238,7 +238,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
         setModelOptions(next);
         if (!sessionIdRef.current) {
           const current = data.current ? findModelByPath(data.current, next) : null;
-          if (current) setSelectedModelId(current.id);
+          if (current) setSelectedModelPath(current.modelPath);
         }
       })
       .catch(() => { /* ignore */ });
@@ -256,7 +256,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
         if (cancelled) return;
         if (data?.model) {
           const model = findModelByPath(data.model, modelOptionsRef.current);
-          if (model) setSelectedModelId(model.id);
+          setSelectedModelPath(model?.modelPath ?? data.model);
           updateSessionModel(sessionId, data.model);
         }
       })
@@ -266,8 +266,10 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
 
   const visibleModelOptions = modelOptions;
   const selectedModel = (
-    visibleModelOptions.find(m => m.id === selectedModelId)
-    || modelOptions.find(m => m.id === selectedModelId)
+    findModelByPath(selectedModelPath, visibleModelOptions)
+    || findModelByPath(selectedModelPath, modelOptions)
+    || visibleModelOptions.find(m => m.recommended)
+    || modelOptions.find(m => m.recommended)
     || visibleModelOptions[0]
     || modelOptions[0]
   );
@@ -388,7 +390,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
         body: JSON.stringify({ model: model.modelPath }),
       });
       if (res.ok) {
-        setSelectedModelId(model.id);
+        setSelectedModelPath(model.modelPath);
         updateSessionModel(sessionId, model.modelPath);
         setModelSwitchError(null);
         return;
@@ -705,7 +707,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
             <MenuItem
               key={model.id}
               onClick={() => handleSelectModel(model)}
-              selected={selectedModelId === model.id}
+              selected={selectedModel.modelPath === model.modelPath}
               sx={{
                 py: 1.5,
                 '&.Mui-selected': {
