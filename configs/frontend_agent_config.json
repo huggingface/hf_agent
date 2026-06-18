@@ -1,5 +1,5 @@
 {
-  "model_name": "${ML_INTERN_DEFAULT_MODEL_ID:-moonshotai/Kimi-K2.6}",
+  "model_name": "${ML_INTERN_DEFAULT_MODEL_ID:-zai-org/GLM-5.2:novita}",
   "save_sessions": true,
   "session_dataset_repo": "smolagents/ml-intern-sessions",
   "share_traces": true,

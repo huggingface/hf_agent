@@ -29,24 +29,24 @@ from agent.core.local_models import (
 from agent.core.model_ids import (
     CLAUDE_OPUS_48_MODEL_ID,
     DEEPSEEK_V4_PRO_MODEL_ID,
-    GLM_51_MODEL_ID,
+    GLM_52_MODEL_ID,
     GPT_55_MODEL_ID,
-    KIMI_K26_MODEL_ID,
-    MINIMAX_M27_MODEL_ID,
+    KIMI_K27_CODE_MODEL_ID,
+    MINIMAX_M3_MODEL_ID,
     strip_huggingface_model_prefix,
 )
 
 
 # Suggested models shown by `/model` (not a gate). Users can paste any HF
-# Router model id (e.g. "MiniMaxAI/MiniMax-M2.7"). Append ":fastest",
+# Router model id (e.g. "MiniMaxAI/MiniMax-M3:novita"). Append ":fastest",
 # ":cheapest", ":preferred", or ":<provider>" to override the default routing
 # policy (auto = fastest with failover).
 SUGGESTED_MODELS = [
     {"id": CLAUDE_OPUS_48_MODEL_ID, "label": "Claude Opus 4.8"},
     {"id": GPT_55_MODEL_ID, "label": "GPT-5.5"},
-    {"id": MINIMAX_M27_MODEL_ID, "label": "MiniMax M2.7"},
-    {"id": KIMI_K26_MODEL_ID, "label": "Kimi K2.6"},
-    {"id": GLM_51_MODEL_ID, "label": "GLM 5.1"},
+    {"id": MINIMAX_M3_MODEL_ID, "label": "MiniMax M3"},
+    {"id": KIMI_K27_CODE_MODEL_ID, "label": "Kimi K2.7 Code"},
+    {"id": GLM_52_MODEL_ID, "label": "GLM 5.2"},
     {"id": DEEPSEEK_V4_PRO_MODEL_ID, "label": "DeepSeek V4 Pro"},
 ]
 
@@ -161,7 +161,7 @@ def print_model_listing(config, console) -> None:
         marker = " [dim]<-- current[/dim]" if m["id"] == current else ""
         console.print(f"  {m['id']}  [dim]({m['label']})[/dim]{marker}")
     console.print(
-        "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M2.7').\n"
+        "\n[dim]Paste any HF model id (e.g. 'MiniMaxAI/MiniMax-M3:novita').\n"
         "Add ':fastest', ':cheapest', ':preferred', or ':<provider>' to override routing.\n"
         "Use 'ollama/<model>', 'vllm/<model>', 'lm_studio/<model>', or "
         "'llamacpp/<model>' for local OpenAI-compatible endpoints.[/dim]"

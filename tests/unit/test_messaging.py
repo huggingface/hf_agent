@@ -53,7 +53,7 @@ def _config_with_messaging(**destination_overrides) -> Config:
     }
     return Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "destinations": {
@@ -79,7 +79,7 @@ def test_messaging_config_validates_destination_names():
     with pytest.raises(ValidationError):
         Config.model_validate(
             {
-                "model_name": "moonshotai/Kimi-K2.6",
+                "model_name": "moonshotai/Kimi-K2.7-Code",
                 "messaging": {
                     "enabled": True,
                     "destinations": {
@@ -101,7 +101,7 @@ def test_messaging_config_validates_destination_names():
 def test_messaging_config_default_auto_destinations_only_returns_auto_enabled():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "destinations": {
@@ -128,7 +128,7 @@ def test_messaging_config_default_auto_destinations_only_returns_auto_enabled():
 def test_messaging_config_default_auto_destinations_empty_when_disabled():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": False,
                 "destinations": {
@@ -272,14 +272,14 @@ async def test_notify_tool_sends_to_allowlisted_destinations():
     assert len(gateway.sent) == 1
     sent = gateway.sent[0]
     assert sent.metadata["session_id"] == "sess-42"
-    assert sent.metadata["model"] == "moonshotai/Kimi-K2.6"
+    assert sent.metadata["model"] == "moonshotai/Kimi-K2.7-Code"
 
 
 @pytest.mark.asyncio
 async def test_session_auto_notifications_only_send_opted_in_auto_destinations():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "destinations": {
@@ -325,7 +325,7 @@ async def test_session_auto_notifications_only_send_opted_in_auto_destinations()
 async def test_turn_complete_auto_notification_includes_final_response_summary():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "destinations": {
@@ -366,7 +366,7 @@ async def test_turn_complete_auto_notification_includes_final_response_summary()
 async def test_turn_complete_auto_notification_supports_longer_summary():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "destinations": {
@@ -406,7 +406,7 @@ async def test_turn_complete_auto_notification_supports_longer_summary():
 async def test_turn_complete_auto_notification_can_be_deferred():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "destinations": {
@@ -452,7 +452,7 @@ async def test_turn_complete_auto_notification_can_be_deferred():
 async def test_turn_complete_can_be_disabled_by_custom_auto_event_config():
     config = Config.model_validate(
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": True,
                 "auto_event_types": ["error"],

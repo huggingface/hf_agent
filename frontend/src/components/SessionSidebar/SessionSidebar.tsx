@@ -125,9 +125,9 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
   const handleSelect = useCallback(
     (sessionId: string) => {
-      const shouldResetUsageWindow = sessionId !== activeSessionId;
+      const shouldActivateSession = sessionId !== activeSessionId;
       switchSession(sessionId);
-      if (shouldResetUsageWindow) {
+      if (shouldActivateSession) {
         void (async () => {
           try {
             const response = await apiFetch(`/api/session/${sessionId}/activate`, {
@@ -138,7 +138,7 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
             mergeServerSessions([info]);
             void useUsageStore.getState().fetchUsage(sessionId);
           } catch {
-            /* best effort: usage falls back to the previously persisted window */
+            /* best effort: usage falls back to the existing session metadata */
           }
         })();
       }
