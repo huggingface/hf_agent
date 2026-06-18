@@ -560,9 +560,9 @@ async def activate_session(
     request: Request,
     user: dict = Depends(get_current_user),
 ) -> SessionInfo:
-    """Mark a session as actively revisited and reset its usage meter window."""
+    """Mark a session as actively revisited without resetting usage."""
     await _check_session_access(session_id, user, request)
-    info = await _reset_usage_window(session_id)
+    info = await session_manager.activate_session(session_id)
     if not info:
         raise HTTPException(status_code=404, detail="Session not found")
     return SessionInfo(**info)

@@ -217,6 +217,33 @@ async def test_reset_session_usage_window_updates_runtime_and_store():
     }
 
 
+@pytest.mark.asyncio
+async def test_activate_session_preserves_usage_window_and_billing_id():
+    store = RestoreStore()
+    manager = _manager_with_store(store)
+    agent_session = _runtime_agent_session("s1")
+    manager.sessions["s1"] = agent_session
+    usage_window_started_at = datetime(2026, 6, 5, 12, 30, tzinfo=UTC)
+    billing_session_id = agent_session.inference_billing_session_id
+    old_last_active_at = datetime(2000, 1, 1)
+    agent_session.usage_window_started_at = usage_window_started_at
+    agent_session.last_active_at = old_last_active_at
+    agent_session.usage_warning_spend_cache = {"spend_usd": 12.0}
+
+    info = await manager.activate_session("s1")
+
+    assert agent_session.usage_window_started_at == usage_window_started_at
+    assert agent_session.inference_billing_session_id == billing_session_id
+    assert agent_session.session.inference_billing_session_id == billing_session_id
+    assert agent_session.usage_warning_spend_cache == {"spend_usd": 12.0}
+    assert agent_session.last_active_at > old_last_active_at
+    assert info is not None
+    assert info["usage_window_started_at"] == usage_window_started_at.isoformat()
+    session_id, fields = store.updated_fields[-1]
+    assert session_id == "s1"
+    assert fields == {"last_active_at": agent_session.last_active_at}
+
+
 def test_usage_threshold_pending_approval_serializes_and_restores():
     manager = _manager_with_store(NoopSessionStore())
     pending = {
