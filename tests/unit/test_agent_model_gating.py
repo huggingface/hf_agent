@@ -21,23 +21,21 @@ BILLING_SESSION_ID = "00000000-0000-4000-8000-000000000001"
 def test_available_models_exclude_sonnet_and_have_no_pro_gate():
     models = {model["id"]: model for model in agent.AVAILABLE_MODELS}
 
-    assert models[agent.DEFAULT_OPUS_MODEL_ID]["label"] == "Claude Opus 4.8"
-    assert models[agent.DEFAULT_FREE_MODEL_ID]["label"] == "GLM 5.2"
+    assert models[agent.CLAUDE_OPUS_48_MODEL_ID]["label"] == "Claude Opus 4.8"
+    assert models[agent.DEFAULT_MODEL_ID]["label"] == "GLM 5.2"
     assert models["moonshotai/Kimi-K2.7-Code:novita"]["label"] == "Kimi K2.7 Code"
     assert models["MiniMaxAI/MiniMax-M3:novita"]["label"] == "MiniMax M3"
-    assert "recommended" not in models[agent.DEFAULT_OPUS_MODEL_ID]
-    assert models[agent.DEFAULT_FREE_MODEL_ID]["recommended"] is True
+    assert "recommended" not in models[agent.CLAUDE_OPUS_48_MODEL_ID]
+    assert models[agent.DEFAULT_MODEL_ID]["recommended"] is True
     assert all("provider" not in model for model in models.values())
     assert all("minimum_plan" not in model for model in models.values())
     assert all("tier" not in model for model in models.values())
 
 
 def test_default_model_for_user_is_glm_for_all_plans():
-    assert agent._default_model_for_user({"plan": "pro"}) == agent.DEFAULT_FREE_MODEL_ID
-    assert (
-        agent._default_model_for_user({"plan": "free"}) == agent.DEFAULT_FREE_MODEL_ID
-    )
-    assert agent._default_model_for_user({}) == agent.DEFAULT_FREE_MODEL_ID
+    assert agent._default_model_for_user({"plan": "pro"}) == agent.DEFAULT_MODEL_ID
+    assert agent._default_model_for_user({"plan": "free"}) == agent.DEFAULT_MODEL_ID
+    assert agent._default_model_for_user({}) == agent.DEFAULT_MODEL_ID
 
 
 @pytest.mark.asyncio
@@ -68,7 +66,7 @@ async def test_llm_health_uses_default_and_request_hf_token(monkeypatch):
     monkeypatch.setattr(
         agent.session_manager,
         "config",
-        SimpleNamespace(model_name=agent.DEFAULT_FREE_MODEL_ID),
+        SimpleNamespace(model_name=agent.DEFAULT_MODEL_ID),
     )
     monkeypatch.setattr(agent, "_resolve_llm_params", fake_resolve_llm_params)
     monkeypatch.setattr(agent, "acompletion", fake_acompletion)
@@ -76,7 +74,7 @@ async def test_llm_health_uses_default_and_request_hf_token(monkeypatch):
     response = await agent.llm_health_check(Request(), {"user_id": "u1", "plan": "pro"})
 
     assert response.status == "ok"
-    assert resolved == [(agent.DEFAULT_FREE_MODEL_ID, "user-token", "high", False)]
+    assert resolved == [(agent.DEFAULT_MODEL_ID, "user-token", "high", False)]
     assert completions[0]["api_key"] == "user-token"
 
 
@@ -98,7 +96,7 @@ async def test_llm_health_skips_router_probe_without_token(monkeypatch):
     monkeypatch.setattr(
         agent.session_manager,
         "config",
-        SimpleNamespace(model_name=agent.DEFAULT_OPUS_MODEL_ID),
+        SimpleNamespace(model_name=agent.CLAUDE_OPUS_48_MODEL_ID),
     )
     monkeypatch.setattr(agent, "_resolve_llm_params", fail_resolve_llm_params)
     monkeypatch.setattr(agent, "acompletion", fail_acompletion)
@@ -108,7 +106,7 @@ async def test_llm_health_skips_router_probe_without_token(monkeypatch):
     )
 
     assert response.status == "skipped"
-    assert response.model == agent.DEFAULT_FREE_MODEL_ID
+    assert response.model == agent.DEFAULT_MODEL_ID
 
 
 @pytest.mark.asyncio
@@ -176,11 +174,11 @@ async def test_generate_title_omits_session_id_from_hf_router(monkeypatch):
 async def test_empty_session_model_uses_glm_default():
     assert (
         await agent._model_override_for_new_session(None, {"plan": "pro"})
-        == agent.DEFAULT_FREE_MODEL_ID
+        == agent.DEFAULT_MODEL_ID
     )
     assert (
         await agent._model_override_for_new_session(None, {"plan": "free"})
-        == agent.DEFAULT_FREE_MODEL_ID
+        == agent.DEFAULT_MODEL_ID
     )
 
 
@@ -215,13 +213,13 @@ async def test_switching_to_opus_is_allowed_for_free_user(monkeypatch):
 
     response = await agent.set_session_model(
         "s1",
-        {"model": agent.DEFAULT_OPUS_MODEL_ID},
+        {"model": agent.CLAUDE_OPUS_48_MODEL_ID},
         request=None,
         user={"user_id": "u1", "plan": "free"},
     )
 
-    assert response == {"session_id": "s1", "model": agent.DEFAULT_OPUS_MODEL_ID}
-    assert updated == [("s1", agent.DEFAULT_OPUS_MODEL_ID)]
+    assert response == {"session_id": "s1", "model": agent.CLAUDE_OPUS_48_MODEL_ID}
+    assert updated == [("s1", agent.CLAUDE_OPUS_48_MODEL_ID)]
 
 
 @pytest.mark.asyncio
@@ -304,9 +302,9 @@ async def test_restore_summary_uses_default_model_without_quota_gate(monkeypatch
     )
 
     assert response.session_id == "s1"
-    assert response.model == agent.DEFAULT_FREE_MODEL_ID
+    assert response.model == agent.DEFAULT_MODEL_ID
     assert events == [
-        ("create", agent.DEFAULT_FREE_MODEL_ID, "free"),
+        ("create", agent.DEFAULT_MODEL_ID, "free"),
         ("check", "s1", False),
         ("seed", "s1"),
     ]

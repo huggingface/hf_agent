@@ -72,9 +72,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["agent"])
 _background_route_tasks: set[asyncio.Task] = set()
 
-DEFAULT_OPUS_MODEL_ID = CLAUDE_OPUS_48_MODEL_ID
 DEFAULT_GPT_MODEL_ID = GPT_55_MODEL_ID
-DEFAULT_FREE_MODEL_ID = GLM_52_MODEL_ID
+DEFAULT_MODEL_ID = GLM_52_MODEL_ID
 DATASET_UPLOAD_MULTIPART_SLACK_BYTES = 1024 * 1024
 
 
@@ -120,7 +119,7 @@ def _schedule_usage_refresh_and_upload(
 def _available_models() -> list[dict[str, Any]]:
     models = [
         {
-            "id": DEFAULT_OPUS_MODEL_ID,
+            "id": CLAUDE_OPUS_48_MODEL_ID,
             "label": "Claude Opus 4.8",
         },
         {
@@ -136,7 +135,7 @@ def _available_models() -> list[dict[str, Any]]:
             "label": "MiniMax M3",
         },
         {
-            "id": DEFAULT_FREE_MODEL_ID,
+            "id": DEFAULT_MODEL_ID,
             "label": "GLM 5.2",
             "recommended": True,
         },
@@ -162,7 +161,7 @@ def _validate_model_id(model_id: str | None) -> None:
 
 
 def _default_model_for_user(user: dict[str, Any]) -> str:
-    return DEFAULT_FREE_MODEL_ID
+    return DEFAULT_MODEL_ID
 
 
 async def _model_override_for_new_session(
