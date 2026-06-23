@@ -999,7 +999,7 @@ async def _call_llm_streaming(
 
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:
-                        idx = tc_delta.index
+                        idx = tc_delta.index if tc_delta.index is not None else 0
                         if idx not in tool_calls_acc:
                             tool_calls_acc[idx] = {
                                 "id": "",
@@ -1007,6 +1007,23 @@ async def _call_llm_streaming(
                                 "function": {"name": "", "arguments": ""},
                             }
                         if tc_delta.id:
+                            # New tool call arriving on an index that already
+                            # holds a *different* call — the model is reusing
+                            # the index (violates the OpenAI streaming spec).
+                            # Allocate a fresh slot so names don't merge.
+                            if (
+                                tool_calls_acc[idx]["id"]
+                                and tool_calls_acc[idx]["id"] != tc_delta.id
+                            ):
+                                idx = max(tool_calls_acc.keys()) + 1
+                                tool_calls_acc[idx] = {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "",
+                                        "arguments": "",
+                                    },
+                                }
                             tool_calls_acc[idx]["id"] = tc_delta.id
                         if tc_delta.function:
                             if tc_delta.function.name:
