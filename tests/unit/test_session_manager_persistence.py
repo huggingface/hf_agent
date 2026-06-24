@@ -17,7 +17,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / "backend"
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from agent.core.model_ids import KIMI_K26_MODEL_ID  # noqa: E402
+from agent.core.model_ids import GLM_52_MODEL_ID  # noqa: E402
 from agent.core.session_persistence import NoopSessionStore  # noqa: E402
 from agent.core.usage_thresholds import USAGE_THRESHOLD_TOOL_NAME  # noqa: E402
 from agent.core.yolo_budget import YOLO_BUDGET_TOOL_NAME  # noqa: E402
@@ -215,6 +215,33 @@ async def test_reset_session_usage_window_updates_runtime_and_store():
         "inference_billing_session_id": agent_session.inference_billing_session_id,
         "last_active_at": agent_session.last_active_at,
     }
+
+
+@pytest.mark.asyncio
+async def test_activate_session_preserves_usage_window_and_billing_id():
+    store = RestoreStore()
+    manager = _manager_with_store(store)
+    agent_session = _runtime_agent_session("s1")
+    manager.sessions["s1"] = agent_session
+    usage_window_started_at = datetime(2026, 6, 5, 12, 30, tzinfo=UTC)
+    billing_session_id = agent_session.inference_billing_session_id
+    old_last_active_at = datetime(2000, 1, 1)
+    agent_session.usage_window_started_at = usage_window_started_at
+    agent_session.last_active_at = old_last_active_at
+    agent_session.usage_warning_spend_cache = {"spend_usd": 12.0}
+
+    info = await manager.activate_session("s1")
+
+    assert agent_session.usage_window_started_at == usage_window_started_at
+    assert agent_session.inference_billing_session_id == billing_session_id
+    assert agent_session.session.inference_billing_session_id == billing_session_id
+    assert agent_session.usage_warning_spend_cache == {"spend_usd": 12.0}
+    assert agent_session.last_active_at > old_last_active_at
+    assert info is not None
+    assert info["usage_window_started_at"] == usage_window_started_at.isoformat()
+    session_id, fields = store.updated_fields[-1]
+    assert session_id == "s1"
+    assert fields == {"last_active_at": agent_session.last_active_at}
 
 
 def test_usage_threshold_pending_approval_serializes_and_restores():
@@ -826,10 +853,10 @@ async def test_yolo_budget_checker_uses_local_ledger_when_billing_lags(monkeypat
     assert pending["billing_source"] == "hf_billing_current_session"
 
 
-def test_unknown_saved_model_defaults_to_kimi():
+def test_unknown_saved_model_defaults_to_glm():
     model = SessionManager._model_from_saved_metadata("unsupported/model")
 
-    assert model == KIMI_K26_MODEL_ID
+    assert model == GLM_52_MODEL_ID
 
 
 @pytest.mark.asyncio

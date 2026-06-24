@@ -26,10 +26,10 @@ import { useSessionStore } from '@/store/sessionStore';
 import {
   CLAUDE_OPUS_48_MODEL_PATH,
   DEEPSEEK_V4_PRO_MODEL_PATH,
-  GLM_51_MODEL_PATH,
+  GLM_52_MODEL_PATH,
   GPT_55_MODEL_PATH,
-  KIMI_K26_MODEL_PATH,
-  MINIMAX_M27_MODEL_PATH,
+  KIMI_K27_CODE_MODEL_PATH,
+  MINIMAX_M3_MODEL_PATH,
   isClaudePath,
 } from '@/utils/model';
 
@@ -53,7 +53,6 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
     name: 'Claude Opus 4.8',
     modelPath: CLAUDE_OPUS_48_MODEL_PATH,
     avatarUrl: getHfAvatarUrl(CLAUDE_OPUS_48_MODEL_PATH),
-    recommended: true,
   },
   {
     id: 'gpt-5.5',
@@ -62,22 +61,23 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
     avatarUrl: getHfAvatarUrl(GPT_55_MODEL_PATH),
   },
   {
-    id: 'kimi-k2.6',
-    name: 'Kimi K2.6',
-    modelPath: KIMI_K26_MODEL_PATH,
-    avatarUrl: getHfAvatarUrl(KIMI_K26_MODEL_PATH),
+    id: 'kimi-k2.7-code',
+    name: 'Kimi K2.7 Code',
+    modelPath: KIMI_K27_CODE_MODEL_PATH,
+    avatarUrl: getHfAvatarUrl(KIMI_K27_CODE_MODEL_PATH),
   },
   {
-    id: 'minimax-m2.7',
-    name: 'MiniMax M2.7',
-    modelPath: MINIMAX_M27_MODEL_PATH,
-    avatarUrl: getHfAvatarUrl('MiniMaxAI/MiniMax-M2.7'),
+    id: 'minimax-m3',
+    name: 'MiniMax M3',
+    modelPath: MINIMAX_M3_MODEL_PATH,
+    avatarUrl: getHfAvatarUrl(MINIMAX_M3_MODEL_PATH),
   },
   {
-    id: 'glm-5.1',
-    name: 'GLM 5.1',
-    modelPath: GLM_51_MODEL_PATH,
-    avatarUrl: getHfAvatarUrl('zai-org/GLM-5.1'),
+    id: 'glm-5.2',
+    name: 'GLM 5.2',
+    modelPath: GLM_52_MODEL_PATH,
+    avatarUrl: getHfAvatarUrl(GLM_52_MODEL_PATH),
+    recommended: true,
   },
   {
     id: 'deepseek-v4-pro',
@@ -87,7 +87,7 @@ const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
   },
 ];
 
-const DEFAULT_FREE_MODEL_OPTION_ID = 'kimi-k2.6';
+const DEFAULT_MODEL_PATH = GLM_52_MODEL_PATH;
 
 const normalizeModelPath = (path: string | undefined) => (
   (path ?? '')
@@ -124,7 +124,6 @@ const modelOptionId = (modelPath: string) => (
 const modelOptionFromApi = (model: {
   id?: string;
   label?: string;
-  provider?: string;
   recommended?: boolean;
 }): ModelOption | null => {
   if (!model.id) return null;
@@ -199,10 +198,10 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
   const modelOptionsRef = useRef<ModelOption[]>(DEFAULT_MODEL_OPTIONS);
   const sessionIdRef = useRef<string | undefined>(sessionId);
-  const [selectedModelId, setSelectedModelId] = useState<string>(
+  const [selectedModelPath, setSelectedModelPath] = useState<string>(
     () => (
-      findModelByPath(initialModelPath ?? '', DEFAULT_MODEL_OPTIONS)?.id
-      ?? DEFAULT_FREE_MODEL_OPTION_ID
+      findModelByPath(initialModelPath ?? '', DEFAULT_MODEL_OPTIONS)?.modelPath
+      ?? DEFAULT_MODEL_PATH
     ),
   );
   const [modelAnchorEl, setModelAnchorEl] = useState<null | HTMLElement>(null);
@@ -239,7 +238,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
         setModelOptions(next);
         if (!sessionIdRef.current) {
           const current = data.current ? findModelByPath(data.current, next) : null;
-          if (current) setSelectedModelId(current.id);
+          if (current) setSelectedModelPath(current.modelPath);
         }
       })
       .catch(() => { /* ignore */ });
@@ -257,7 +256,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
         if (cancelled) return;
         if (data?.model) {
           const model = findModelByPath(data.model, modelOptionsRef.current);
-          if (model) setSelectedModelId(model.id);
+          setSelectedModelPath(model?.modelPath ?? data.model);
           updateSessionModel(sessionId, data.model);
         }
       })
@@ -267,8 +266,10 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
 
   const visibleModelOptions = modelOptions;
   const selectedModel = (
-    visibleModelOptions.find(m => m.id === selectedModelId)
-    || modelOptions.find(m => m.id === selectedModelId)
+    findModelByPath(selectedModelPath, visibleModelOptions)
+    || findModelByPath(selectedModelPath, modelOptions)
+    || visibleModelOptions.find(m => m.recommended)
+    || modelOptions.find(m => m.recommended)
     || visibleModelOptions[0]
     || modelOptions[0]
   );
@@ -389,7 +390,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
         body: JSON.stringify({ model: model.modelPath }),
       });
       if (res.ok) {
-        setSelectedModelId(model.id);
+        setSelectedModelPath(model.modelPath);
         updateSessionModel(sessionId, model.modelPath);
         setModelSwitchError(null);
         return;
@@ -706,7 +707,7 @@ export default function ChatInput({ sessionId, initialModelPath, onSend, onStop,
             <MenuItem
               key={model.id}
               onClick={() => handleSelectModel(model)}
-              selected={selectedModelId === model.id}
+              selected={selectedModel.modelPath === model.modelPath}
               sx={{
                 py: 1.5,
                 '&.Mui-selected': {

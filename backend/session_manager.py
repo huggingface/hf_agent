@@ -13,7 +13,7 @@ from typing import Any, Optional
 from agent.config import load_config
 from agent.core.agent_loop import process_submission
 from agent.core.model_ids import (
-    KIMI_K26_MODEL_ID,
+    GLM_52_MODEL_ID,
     is_known_router_model_id,
     strip_huggingface_model_prefix,
 )
@@ -269,7 +269,7 @@ class SessionManager:
         if normalized and is_known_router_model_id(normalized):
             return normalized
 
-        fallback_model = KIMI_K26_MODEL_ID
+        fallback_model = GLM_52_MODEL_ID
         logger.warning(
             "Saved session model %r failed validation; using %r",
             model,
@@ -2008,6 +2008,22 @@ class SessionManager:
                 session_id,
                 usage_window_started_at=window_start,
                 inference_billing_session_id=billing_session_id,
+                last_active_at=agent_session.last_active_at,
+            )
+        return self.get_session_info(session_id)
+
+    async def activate_session(self, session_id: str) -> dict[str, Any] | None:
+        """Mark a session as revisited without resetting its usage window."""
+        agent_session = self.sessions.get(session_id)
+        if not agent_session:
+            return None
+
+        self._touch(agent_session)
+
+        store = self._store()
+        if getattr(store, "enabled", False):
+            await store.update_session_fields(
+                session_id,
                 last_active_at=agent_session.last_active_at,
             )
         return self.get_session_info(session_id)

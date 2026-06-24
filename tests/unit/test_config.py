@@ -17,7 +17,7 @@ def test_load_config_does_not_apply_slack_user_defaults_by_default(
     _write_json(
         config_path,
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": False,
                 "destinations": {},
@@ -35,7 +35,7 @@ def test_load_config_does_not_apply_slack_user_defaults_by_default(
 
 def test_load_config_applies_slack_user_defaults_from_env(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
-    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.6"})
+    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.7-Code"})
     monkeypatch.delenv("ML_INTERN_CLI_CONFIG", raising=False)
     monkeypatch.setattr(
         config_module,
@@ -63,7 +63,7 @@ def test_load_config_applies_slack_user_defaults_from_env(tmp_path, monkeypatch)
 def test_load_config_merges_user_config_before_env_substitution(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     user_config_path = tmp_path / "user-config.json"
-    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.6"})
+    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.7-Code"})
     _write_json(
         user_config_path,
         {
@@ -103,7 +103,7 @@ def test_slack_user_defaults_can_be_disabled(tmp_path, monkeypatch):
     _write_json(
         config_path,
         {
-            "model_name": "moonshotai/Kimi-K2.6",
+            "model_name": "moonshotai/Kimi-K2.7-Code",
             "messaging": {
                 "enabled": False,
                 "destinations": {},
@@ -128,7 +128,7 @@ def test_slack_user_defaults_can_be_disabled(tmp_path, monkeypatch):
 
 def test_tool_runtime_defaults_to_local(tmp_path):
     config_path = tmp_path / "config.json"
-    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.6"})
+    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.7-Code"})
 
     config = config_module.load_config(str(config_path))
 
@@ -138,7 +138,7 @@ def test_tool_runtime_defaults_to_local(tmp_path):
 def test_user_config_can_set_sandbox_tool_runtime(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     user_config_path = tmp_path / "user-config.json"
-    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.6"})
+    _write_json(config_path, {"model_name": "moonshotai/Kimi-K2.7-Code"})
     _write_json(user_config_path, {"tool_runtime": "sandbox"})
     monkeypatch.setenv("ML_INTERN_CLI_CONFIG", str(user_config_path))
 
@@ -151,7 +151,7 @@ def test_invalid_tool_runtime_is_rejected(tmp_path):
     config_path = tmp_path / "config.json"
     _write_json(
         config_path,
-        {"model_name": "moonshotai/Kimi-K2.6", "tool_runtime": "hybrid"},
+        {"model_name": "moonshotai/Kimi-K2.7-Code", "tool_runtime": "hybrid"},
     )
 
     with pytest.raises(ValidationError):

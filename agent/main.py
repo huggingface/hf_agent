@@ -86,7 +86,7 @@ def _validate_cli_model_override(model: str) -> str:
     if not model_switcher.is_valid_model_id(model):
         raise ValueError(
             "Invalid model id. Use an HF Router id like "
-            "'anthropic/claude-opus-4.8:fal-ai' or a supported local prefix."
+            "'zai-org/GLM-5.2:novita' or a supported local prefix."
         )
     return model.removeprefix("huggingface/")
 
@@ -1241,8 +1241,10 @@ async def main(model: str | None = None, sandbox_tools: bool = False):
             session_holder=session_holder,
             hf_token=hf_token,
             user_id=hf_user,
+            hf_username=hf_user,
             user_plan=hf_user_plan,
             local_mode=local_mode,
+            autonomous_mode=False,
             stream=True,
             notification_gateway=notification_gateway,
             notification_destinations=config.messaging.default_auto_destinations(),
@@ -1485,8 +1487,10 @@ async def headless_main(
             session_holder=session_holder,
             hf_token=hf_token,
             user_id=hf_user,
+            hf_username=hf_user,
             user_plan=hf_user_plan,
             local_mode=local_mode,
+            autonomous_mode=True,
             stream=stream,
             notification_gateway=notification_gateway,
             notification_destinations=config.messaging.default_auto_destinations(),

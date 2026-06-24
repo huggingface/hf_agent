@@ -12,7 +12,7 @@ from agent.core.cost_estimation import CostEstimate
 
 def _config(**overrides):
     data = {
-        "model_name": "moonshotai/Kimi-K2.6",
+        "model_name": "moonshotai/Kimi-K2.7-Code",
         "confirm_cpu_jobs": True,
         "auto_file_upload": False,
         "yolo_mode": False,

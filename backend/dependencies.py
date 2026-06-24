@@ -31,7 +31,7 @@ DEV_USER: dict[str, Any] = {
     "user_id": "dev",
     "username": "dev",
     "authenticated": True,
-    "plan": "pro",  # Dev uses the Pro web default model.
+    "plan": "pro",
 }
 
 INTERNAL_HF_TOKEN_KEY = "_hf_token"

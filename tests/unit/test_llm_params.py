@@ -72,7 +72,7 @@ def test_router_params_fall_back_to_hf_cache_when_session_token_missing(monkeypa
 
 
 def test_router_params_omit_bill_to_header_when_env_unset():
-    params = _resolve_llm_params("moonshotai/Kimi-K2.6", "session-token")
+    params = _resolve_llm_params("moonshotai/Kimi-K2.7-Code", "session-token")
 
     assert params["api_key"] == "session-token"
     assert "extra_headers" not in params
@@ -81,19 +81,19 @@ def test_router_params_omit_bill_to_header_when_env_unset():
 def test_router_params_add_bill_to_header_when_env_set(monkeypatch):
     monkeypatch.setenv(HF_BILL_TO_ENV, "my-org")
 
-    params = _resolve_llm_params("moonshotai/Kimi-K2.6", "session-token")
+    params = _resolve_llm_params("moonshotai/Kimi-K2.7-Code", "session-token")
 
     assert params["extra_headers"] == {HF_BILL_TO_HEADER: "my-org"}
 
 
 def test_router_params_strip_whitespace_and_ignore_blank_bill_to(monkeypatch):
     monkeypatch.setenv(HF_BILL_TO_ENV, "  my-org  ")
-    assert _resolve_llm_params("moonshotai/Kimi-K2.6")["extra_headers"] == {
+    assert _resolve_llm_params("moonshotai/Kimi-K2.7-Code")["extra_headers"] == {
         HF_BILL_TO_HEADER: "my-org"
     }
 
     monkeypatch.setenv(HF_BILL_TO_ENV, "   ")
-    assert "extra_headers" not in _resolve_llm_params("moonshotai/Kimi-K2.6")
+    assert "extra_headers" not in _resolve_llm_params("moonshotai/Kimi-K2.7-Code")
 
 
 def test_local_model_params_never_get_bill_to_header(monkeypatch):
@@ -237,7 +237,7 @@ def test_hf_router_params_allow_missing_token_without_headers(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
 
-    params = _resolve_llm_params("moonshotai/Kimi-K2.6")
+    params = _resolve_llm_params("moonshotai/Kimi-K2.7-Code")
 
     assert params["api_key"] is None
     assert "extra_headers" not in params
