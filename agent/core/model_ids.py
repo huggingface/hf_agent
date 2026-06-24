@@ -29,4 +29,8 @@ def strip_huggingface_model_prefix(model_id: str | None) -> str | None:
 
 def is_known_router_model_id(model_id: str | None) -> bool:
     normalized = strip_huggingface_model_prefix(model_id)
-    return bool(normalized and normalized in HOSTED_MODEL_IDS)
+    if not normalized:
+        return False
+    if normalized.startswith("opencode/"):
+        return True
+    return normalized in HOSTED_MODEL_IDS

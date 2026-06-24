@@ -129,6 +129,25 @@ def _resolve_llm_params(
     if local_model_provider(normalized_model) is not None:
         return _resolve_local_model_params(normalized_model, reasoning_effort, strict)
 
+    from agent.core.opencode_router import (
+        get_api_base,
+        get_api_key,
+        is_opencode_model_id,
+        normalize_model_id,
+    )
+
+    if is_opencode_model_id(normalized_model):
+        if reasoning_effort and strict:
+            raise UnsupportedEffortError(
+                "OpenCode models do not support reasoning_effort configuration"
+            )
+        bare = normalize_model_id(normalized_model)
+        return {
+            "model": f"openai/{bare}",
+            "api_base": get_api_base(),
+            "api_key": get_api_key(),
+        }
+
     hf_model = normalized_model
     api_key = _resolve_hf_router_token(session_hf_token)
     params = {

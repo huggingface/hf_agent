@@ -95,6 +95,11 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     if is_local_model_id(model_id):
         return True
 
+    from agent.core.opencode_router import is_opencode_model_id
+
+    if is_opencode_model_id(model_id):
+        return True
+
     from agent.core import hf_router_catalog as cat
 
     bare, _, tag = model_id.partition(":")

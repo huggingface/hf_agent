@@ -43,7 +43,17 @@ interface ModelOption {
 }
 
 const getHfAvatarUrl = (modelId: string) => {
-  const org = modelId.split('/')[0];
+  let cleanId = modelId.replace(/^huggingface\//, '');
+  if (cleanId.startsWith('opencode/')) {
+    const bare = cleanId.replace(/^opencode\//, '');
+    if (bare.startsWith('kimi')) return 'https://huggingface.co/api/avatars/moonshotai';
+    if (bare.startsWith('glm')) return 'https://huggingface.co/api/avatars/zai-org';
+    if (bare.startsWith('minimax')) return 'https://huggingface.co/api/avatars/MiniMaxAI';
+    if (bare.startsWith('deepseek')) return 'https://huggingface.co/api/avatars/deepseek-ai';
+    if (bare.startsWith('qwen')) return 'https://huggingface.co/api/avatars/Qwen';
+    cleanId = bare;
+  }
+  const org = cleanId.split('/')[0];
   return `https://huggingface.co/api/avatars/${org}`;
 };
 

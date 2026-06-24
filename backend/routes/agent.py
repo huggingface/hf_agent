@@ -117,6 +117,12 @@ def _schedule_usage_refresh_and_upload(
 
 
 def _available_models() -> list[dict[str, Any]]:
+    from session_manager import session_manager
+
+    default_model = (
+        session_manager.config.model_name if session_manager else DEFAULT_MODEL_ID
+    )
+
     models = [
         {
             "id": CLAUDE_OPUS_48_MODEL_ID,
@@ -135,15 +141,36 @@ def _available_models() -> list[dict[str, Any]]:
             "label": "MiniMax M3",
         },
         {
-            "id": DEFAULT_MODEL_ID,
+            "id": GLM_52_MODEL_ID,
             "label": "GLM 5.2",
-            "recommended": True,
+            "recommended": default_model == GLM_52_MODEL_ID,
         },
         {
             "id": DEEPSEEK_V4_PRO_MODEL_ID,
             "label": "DeepSeek V4 Pro",
         },
     ]
+
+    try:
+        from agent.core.opencode_router import SUGGESTED_MODELS as OPENCODE_SUGGESTED
+
+        is_opencode_default = default_model.startswith("opencode/")
+        for om in OPENCODE_SUGGESTED:
+            if any(m["id"] == om["id"] for m in models):
+                continue
+            is_rec = om["id"] == default_model
+            if not is_opencode_default and om.get("recommended"):
+                is_rec = True
+            models.append(
+                {
+                    "id": om["id"],
+                    "label": om["label"],
+                    "recommended": is_rec,
+                }
+            )
+    except ImportError:
+        pass
+
     return models
 
 
@@ -157,11 +184,17 @@ def _valid_model_ids() -> set[str]:
 def _validate_model_id(model_id: str | None) -> None:
     if not model_id or model_id in _valid_model_ids():
         return
+    from agent.core.opencode_router import is_opencode_model_id
+
+    if is_opencode_model_id(model_id):
+        return
     raise HTTPException(status_code=400, detail=f"Unknown model: {model_id}")
 
 
 def _default_model() -> str:
-    return DEFAULT_MODEL_ID
+    from session_manager import session_manager
+
+    return session_manager.config.model_name if session_manager else DEFAULT_MODEL_ID
 
 
 def _model_override_for_new_session(requested_model: str | None) -> str | None:
