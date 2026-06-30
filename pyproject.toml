@@ -47,9 +47,18 @@ dev = [
     "ruff>=0.15.12",
 ]
 
-# All dependencies (eval + dev)
+train = [
+    "accelerate>=1.2.0",
+    "bitsandbytes>=0.45.0",
+    "peft>=0.14.0",
+    "torch>=2.5.0",
+    "transformers>=4.57.0",
+    "trl>=0.13.0",
+]
+
+# All dependencies (eval + dev + train)
 all = [
-    "ml-intern[eval,dev]",
+    "ml-intern[eval,dev,train]",
 ]
 
 [project.scripts]
