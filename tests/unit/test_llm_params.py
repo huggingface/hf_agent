@@ -77,6 +77,12 @@ def test_huggingface_prefix_is_stripped_for_router_calls():
     assert params["api_base"] == HF_ROUTER_BASE_URL
 
 
+def test_github_copilot_params_use_direct_provider():
+    params = _resolve_llm_params("github_copilot/claude-opus-4.8")
+
+    assert params == {"model": "github_copilot/claude-opus-4.8"}
+
+
 def test_resolve_ollama_params_adds_v1_and_uses_default_key(monkeypatch):
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")

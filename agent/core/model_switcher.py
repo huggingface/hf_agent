@@ -88,10 +88,12 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     proceed with the switch, ``False`` to indicate a hard problem the user
     should notice before we fire the effort probe.
 
-    Local ids return ``True`` without printing anything. Router ids are checked
-    against the router catalog when possible; the probe below covers provider
-    availability for uncataloged ids.
+    Local and direct provider ids return ``True`` without printing anything.
+    Router ids are checked against the router catalog when possible; the probe
+    below covers provider availability for uncataloged ids.
     """
+    if model_id.startswith("github_copilot/"):
+        return True
     if is_local_model_id(model_id):
         return True
 

@@ -102,6 +102,9 @@ def _resolve_llm_params(
       to LiteLLM as ``openai/<model>``. These endpoints don't receive
       ``reasoning_effort``.
 
+    • ``github_copilot/<model>`` — LiteLLM's GitHub Copilot provider. This
+      is a direct provider prefix and must not be rewritten through HF Router.
+
     • Anything else is treated as an HF Router id. We hit the auto-routing
       OpenAI-compatible endpoint at ``https://router.huggingface.co/v1``.
       The id can be bare or carry an HF routing suffix (``:fastest`` /
@@ -122,6 +125,9 @@ def _resolve_llm_params(
          local ``hf auth login`` cache.
     """
     normalized_model = strip_huggingface_model_prefix(model_name) or model_name
+
+    if normalized_model.startswith("github_copilot/"):
+        return {"model": normalized_model}
 
     if is_reserved_local_model_id(normalized_model):
         raise ValueError(f"Unsupported local model id: {normalized_model}")

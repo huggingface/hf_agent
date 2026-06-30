@@ -62,6 +62,19 @@ def test_local_models_skip_hf_router_catalog_output():
     )
 
 
+def test_github_copilot_models_skip_hf_router_catalog_output():
+    class NoPrintConsole:
+        def print(self, *args, **kwargs):
+            raise AssertionError(
+                "github_copilot models should not print HF catalog info"
+            )
+
+    assert model_switcher._print_hf_routing_info(
+        "github_copilot/claude-opus-4.8",
+        NoPrintConsole(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_probe_and_switch_local_model_uses_no_effort(monkeypatch):
     calls = []
