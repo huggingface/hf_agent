@@ -34,10 +34,13 @@ dependencies = [
 
 # Evaluation/benchmarking dependencies
 eval = [
+    "bigcodebench>=0.2.2",
+    "evalplus[vllm]>=0.3.1",
     "inspect-ai>=0.3.149",
     "pandas>=2.3.3",
     "datasets>=4.3.0",
     "tenacity>=8.0.0",
+    "vllm>=0.6.0",
 ]
 
 # Development and testing dependencies
