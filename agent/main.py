@@ -9,8 +9,10 @@ Supports two modes:
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -21,10 +23,16 @@ import litellm
 from prompt_toolkit import PromptSession
 
 from agent.config import load_config
+from agent.core.approval_policy import is_scheduled_operation
 from agent.core.agent_loop import submission_loop
 from agent.core import model_switcher
+from agent.core.hf_access import fetch_whoami_v2, normalize_hf_user_plan
+from agent.core.hf_tokens import resolve_hf_token
+from agent.core.local_models import is_local_model_id
+from agent.core.model_ids import strip_huggingface_model_prefix
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
+from agent.messaging.gateway import NotificationGateway
 from agent.utils.reliability_checks import check_training_script_save_pattern
 from agent.utils.terminal_display import (
     get_console,
@@ -50,6 +58,75 @@ litellm.drop_params = True
 # on every error — users don't need it, and our friendly errors cover the case.
 litellm.suppress_debug_info = True
 
+CLI_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "cli_agent_config.json"
+logger = logging.getLogger(__name__)
+
+
+def _apply_tool_runtime_override(config: Any, *, sandbox_tools: bool) -> str:
+    if sandbox_tools:
+        config.tool_runtime = "sandbox"
+    return getattr(config, "tool_runtime", "local")
+
+
+def _is_local_tool_runtime(config: Any) -> bool:
+    return getattr(config, "tool_runtime", "local") == "local"
+
+
+def _tool_runtime_label(local_mode: bool) -> str:
+    return "local filesystem" if local_mode else "HF sandbox"
+
+
+def _normalize_config_model(config: Any) -> None:
+    normalized = strip_huggingface_model_prefix(getattr(config, "model_name", None))
+    if normalized:
+        config.model_name = normalized
+
+
+def _validate_cli_model_override(model: str) -> str:
+    if not model_switcher.is_valid_model_id(model):
+        raise ValueError(
+            "Invalid model id. Use an HF Router id like "
+            "'zai-org/GLM-5.2:novita' or a supported local prefix."
+        )
+    return model.removeprefix("huggingface/")
+
+
+async def _wait_for_initial_sandbox_preload(session_holder: list | None) -> None:
+    session = session_holder[0] if session_holder else None
+    task = getattr(session, "sandbox_preload_task", None)
+    if not task:
+        return
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The sandbox tool will surface the stored preload error on first use.
+        return
+
+
+def _is_scheduled_hf_job_tool(tool_info: dict[str, Any]) -> bool:
+    if tool_info.get("tool") != "hf_jobs":
+        return False
+    arguments = tool_info.get("arguments") or {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return False
+    if not isinstance(arguments, dict):
+        return False
+    return is_scheduled_operation(arguments.get("operation"))
+
+
+def _configure_runtime_logging() -> None:
+    """Keep third-party warning spam from punching through the interactive UI."""
+    import logging
+
+    logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+    logging.getLogger("litellm").setLevel(logging.ERROR)
+
+
 def _safe_get_args(arguments: dict) -> dict:
     """Safely extract args dict from arguments, handling cases where LLM passes string."""
     args = arguments.get("args", {})
@@ -59,26 +136,35 @@ def _safe_get_args(arguments: dict) -> dict:
     return args if isinstance(args, dict) else {}
 
 
-def _get_hf_token() -> str | None:
-    """Get HF token from environment, huggingface_hub API, or cached token file."""
-    token = os.environ.get("HF_TOKEN")
-    if token:
-        return token
+def _get_hf_user(token: str | None) -> str | None:
+    """Resolve the HF username for a token, if available."""
+    if not token:
+        return None
     try:
         from huggingface_hub import HfApi
-        api = HfApi()
-        token = api.token
-        if token:
-            return token
+
+        return HfApi(token=token).whoami().get("name")
     except Exception:
-        pass
-    # Fallback: read the cached token file directly
-    token_path = Path.home() / ".cache" / "huggingface" / "token"
-    if token_path.exists():
-        token = token_path.read_text().strip()
-        if token:
-            return token
+        return None
+
+
+def _get_hf_user_from_whoami(whoami: dict[str, Any] | None) -> str | None:
+    if not isinstance(whoami, dict):
+        return None
+    for key in ("name", "user", "preferred_username"):
+        value = whoami.get(key)
+        if isinstance(value, str) and value:
+            return value
     return None
+
+
+async def _get_hf_identity(token: str | None) -> tuple[str | None, str]:
+    if not token:
+        return None, "unknown"
+    whoami = await fetch_whoami_v2(token)
+    if whoami is None:
+        return _get_hf_user(token), "unknown"
+    return _get_hf_user_from_whoami(whoami), normalize_hf_user_plan(whoami) or "unknown"
 
 
 async def _prompt_and_save_hf_token(prompt_session: PromptSession) -> str:
@@ -118,9 +204,12 @@ async def _prompt_and_save_hf_token(prompt_session: PromptSession) -> str:
             login(token=token, add_to_git_credential=False)
             print("Token saved to ~/.cache/huggingface/token")
         except Exception as e:
-            print(f"Warning: could not persist token ({e}), using for this session only.")
+            print(
+                f"Warning: could not persist token ({e}), using for this session only."
+            )
 
         return token
+
 
 @dataclass
 class Operation:
@@ -143,12 +232,20 @@ def _create_rich_console():
     return get_console()
 
 
+def _clear_terminal() -> None:
+    command = ["cmd", "/c", "cls"] if os.name == "nt" else ["clear"]
+    try:
+        subprocess.run(command, check=False)
+    except OSError:
+        pass
+
+
 class _ThinkingShimmer:
     """Animated shiny/shimmer thinking indicator — a bright gradient sweeps across the text."""
 
-    _BASE = (90, 90, 110)       # dim base color
-    _HIGHLIGHT = (255, 200, 80) # bright shimmer highlight (warm gold)
-    _WIDTH = 5                  # shimmer width in characters
+    _BASE = (90, 90, 110)  # dim base color
+    _HIGHLIGHT = (255, 200, 80)  # bright shimmer highlight (warm gold)
+    _WIDTH = 5  # shimmer width in characters
     _FPS = 24
 
     def __init__(self, console):
@@ -229,7 +326,7 @@ class _StreamBuffer:
         if idx == -1:
             return None
         block = self._buffer[:idx]
-        self._buffer = self._buffer[idx + 2:]
+        self._buffer = self._buffer[idx + 2 :]
         return block
 
     async def flush_ready(
@@ -255,7 +352,9 @@ class _StreamBuffer:
         """Flush complete blocks, then render whatever incomplete tail remains."""
         await self.flush_ready(cancel_event=cancel_event, instant=instant)
         if self._buffer.strip():
-            await print_markdown(self._buffer, cancel_event=cancel_event, instant=instant)
+            await print_markdown(
+                self._buffer, cancel_event=cancel_event, instant=instant
+            )
         self._buffer = ""
 
     def discard(self):
@@ -332,6 +431,9 @@ async def event_listener(
                 stream_buf.discard()
                 print_turn_complete()
                 print_plan()
+                session = session_holder[0] if session_holder else None
+                if session is not None:
+                    await session.send_deferred_turn_complete_notification(event)
                 turn_complete_event.set()
             elif event.event_type == "interrupted":
                 shimmer.stop()
@@ -340,6 +442,58 @@ async def event_listener(
                 turn_complete_event.set()
             elif event.event_type == "undo_complete":
                 console.print("[dim]Undone.[/dim]")
+                turn_complete_event.set()
+            elif event.event_type == "new_complete":
+                data = event.data or {}
+                if data.get("clear_screen"):
+                    _clear_terminal()
+                saved_path = data.get("saved_path")
+                if saved_path:
+                    console.print(
+                        f"[dim]Started new chat. Prior chat saved to {saved_path}.[/dim]"
+                    )
+                else:
+                    console.print("[dim]Started new chat.[/dim]")
+                turn_complete_event.set()
+            elif event.event_type == "resume_complete":
+                data = event.data or {}
+                path = data.get("path", "?")
+                count = data.get("restored_count", 0)
+                dropped = int(data.get("dropped_count", 0) or 0)
+                model = data.get("model_name", "?")
+                invalid_model = data.get("invalid_saved_model")
+                forked = bool(data.get("forked", False))
+                redacted = bool(data.get("had_redacted_content", False))
+                verb = "Forked from" if forked else "Resumed"
+                console.print(
+                    f"[green]{verb}[/green] {path} "
+                    f"([cyan]{count}[/cyan] messages, "
+                    f"model [cyan]{model}[/cyan])."
+                )
+                if dropped:
+                    console.print(
+                        f"[yellow]Warning:[/yellow] dropped {dropped} "
+                        "malformed message(s) while restoring — surrounding "
+                        "tool-call alignment may be off."
+                    )
+                if invalid_model:
+                    console.print(
+                        f"[yellow]Warning:[/yellow] saved model id "
+                        f"[cyan]{invalid_model}[/cyan] failed validation; "
+                        f"kept current model [cyan]{model}[/cyan]."
+                    )
+                if forked:
+                    console.print(
+                        "[dim]Saved log belongs to a different user — kept "
+                        "current session id; future saves go to a fresh file.[/dim]"
+                    )
+                if redacted:
+                    console.print(
+                        "[yellow]Note:[/yellow] tokens/secrets in restored "
+                        "messages were scrubbed at save time. Your live tokens "
+                        "are used for this session; [REDACTED_*] markers in "
+                        "past messages are not re-injected."
+                    )
                 turn_complete_event.set()
             elif event.event_type == "tool_log":
                 tool = event.data.get("tool", "") if event.data else ""
@@ -353,7 +507,11 @@ async def event_listener(
             elif event.event_type == "error":
                 shimmer.stop()
                 stream_buf.discard()
-                error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+                error = (
+                    event.data.get("error", "Unknown error")
+                    if event.data
+                    else "Unknown error"
+                )
                 print_error(error)
                 turn_complete_event.set()
             elif event.event_type == "shutdown":
@@ -371,8 +529,13 @@ async def event_listener(
                 tools_data = event.data.get("tools", []) if event.data else []
                 count = event.data.get("count", 0) if event.data else 0
 
-                # If yolo mode is active, auto-approve everything
-                if config and config.yolo_mode:
+                # If yolo mode is active, auto-approve everything except
+                # scheduled HF jobs, whose recurring cost stays manual.
+                if (
+                    config
+                    and config.yolo_mode
+                    and not any(_is_scheduled_hf_job_tool(t) for t in tools_data)
+                ):
                     approvals = [
                         {
                             "tool_call_id": t.get("tool_call_id", ""),
@@ -615,7 +778,9 @@ async def event_listener(
                             f"Approve item {i}? (y=yes, yolo=approve all, n=no, or provide feedback): "
                         )
                     except (KeyboardInterrupt, EOFError):
-                        get_console().print("[dim]Approval cancelled — rejecting remaining items[/dim]")
+                        get_console().print(
+                            "[dim]Approval cancelled — rejecting remaining items[/dim]"
+                        )
                         approvals.append(
                             {
                                 "tool_call_id": tool_call_id,
@@ -701,12 +866,69 @@ async def get_user_input(prompt_session: PromptSession) -> str:
 # Slash commands are defined in terminal_display
 
 
+async def _resume_picker(
+    arg: str,
+    prompt_session: PromptSession | None,
+) -> Path | None:
+    """Resolve a session log path via ``arg`` or interactive selection.
+
+    Returns ``None`` if the user cancels, no logs exist, or the argument
+    matches nothing — already prints the explanation in those cases.
+    """
+    from agent.core.session_resume import (
+        format_session_log_entry,
+        list_session_logs,
+        resolve_session_log_arg,
+    )
+    from agent.core.session import DEFAULT_SESSION_LOG_DIR
+
+    console = get_console()
+    directory = DEFAULT_SESSION_LOG_DIR
+    entries = list_session_logs(directory)
+    if not entries:
+        console.print(f"[yellow]No session logs found in ./{directory}.[/yellow]")
+        return None
+
+    if arg:
+        selected = resolve_session_log_arg(arg, entries, directory)
+        if selected is None:
+            console.print(f"[bold red]No matching session log:[/bold red] {arg}")
+        return selected
+
+    console.print()
+    console.print("[bold]Saved sessions[/bold]")
+    for index, entry in enumerate(entries, start=1):
+        console.print(format_session_log_entry(index, entry))
+    console.print()
+
+    if prompt_session is None:
+        console.print("[yellow]Cannot prompt for a selection here.[/yellow]")
+        return None
+
+    try:
+        choice = await prompt_session.prompt_async(
+            "Select session number (blank to cancel): "
+        )
+    except (EOFError, KeyboardInterrupt):
+        console.print("[dim]Resume cancelled.[/dim]")
+        return None
+    choice = choice.strip()
+    if not choice:
+        console.print("[dim]Resume cancelled.[/dim]")
+        return None
+    selected = resolve_session_log_arg(choice, entries, directory)
+    if selected is None:
+        console.print(f"[bold red]Invalid selection:[/bold red] {choice}")
+    return selected
+
+
 async def _handle_slash_command(
     cmd: str,
     config,
     session_holder: list,
     submission_queue: asyncio.Queue,
     submission_id: list[int],
+    prompt_session: PromptSession | None = None,
 ) -> Submission | None:
     """
     Handle a slash command. Returns a Submission to enqueue, or None if
@@ -737,6 +959,38 @@ async def _handle_slash_command(
             operation=Operation(op_type=OpType.COMPACT),
         )
 
+    if command in {"/new", "/clear"}:
+        session = session_holder[0] if session_holder else None
+        if session is None:
+            get_console().print("[bold red]No active session to reset.[/bold red]")
+            return None
+        submission_id[0] += 1
+        return Submission(
+            id=f"sub_{submission_id[0]}",
+            operation=Operation(
+                op_type=OpType.NEW,
+                data={"clear_screen": command == "/clear"},
+            ),
+        )
+
+    if command == "/resume":
+        session = session_holder[0] if session_holder else None
+        if session is None:
+            get_console().print(
+                "[bold red]No active session to restore into.[/bold red]"
+            )
+            return None
+        selected_path = await _resume_picker(arg, prompt_session)
+        if selected_path is None:
+            return None
+        submission_id[0] += 1
+        return Submission(
+            id=f"sub_{submission_id[0]}",
+            operation=Operation(
+                op_type=OpType.RESUME, data={"path": str(selected_path)}
+            ),
+        )
+
     if command == "/model":
         console = get_console()
         if not arg:
@@ -748,7 +1002,11 @@ async def _handle_slash_command(
         normalized = arg.removeprefix("huggingface/")
         session = session_holder[0] if session_holder else None
         await model_switcher.probe_and_switch_model(
-            normalized, config, session, console, _get_hf_token(),
+            normalized,
+            config,
+            session,
+            console,
+            resolve_hf_token(),
         )
         return None
 
@@ -771,8 +1029,9 @@ async def _handle_slash_command(
                     console.print(f"  [dim]{m}: {eff or 'off'}[/dim]")
             console.print(
                 "[dim]Set with '/effort minimal|low|medium|high|xhigh|max|off'. "
-                "'max' and 'xhigh' are Anthropic-only; the cascade falls back "
-                "to whatever the model actually accepts.[/dim]"
+                "HF Router accepts low|medium|high generically; higher preferences "
+                "are probed and the cascade falls back to whatever the selected "
+                "provider accepts.[/dim]"
             )
             return None
         level = arg.lower()
@@ -797,42 +1056,161 @@ async def _handle_slash_command(
         session = session_holder[0] if session_holder else None
         print(f"Model: {config.model_name}")
         print(f"Reasoning effort: {config.reasoning_effort or 'off'}")
+        print(f"Tool runtime: {_tool_runtime_label(_is_local_tool_runtime(config))}")
         if session:
             print(f"Turns: {session.turn_count}")
             print(f"Context items: {len(session.context_manager.items)}")
+        return None
+
+    if command == "/share-traces":
+        session = session_holder[0] if session_holder else None
+        await _handle_share_traces_command(arg, config, session)
         return None
 
     print(f"Unknown command: {command}. Type /help for available commands.")
     return None
 
 
-async def main():
+async def _handle_share_traces_command(arg: str, config, session) -> None:
+    """Show or flip visibility of the user's personal trace dataset.
+
+    Uses the user's own HF_TOKEN (write-scoped to their namespace). Only
+    operates on the personal trace repo configured via
+    ``personal_trace_repo_template`` — never touches the shared org dataset.
+    """
+    from huggingface_hub import HfApi
+    from huggingface_hub.utils import HfHubHTTPError
+
+    console = get_console()
+    if session is None:
+        console.print("[bold red]No active session.[/bold red]")
+        return
+
+    repo_id = session._personal_trace_repo_id() if session is not None else None
+    if not repo_id:
+        if not getattr(config, "share_traces", False):
+            console.print(
+                "[yellow]share_traces is disabled in config. "
+                "Set it to true to publish per-session traces to your HF dataset."
+                "[/yellow]"
+            )
+            return
+        if not session.user_id:
+            console.print(
+                "[yellow]No HF username resolved \u2014 cannot pick a personal "
+                "trace repo. Set HF_TOKEN to a token tied to your account.[/yellow]"
+            )
+            return
+        console.print(
+            "[yellow]personal_trace_repo_template is unset \u2014 nothing to do.[/yellow]"
+        )
+        return
+
+    token = session.hf_token or resolve_hf_token()
+    if not token:
+        console.print(
+            "[bold red]No HF_TOKEN available.[/bold red] Cannot read or change "
+            "dataset visibility."
+        )
+        return
+
+    api = HfApi(token=token)
+    url = f"https://huggingface.co/datasets/{repo_id}"
+    target = arg.strip().lower()
+
+    if not target:
+        try:
+            info = await asyncio.to_thread(
+                api.repo_info, repo_id=repo_id, repo_type="dataset"
+            )
+            visibility = "private" if getattr(info, "private", False) else "public"
+            console.print(f"[bold]Trace dataset:[/bold] {url}")
+            console.print(f"[bold]Visibility:[/bold] {visibility}")
+            console.print(
+                "[dim]Use '/share-traces public' to publish, "
+                "'/share-traces private' to lock it back down.[/dim]"
+            )
+        except HfHubHTTPError as e:
+            if getattr(e.response, "status_code", None) == 404:
+                console.print(
+                    f"[dim]Dataset {repo_id} doesn't exist yet \u2014 it'll be "
+                    "created (private) on the next session save.[/dim]"
+                )
+            else:
+                console.print(f"[bold red]Hub error:[/bold red] {e}")
+        except Exception as e:
+            console.print(f"[bold red]Could not fetch dataset info:[/bold red] {e}")
+        return
+
+    if target not in {"public", "private"}:
+        console.print(
+            f"[bold red]Unknown argument:[/bold red] {target}. "
+            "Expected 'public' or 'private'."
+        )
+        return
+
+    private = target == "private"
+    try:
+        # Idempotent — create if missing so first-flip works even before any
+        # session has been saved yet.
+        await asyncio.to_thread(
+            api.create_repo,
+            repo_id=repo_id,
+            repo_type="dataset",
+            private=private,
+            token=token,
+            exist_ok=True,
+        )
+        await asyncio.to_thread(
+            api.update_repo_settings,
+            repo_id=repo_id,
+            repo_type="dataset",
+            private=private,
+            token=token,
+        )
+    except Exception as e:
+        console.print(f"[bold red]Failed to update visibility:[/bold red] {e}")
+        return
+
+    label = "PUBLIC" if not private else "private"
+    console.print(f"[green]Dataset is now {label}.[/green] {url}")
+
+
+async def main(model: str | None = None, sandbox_tools: bool = False):
     """Interactive chat with the agent"""
 
     # Clear screen
-    os.system("clear" if os.name != "nt" else "cls")
+    _clear_terminal()
 
     # Create prompt session for input (needed early for token prompt)
     prompt_session = PromptSession()
 
-    # HF token — required, prompt if missing
-    hf_token = _get_hf_token()
-    if not hf_token:
+    config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
+    _normalize_config_model(config)
+    if model:
+        config.model_name = _validate_cli_model_override(model)
+    _apply_tool_runtime_override(config, sandbox_tools=sandbox_tools)
+    local_mode = _is_local_tool_runtime(config)
+
+    # HF token — required for Hub-backed models/tools and sandbox tools, but
+    # not for local LLMs using only local filesystem tools.
+    hf_token = resolve_hf_token()
+    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
-    # Resolve username for banner
-    hf_user = None
-    try:
-        from huggingface_hub import HfApi
-        hf_user = HfApi(token=hf_token).whoami().get("name")
-    except Exception:
-        pass
+    # Resolve username and plan from one whoami-v2 request for banner and CTAs.
+    hf_user, hf_user_plan = await _get_hf_identity(hf_token)
 
-    print_banner(hf_user=hf_user)
+    print_banner(
+        model=config.model_name,
+        hf_user=hf_user,
+        tool_runtime=_tool_runtime_label(local_mode),
+    )
 
     # Pre-warm the HF router catalog in the background so /model switches
     # don't block on a network fetch.
     from agent.core import hf_router_catalog
+
     asyncio.create_task(asyncio.to_thread(hf_router_catalog.prewarm))
 
     # Create queues for communication
@@ -844,12 +1222,12 @@ async def main():
     turn_complete_event.set()
     ready_event = asyncio.Event()
 
-    # Start agent loop in background
-    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
-    config = load_config(config_path)
-
-    # Create tool router with local mode
-    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    notification_gateway = NotificationGateway(config.messaging)
+    await notification_gateway.start()
+    # Create tool router with the selected CLI tool runtime.
+    tool_router = ToolRouter(
+        config.mcpServers, hf_token=hf_token, local_mode=local_mode
+    )
 
     # Session holder for interrupt/model/status access
     session_holder = [None]
@@ -862,8 +1240,15 @@ async def main():
             tool_router=tool_router,
             session_holder=session_holder,
             hf_token=hf_token,
-            local_mode=True,
+            user_id=hf_user,
+            hf_username=hf_user,
+            user_plan=hf_user_plan,
+            local_mode=local_mode,
+            autonomous_mode=False,
             stream=True,
+            notification_gateway=notification_gateway,
+            notification_destinations=config.messaging.default_auto_destinations(),
+            defer_turn_complete_notification=True,
         )
     )
 
@@ -881,6 +1266,8 @@ async def main():
     )
 
     await ready_event.wait()
+    if not local_mode:
+        await _wait_for_initial_sandbox_preload(session_holder)
 
     submission_id = [0]
     # Mirrors codex-rs/tui/src/bottom_pane/mod.rs:137
@@ -976,7 +1363,12 @@ async def main():
             # Handle slash commands
             if user_input.strip().startswith("/"):
                 sub = await _handle_slash_command(
-                    user_input.strip(), config, session_holder, submission_queue, submission_id
+                    user_input.strip(),
+                    config,
+                    session_holder,
+                    submission_queue,
+                    submission_id,
+                    prompt_session,
                 )
                 if sub is None:
                     # Command handled locally, loop back for input
@@ -1019,6 +1411,8 @@ async def main():
         agent_task.cancel()
         # Agent didn't shut down cleanly — close MCP explicitly
         await tool_router.__aexit__(None, None, None)
+    finally:
+        await notification_gateway.close()
 
     # Now safe to cancel the listener (agent is done emitting events)
     listener_task.cancel()
@@ -1031,30 +1425,47 @@ async def headless_main(
     model: str | None = None,
     max_iterations: int | None = None,
     stream: bool = True,
+    sandbox_tools: bool = False,
 ) -> None:
     """Run a single prompt headlessly and exit."""
     import logging
 
     logging.basicConfig(level=logging.WARNING)
+    _configure_runtime_logging()
 
-    hf_token = _get_hf_token()
-    if not hf_token:
-        print("ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"HF token loaded", file=sys.stderr)
-
-    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
-    config = load_config(config_path)
+    config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
+    _normalize_config_model(config)
     config.yolo_mode = True  # Auto-approve everything in headless mode
 
     if model:
-        config.model_name = model
+        try:
+            config.model_name = _validate_cli_model_override(model)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+    _apply_tool_runtime_override(config, sandbox_tools=sandbox_tools)
+    local_mode = _is_local_tool_runtime(config)
+
+    hf_token = resolve_hf_token()
+    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
+        print(
+            "ERROR: No HF token found. Set HF_TOKEN or run `hf auth login`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if hf_token:
+        print("HF token loaded", file=sys.stderr)
+
+    notification_gateway = NotificationGateway(config.messaging)
+    await notification_gateway.start()
+    hf_user, hf_user_plan = await _get_hf_identity(hf_token)
 
     if max_iterations is not None:
         config.max_iterations = max_iterations
 
     print(f"Model: {config.model_name}", file=sys.stderr)
+    print(f"Tool runtime: {_tool_runtime_label(local_mode)}", file=sys.stderr)
     print(f"Max iterations: {config.max_iterations}", file=sys.stderr)
     print(f"Prompt: {prompt}", file=sys.stderr)
     print("---", file=sys.stderr)
@@ -1062,7 +1473,9 @@ async def headless_main(
     submission_queue: asyncio.Queue = asyncio.Queue()
     event_queue: asyncio.Queue = asyncio.Queue()
 
-    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    tool_router = ToolRouter(
+        config.mcpServers, hf_token=hf_token, local_mode=local_mode
+    )
     session_holder: list = [None]
 
     agent_task = asyncio.create_task(
@@ -1073,8 +1486,15 @@ async def headless_main(
             tool_router=tool_router,
             session_holder=session_holder,
             hf_token=hf_token,
-            local_mode=True,
+            user_id=hf_user,
+            hf_username=hf_user,
+            user_plan=hf_user_plan,
+            local_mode=local_mode,
+            autonomous_mode=True,
             stream=stream,
+            notification_gateway=notification_gateway,
+            notification_destinations=config.messaging.default_auto_destinations(),
+            defer_turn_complete_notification=True,
         )
     )
 
@@ -1168,38 +1588,55 @@ async def headless_main(
             else:
                 print_tool_log(tool, log)
         elif event.event_type == "approval_required":
-            # Auto-approve everything in headless mode (safety net if yolo_mode
-            # didn't prevent the approval event for some reason)
+            # Auto-approve in headless mode, except scheduled HF jobs. Those
+            # are rejected because their recurring cost needs manual approval.
             tools_data = event.data.get("tools", []) if event.data else []
             approvals = [
                 {
                     "tool_call_id": t.get("tool_call_id", ""),
-                    "approved": True,
-                    "feedback": None,
+                    "approved": not _is_scheduled_hf_job_tool(t),
+                    "feedback": (
+                        "Scheduled HF jobs require manual approval."
+                        if _is_scheduled_hf_job_tool(t)
+                        else None
+                    ),
                 }
                 for t in tools_data
             ]
             _hl_sub_id[0] += 1
-            await submission_queue.put(Submission(
-                id=f"hl_approval_{_hl_sub_id[0]}",
-                operation=Operation(
-                    op_type=OpType.EXEC_APPROVAL,
-                    data={"approvals": approvals},
-                ),
-            ))
+            await submission_queue.put(
+                Submission(
+                    id=f"hl_approval_{_hl_sub_id[0]}",
+                    operation=Operation(
+                        op_type=OpType.EXEC_APPROVAL,
+                        data={"approvals": approvals},
+                    ),
+                )
+            )
         elif event.event_type == "compacted":
             old_tokens = event.data.get("old_tokens", 0) if event.data else 0
             new_tokens = event.data.get("new_tokens", 0) if event.data else 0
             print_compacted(old_tokens, new_tokens)
         elif event.event_type == "error":
             stream_buf.discard()
-            error = event.data.get("error", "Unknown error") if event.data else "Unknown error"
+            error = (
+                event.data.get("error", "Unknown error")
+                if event.data
+                else "Unknown error"
+            )
             print_error(error)
             break
         elif event.event_type in ("turn_complete", "interrupted"):
             stream_buf.discard()
             history_size = event.data.get("history_size", "?") if event.data else "?"
-            print(f"\n--- Agent {event.event_type} (history_size={history_size}) ---", file=sys.stderr)
+            print(
+                f"\n--- Agent {event.event_type} (history_size={history_size}) ---",
+                file=sys.stderr,
+            )
+            if event.event_type == "turn_complete":
+                session = session_holder[0] if session_holder else None
+                if session is not None:
+                    await session.send_deferred_turn_complete_notification(event)
             break
 
     # Shutdown
@@ -1213,26 +1650,46 @@ async def headless_main(
     except asyncio.TimeoutError:
         agent_task.cancel()
         await tool_router.__aexit__(None, None, None)
+    finally:
+        await notification_gateway.close()
 
 
 def cli():
     """Entry point for the ml-intern CLI command."""
     import logging as _logging
     import warnings
+
     # Suppress aiohttp "Unclosed client session" noise during event loop teardown
     _logging.getLogger("asyncio").setLevel(_logging.CRITICAL)
+    _configure_runtime_logging()
     # Suppress litellm pydantic deprecation warnings
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="litellm")
     # Suppress whoosh invalid escape sequence warnings (third-party, unfixed upstream)
     warnings.filterwarnings("ignore", category=SyntaxWarning, module="whoosh")
 
     parser = argparse.ArgumentParser(description="Hugging Face Agent CLI")
-    parser.add_argument("prompt", nargs="?", default=None, help="Run headlessly with this prompt")
-    parser.add_argument("--model", "-m", default=None, help=f"Model to use (default: from config)")
-    parser.add_argument("--max-iterations", type=int, default=None,
-                        help="Max LLM requests per turn (default: 50, use -1 for unlimited)")
-    parser.add_argument("--no-stream", action="store_true",
-                        help="Disable token streaming (use non-streaming LLM calls)")
+    parser.add_argument(
+        "prompt", nargs="?", default=None, help="Run headlessly with this prompt"
+    )
+    parser.add_argument(
+        "--model", "-m", default=None, help="Model to use (default: from config)"
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Max LLM requests per turn (default: 50, use -1 for unlimited)",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable token streaming (use non-streaming LLM calls)",
+    )
+    parser.add_argument(
+        "--sandbox-tools",
+        action="store_true",
+        help="Use HF Space sandbox tools instead of local filesystem tools",
+    )
     args = parser.parse_args()
 
     try:
@@ -1240,9 +1697,17 @@ def cli():
             max_iter = args.max_iterations
             if max_iter is not None and max_iter < 0:
                 max_iter = 10_000  # effectively unlimited
-            asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
+            asyncio.run(
+                headless_main(
+                    args.prompt,
+                    model=args.model,
+                    max_iterations=max_iter,
+                    stream=not args.no_stream,
+                    sandbox_tools=args.sandbox_tools,
+                )
+            )
         else:
-            asyncio.run(main())
+            asyncio.run(main(model=args.model, sandbox_tools=args.sandbox_tools))
     except KeyboardInterrupt:
         print("\n\nGoodbye!")
 

@@ -7,6 +7,7 @@ import {
   IconButton,
   Alert,
   AlertTitle,
+  Button,
   Snackbar,
   useMediaQuery,
   useTheme,
@@ -24,7 +25,10 @@ import SessionSidebar from '@/components/SessionSidebar/SessionSidebar';
 import SessionChat from '@/components/SessionChat';
 import CodePanel from '@/components/CodePanel/CodePanel';
 import WelcomeScreen from '@/components/WelcomeScreen/WelcomeScreen';
+import YoloControl from '@/components/YoloControl';
+import UsageMeter from '@/components/UsageMeter';
 import { apiFetch } from '@/utils/api';
+import { inferenceCreditCta, isInferenceCreditError } from '@/utils/inferenceBilling';
 
 const DRAWER_WIDTH = 260;
 
@@ -121,6 +125,39 @@ export default function AppLayout() {
     };
   }, [isConnected, activeSessionId]);
 
+  // Best-effort sandbox cleanup when the browser tab/window closes. This
+  // preserves durable chat history; explicit delete still removes the session.
+  useEffect(() => {
+    const teardownSandboxes = () => {
+      const liveSessionIds = useSessionStore
+        .getState()
+        .sessions
+        .filter((session) => session.isActive && !session.expired)
+        .map((session) => session.id);
+
+      for (const sessionId of liveSessionIds) {
+        const url = `/api/session/${sessionId}/sandbox/teardown`;
+        const body = '{}';
+        const blob = new Blob([body], { type: 'application/json' });
+
+        if (navigator.sendBeacon?.(url, blob)) {
+          continue;
+        }
+
+        fetch(url, {
+          method: 'POST',
+          body,
+          keepalive: true,
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        }).catch(() => {});
+      }
+    };
+
+    window.addEventListener('pagehide', teardownSandboxes);
+    return () => window.removeEventListener('pagehide', teardownSandboxes);
+  }, []);
+
   const handleSessionDead = useCallback(
     (deadSessionId: string) => {
       // Backend lost this session — mark it expired so the chat shows a
@@ -149,6 +186,18 @@ export default function AppLayout() {
       ? 'LLM Provider Unreachable'
       : 'LLM Error'
     : '';
+  const llmCreditCta =
+    llmHealthError && isInferenceCreditError(llmHealthError.error, llmHealthError.errorType)
+      ? inferenceCreditCta(user?.plan)
+      : null;
+
+  const trackHealthProClick = () => {
+    if (user?.plan === 'pro' || !activeSessionId) return;
+    void apiFetch(`/api/pro-click/${activeSessionId}`, {
+      method: 'POST',
+      body: JSON.stringify({ source: 'llm_health_credit_error', target: 'hf_pro' }),
+    }).catch(() => {});
+  };
 
   // -- Welcome screen: no sessions at all ---------------------------------
   if (!hasAnySessions) {
@@ -252,6 +301,8 @@ export default function AppLayout() {
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <UsageMeter />
+            <YoloControl />
             <IconButton
               onClick={toggleTheme}
               size="small"
@@ -430,6 +481,36 @@ export default function AppLayout() {
             <Typography variant="body2" sx={{ fontSize: '0.78rem', opacity: 0.9 }}>
               {llmHealthError.model} — {llmHealthError.error.slice(0, 150)}
             </Typography>
+          )}
+          {llmCreditCta && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
+              <Button
+                component="a"
+                href={llmCreditCta.primaryHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                color="inherit"
+                size="small"
+                variant="outlined"
+                onClick={trackHealthProClick}
+                sx={{ textTransform: 'none' }}
+              >
+                {llmCreditCta.primaryLabel}
+              </Button>
+              {llmCreditCta.secondaryHref && llmCreditCta.secondaryLabel && (
+                <Button
+                  component="a"
+                  href={llmCreditCta.secondaryHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  color="inherit"
+                  size="small"
+                  sx={{ textTransform: 'none' }}
+                >
+                  {llmCreditCta.secondaryLabel}
+                </Button>
+              )}
+            </Box>
           )}
         </Alert>
       </Snackbar>

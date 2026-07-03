@@ -26,12 +26,41 @@ export interface SideChannelCallbacks {
   onToolLog: (tool: string, log: string, agentId?: string, label?: string) => void;
   onConnectionChange: (connected: boolean) => void;
   onSessionDead: (sessionId: string) => void;
-  onApprovalRequired: (tools: Array<{ tool: string; arguments: Record<string, unknown>; tool_call_id: string }>) => void;
+  onApprovalRequired: (tools: Array<{
+    tool: string;
+    arguments: Record<string, unknown>;
+    tool_call_id: string;
+    auto_approval_blocked?: boolean;
+    block_reason?: string | null;
+    estimated_cost_usd?: number | null;
+    remaining_cap_usd?: number | null;
+  }>) => void;
   onToolCallPanel: (tool: string, args: Record<string, unknown>) => void;
   onToolOutputPanel: (tool: string, toolCallId: string, output: string, success: boolean) => void;
   onStreaming: () => void;
   onToolRunning: (toolName: string, description?: string) => void;
+  onUsageEvent: (eventType: 'llm_call' | 'hf_job_complete' | 'sandbox_destroy', data: Record<string, unknown>) => void;
+  onSessionUpdate: (data: Record<string, unknown>) => void;
   onInterrupted: () => void;
+  onRecoverMessages: (context: MessageRecoveryContext) => Promise<boolean>;
+}
+
+export interface MessageRecoveryContext {
+  submittedText?: string;
+  currentMessageCount: number;
+  currentUserMessageCount: number;
+  sessionInfo?: RecoverySessionInfo;
+}
+
+export interface RecoverySessionInfo {
+  is_processing?: boolean;
+  pending_approval?: Array<{ tool_call_id: string }> | null;
+  auto_approval?: {
+    enabled: boolean;
+    cost_cap_usd?: number | null;
+    estimated_spend_usd?: number;
+    remaining_usd?: number | null;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,35 +71,175 @@ function nextPartId(prefix: string): string {
   return `${prefix}-${Date.now()}-${++partIdCounter}`;
 }
 
+function lastEventKey(sessionId: string): string {
+  return `hf-agent-last-event:${sessionId}`;
+}
+
+async function readErrorResponse(response: Response): Promise<string> {
+  const raw = await response.text().catch(() => '');
+  if (!raw) return response.statusText || 'Request failed';
+  try {
+    const data = JSON.parse(raw);
+    const detail = data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail?.message && typeof detail.message === 'string') return detail.message;
+    if (detail?.error && typeof detail.error === 'string') return detail.error;
+    return JSON.stringify(detail ?? data);
+  } catch {
+    return raw;
+  }
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (!(error instanceof Error)) return false;
+  return error.name === 'AbortError';
+}
+
+function isRecoverableFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  const networkFailureMessages = [
+    'load failed',
+    'failed to fetch',
+    'fetch failed',
+    'networkerror',
+    'network error',
+    'network request failed',
+    'network connection was lost',
+    'internet connection appears to be offline',
+  ];
+
+  return (
+    name === 'networkerror' ||
+    (name === 'typeerror' && networkFailureMessages.some((pattern) => message.includes(pattern)))
+  );
+}
+
+function prependChunks(
+  chunks: UIMessageChunk[],
+  stream: ReadableStream<UIMessageChunk>,
+): ReadableStream<UIMessageChunk> {
+  let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
+  return new ReadableStream<UIMessageChunk>({
+    async start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+
+      reader = stream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+        reader = null;
+      }
+    },
+    cancel(reason) {
+      return reader ? reader.cancel(reason) : stream.cancel(reason);
+    },
+  });
+}
+
+function approvalContinuationPrelude(parts: UIMessage['parts']): UIMessageChunk[] {
+  const chunks: UIMessageChunk[] = [];
+  for (const part of parts) {
+    if (part.type !== 'dynamic-tool' || part.state !== 'approval-responded') {
+      continue;
+    }
+    chunks.push(
+      {
+        type: 'tool-input-start',
+        toolCallId: part.toolCallId,
+        toolName: part.toolName,
+        dynamic: true,
+      },
+      {
+        type: 'tool-input-available',
+        toolCallId: part.toolCallId,
+        toolName: part.toolName,
+        input: part.input,
+        dynamic: true,
+      },
+    );
+  }
+  return chunks;
+}
+
 /** Parse an SSE text stream into AgentEvent objects. */
-function createSSEParserStream(): TransformStream<string, AgentEvent> {
+function createSSEParserStream(sessionId: string): TransformStream<string, AgentEvent> {
   let buffer = '';
+  let eventId: string | null = null;
+  let data = '';
+
+  const dispatch = (controller: TransformStreamDefaultController<AgentEvent>) => {
+    if (!data.trim()) {
+      eventId = null;
+      data = '';
+      return;
+    }
+    try {
+      const json = JSON.parse(data.trim()) as AgentEvent;
+      const seq = json.seq ?? (eventId ? Number(eventId) : undefined);
+      if (Number.isFinite(seq)) {
+        json.seq = seq;
+        localStorage.setItem(lastEventKey(sessionId), String(seq));
+      }
+      controller.enqueue(json);
+    } catch {
+      logger.warn('SSE parse error:', data.trim());
+    } finally {
+      eventId = null;
+      data = '';
+    }
+  };
+
   return new TransformStream<string, AgentEvent>({
     transform(chunk, controller) {
       buffer += chunk;
       const lines = buffer.split('\n');
       // Keep the last (possibly incomplete) line in the buffer
       buffer = lines.pop() || '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('data: ')) {
-          try {
-            const json = JSON.parse(trimmed.slice(6));
-            controller.enqueue(json as AgentEvent);
-          } catch {
-            logger.warn('SSE parse error:', trimmed);
-          }
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/\r$/, '');
+        if (line === '') {
+          dispatch(controller);
+          continue;
+        }
+        if (line.startsWith(':')) continue;
+        if (line.startsWith('id:')) {
+          eventId = line.slice(3).trim();
+        } else if (line.startsWith('data:')) {
+          data += line.slice(5).trimStart() + '\n';
         }
       }
     },
     flush(controller) {
-      // Process any remaining data in buffer
-      if (buffer.trim().startsWith('data: ')) {
-        try {
-          const json = JSON.parse(buffer.trim().slice(6));
-          controller.enqueue(json as AgentEvent);
-        } catch { /* ignore incomplete */ }
+      const line = buffer.replace(/\r$/, '');
+      if (line.startsWith('id:')) {
+        eventId = line.slice(3).trim();
+      } else if (line.startsWith('data:')) {
+        data += line.slice(5).trimStart() + '\n';
       }
+      dispatch(controller);
+    },
+  });
+}
+
+function createRecoveredFinishedStream(): ReadableStream<UIMessageChunk> {
+  return new ReadableStream<UIMessageChunk>({
+    start(controller) {
+      controller.enqueue({ type: 'finish', finishReason: 'stop' });
+      controller.close();
     },
   });
 }
@@ -205,6 +374,10 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
             tool: string;
             arguments: Record<string, unknown>;
             tool_call_id: string;
+            auto_approval_blocked?: boolean;
+            block_reason?: string | null;
+            estimated_cost_usd?: number | null;
+            remaining_cap_usd?: number | null;
           }>;
           if (!tools) break;
 
@@ -226,11 +399,16 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
           const state = (event.data?.state as string) || '';
           const toolName = (event.data?.tool as string) || '';
           const jobUrl = (event.data?.jobUrl as string) || undefined;
+          const trackioSpaceId = (event.data?.trackioSpaceId as string) || undefined;
+          const trackioProject = (event.data?.trackioProject as string) || undefined;
 
           if (tcId.startsWith('plan_tool')) break;
 
           if (jobUrl && tcId) {
             useAgentStore.getState().setJobUrl(tcId, jobUrl);
+          }
+          if (trackioSpaceId && tcId) {
+            useAgentStore.getState().setTrackioDashboard(tcId, trackioSpaceId, trackioProject);
           }
           if (state === 'running' && toolName) {
             sideChannel.onToolRunning(toolName);
@@ -241,8 +419,27 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
           if (state === 'cancelled') {
             controller.enqueue({ type: 'tool-output-error', toolCallId: tcId, errorText: 'Cancelled by user', dynamic: true });
           }
+          if (state === 'billing_required') {
+            const namespace = (event.data?.namespace as string) || '';
+            useAgentStore.getState().setJobsUpgradeRequired({
+              namespace: namespace || null,
+              message: namespace
+                ? `Hugging Face Jobs need credits on the "${namespace}" namespace. Job credits are separate from HF Pro membership; add credits, then re-run the same job.`
+                : 'Hugging Face Jobs need namespace credits, which are separate from HF Pro membership. Add credits, then re-run the same job.',
+            });
+          }
           break;
         }
+
+        case 'llm_call':
+        case 'hf_job_complete':
+        case 'sandbox_destroy':
+          sideChannel.onUsageEvent(event.event_type, event.data || {});
+          break;
+
+        case 'session_update':
+          sideChannel.onSessionUpdate(event.data || {});
+          break;
 
         case 'turn_complete':
           endTextPart(controller);
@@ -291,6 +488,69 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     // Nothing to clean up — no persistent connections
   }
 
+  private async connectToEventStream(): Promise<ReadableStream<UIMessageChunk> | null> {
+    const lastSeq = localStorage.getItem(lastEventKey(this.sessionId));
+    const qs = lastSeq ? `?after=${encodeURIComponent(lastSeq)}` : '';
+    const response = await apiFetch(`/api/events/${this.sessionId}${qs}`, {
+      headers: { 'Accept': 'text/event-stream' },
+    });
+    if (!response.ok || !response.body) return null;
+
+    this.sideChannel.onProcessing();
+
+    return response.body
+      .pipeThrough(new TextDecoderStream())
+      .pipeThrough(createSSEParserStream(this.sessionId))
+      .pipeThrough(createEventToChunkStream(this.sideChannel));
+  }
+
+  private async recoverFailedSend(
+    context: MessageRecoveryContext,
+  ): Promise<ReadableStream<UIMessageChunk>> {
+    let infoRes: Response;
+    try {
+      infoRes = await apiFetch(`/api/session/${this.sessionId}`);
+    } catch {
+      throw new Error(
+        'Connection to the Space was interrupted before the message was accepted. Please retry.',
+      );
+    }
+
+    if (infoRes.status === 404) {
+      this.sideChannel.onSessionDead(this.sessionId);
+      throw new Error('Session not found or inactive');
+    }
+    if (!infoRes.ok) {
+      throw new Error(
+        'Connection to the Space was interrupted before the message was accepted. Please retry.',
+      );
+    }
+
+    const info = await infoRes.json() as RecoverySessionInfo;
+    if (info.is_processing) {
+      try {
+        const stream = await this.connectToEventStream();
+        if (stream) return stream;
+      } catch {
+        // Fall through to message hydration; the turn may have completed
+        // between the status probe and the event-stream reconnect.
+      }
+    }
+
+    const recovered = await this.sideChannel.onRecoverMessages({
+      ...context,
+      sessionInfo: info.is_processing ? undefined : info,
+    });
+    if (recovered) {
+      this.sideChannel.onProcessingDone();
+      return createRecoveredFinishedStream();
+    }
+
+    throw new Error(
+      'Connection to the Space was interrupted before the message was accepted. Please retry.',
+    );
+  }
+
   // -- ChatTransport interface ---------------------------------------------
 
   async sendMessages(
@@ -313,20 +573,23 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     ) || [];
 
     let body: Record<string, unknown>;
+    let submittedText: string | undefined;
+    let preludeChunks: UIMessageChunk[] = [];
     if (approvedParts.length > 0) {
       // Approval continuation — extract approval decisions
       const approvals = approvedParts.map((p) => {
         if (p.type !== 'dynamic-tool') return null;
         const approved = p.approval?.approved ?? true;
-        // Get edited script from agentStore if available
         const editedScript = useAgentStore.getState().getEditedScript(p.toolCallId);
         return {
           tool_call_id: p.toolCallId,
           approved,
           feedback: approved ? null : (p.approval?.reason || 'Rejected by user'),
           edited_script: editedScript ?? null,
+          namespace: null,
         };
       }).filter(Boolean);
+      preludeChunks = approvalContinuationPrelude(approvedParts);
       body = { approvals };
     } else {
       // Normal user message
@@ -337,34 +600,42 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
             .map(p => p.text)
             .join('')
         : '';
+      submittedText = text;
       body = { text };
     }
 
     // POST to SSE endpoint
-    const response = await apiFetch(`/api/chat/${sessionId}`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      signal: options.abortSignal,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
-    });
+    let response: Response;
+    try {
+      response = await apiFetch(`/api/chat/${sessionId}`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal: options.abortSignal,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        },
+      });
+    } catch (error) {
+      if (isAbortError(error, options.abortSignal) || !isRecoverableFetchError(error)) {
+        throw error;
+      }
+      logger.warn('Chat POST failed; attempting session recovery:', error);
+      return this.recoverFailedSend({
+        submittedText,
+        currentMessageCount: options.messages.length,
+        currentUserMessageCount: options.messages.filter(m => m.role === 'user').length,
+      });
+    }
 
     if (response.status === 404) {
       // Backend lost this session (e.g. Space restart). Signal the UI so
       // it can flag the session for the catch-up banner.
       this.sideChannel.onSessionDead(sessionId);
     }
-    if (response.status === 429) {
-      // Claude daily-quota gate tripped. The prefix is the detection marker
-      // for useAgentChat's onError handler, which surfaces the cap dialog
-      // instead of a generic error banner.
-      throw new Error('CLAUDE_QUOTA_EXHAUSTED');
-    }
     if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Request failed');
-      throw new Error(`Chat request failed: ${response.status} ${errorText}`);
+      const errorText = await readErrorResponse(response);
+      throw new Error(`Chat request failed (${response.status}): ${errorText}`);
     }
 
     if (!response.body) {
@@ -372,10 +643,11 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
     }
 
     // Pipe: response bytes → text → SSE events → UIMessageChunks
-    return response.body
+    const stream = response.body
       .pipeThrough(new TextDecoderStream())
-      .pipeThrough(createSSEParserStream())
+      .pipeThrough(createSSEParserStream(sessionId))
       .pipeThrough(createEventToChunkStream(this.sideChannel));
+    return preludeChunks.length > 0 ? prependChunks(preludeChunks, stream) : stream;
   }
 
   async reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
@@ -388,18 +660,7 @@ export class SSEChatTransport implements ChatTransport<UIMessage> {
       const info = await infoRes.json();
       if (!info.is_processing) return null;
 
-      // Session is mid-turn — subscribe to its event broadcast.
-      const response = await apiFetch(`/api/events/${this.sessionId}`, {
-        headers: { 'Accept': 'text/event-stream' },
-      });
-      if (!response.ok || !response.body) return null;
-
-      this.sideChannel.onProcessing();
-
-      return response.body
-        .pipeThrough(new TextDecoderStream())
-        .pipeThrough(createSSEParserStream())
-        .pipeThrough(createEventToChunkStream(this.sideChannel));
+      return this.connectToEventStream();
     } catch {
       return null;
     }

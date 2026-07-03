@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 import uuid
@@ -10,23 +11,49 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
+from litellm import Message
+
 from agent.config import Config
 from agent.context_manager.manager import ContextManager
+from agent.messaging.gateway import NotificationGateway
+from agent.messaging.models import NotificationRequest
+from agent.core.usage_thresholds import (
+    USAGE_THRESHOLD_TOOL_NAME,
+    USAGE_WARNING_FIRST_THRESHOLD_USD,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_TOKENS = 200_000
+_TURN_COMPLETE_NOTIFICATION_CHARS = 39000
+
+DEFAULT_SESSION_LOG_DIR = Path("session_logs")
+
+
+def _format_usd(value: Any) -> str:
+    if isinstance(value, bool):
+        return "$0.00"
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        amount = 0.0
+    return f"${amount:.2f}"
+
+
+def _approval_tools_are_usage_thresholds(tools: Any) -> bool:
+    if not isinstance(tools, list) or len(tools) != 1:
+        return False
+    tool = tools[0]
+    return isinstance(tool, dict) and tool.get("tool") == USAGE_THRESHOLD_TOOL_NAME
 
 
 def _get_max_tokens_safe(model_name: str) -> int:
     """Return the max input-context tokens for a model.
 
-    Primary source: ``litellm.get_model_info(model)['max_input_tokens']`` —
-    LiteLLM maintains an upstream catalog that knows Claude Opus 4.6 is
-    1M, GPT-5 is 272k, Sonnet 4.5 is 200k, and so on. Strips any HF routing
-    suffix / huggingface/ prefix so tagged ids ('moonshotai/Kimi-K2.6:cheapest')
-    look up the bare model. Falls back to a conservative 200k default for
-    models not in the catalog (typically HF-router-only models).
+    Primary source: ``litellm.get_model_info(model)['max_input_tokens']``.
+    Strips any HF routing suffix / huggingface/ prefix so tagged ids
+    ('moonshotai/Kimi-K2.7-Code:novita') look up the bare model. Falls back to a
+    conservative 200k default for models not in the catalog.
     """
     from litellm import get_model_info
 
@@ -44,7 +71,8 @@ def _get_max_tokens_safe(model_name: str) -> int:
             continue
     logger.info(
         "No litellm.get_model_info entry for %s, falling back to %d",
-        model_name, _DEFAULT_MAX_TOKENS,
+        model_name,
+        _DEFAULT_MAX_TOKENS,
     )
     return _DEFAULT_MAX_TOKENS
 
@@ -52,9 +80,10 @@ def _get_max_tokens_safe(model_name: str) -> int:
 class OpType(Enum):
     USER_INPUT = "user_input"
     EXEC_APPROVAL = "exec_approval"
-    INTERRUPT = "interrupt"
     UNDO = "undo"
     COMPACT = "compact"
+    NEW = "new"
+    RESUME = "resume"
     SHUTDOWN = "shutdown"
 
 
@@ -62,6 +91,7 @@ class OpType(Enum):
 class Event:
     event_type: str
     data: Optional[dict[str, Any]] = None
+    seq: Optional[int] = None
 
 
 class Session:
@@ -73,16 +103,33 @@ class Session:
     def __init__(
         self,
         event_queue: asyncio.Queue,
-        config: Config | None = None,
+        config: Config,
         tool_router=None,
         context_manager: ContextManager | None = None,
         hf_token: str | None = None,
         local_mode: bool = False,
+        autonomous_mode: bool = False,
         stream: bool = True,
+        notification_gateway: NotificationGateway | None = None,
+        notification_destinations: list[str] | None = None,
+        defer_turn_complete_notification: bool = False,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        hf_username: str | None = None,
+        user_plan: str | None = None,
+        persistence_store: Any | None = None,
     ):
         self.hf_token: Optional[str] = hf_token
+        self.user_id: Optional[str] = user_id
+        self.hf_username: Optional[str] = hf_username
+        self.user_plan: str | None = user_plan
+        self.local_mode = local_mode
+        self.autonomous_mode = autonomous_mode
+        self.persistence_store = persistence_store
         self.tool_router = tool_router
         self.stream = stream
+        if config is None:
+            raise ValueError("Session requires a Config")
         tool_specs = tool_router.get_tool_specs_for_llm() if tool_router else []
         self.context_manager = context_manager or ContextManager(
             model_max_tokens=_get_max_tokens_safe(config.model_name),
@@ -90,22 +137,40 @@ class Session:
             untouched_messages=5,
             tool_specs=tool_specs,
             hf_token=hf_token,
+            hf_username=hf_username,
             local_mode=local_mode,
+            autonomous_mode=autonomous_mode,
         )
         self.event_queue = event_queue
-        self.session_id = str(uuid.uuid4())
-        self.config = config or Config(
-            model_name="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        )
+        self.session_id = session_id or str(uuid.uuid4())
+        self.inference_billing_session_id: str | None = None
+        self.config = config
         self.is_running = True
+        self.current_plan: list[dict[str, str]] = []
         self._cancelled = asyncio.Event()
         self.pending_approval: Optional[dict[str, Any]] = None
         self.sandbox = None
+        self.sandbox_hardware: Optional[str] = None
+        self.sandbox_preload_task: Optional[asyncio.Task] = None
+        self.sandbox_preload_error: Optional[str] = None
+        self.sandbox_preload_cancel_event: Any | None = None
         self._running_job_ids: set[str] = set()  # HF job IDs currently executing
+        self.notification_gateway = notification_gateway
+        self.notification_destinations = list(notification_destinations or [])
+        self.defer_turn_complete_notification = defer_turn_complete_notification
+        self.auto_approval_enabled: bool = False
+        self.auto_approval_cost_cap_usd: float | None = None
+        self.auto_approval_estimated_spend_usd: float = 0.0
+        self._yolo_budget_reservations: dict[str, Any] = {}
+        self.usage_warning_next_threshold_usd: float = USAGE_WARNING_FIRST_THRESHOLD_USD
+        self.usage_threshold_checker: Any | None = None
+        self.yolo_budget_checker: Any | None = None
+        self.usage_hf_billing_snapshot: dict[str, Any] | None = None
+        self.usage_metrics: dict[str, Any] | None = None
 
         # Session trajectory logging
         self.logged_events: list[dict] = []
-        self.session_start_time = datetime.now().isoformat()
+        self.session_start_time = datetime.now().astimezone().isoformat()
         self.turn_count: int = 0
         self.last_auto_save_turn: int = 0
         # Stable local save path so heartbeat saves overwrite one file instead
@@ -123,23 +188,176 @@ class Session:
         #          thinking params at all
         # Key absent → not probed yet; fall back to the raw preference.
         self.model_effective_effort: dict[str, str | None] = {}
+        self.context_manager.on_message_added = self._schedule_trace_message
 
     async def send_event(self, event: Event) -> None:
         """Send event back to client and log to trajectory"""
-        await self.event_queue.put(event)
-
         # Log event to trajectory
         self.logged_events.append(
             {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
                 "event_type": event.event_type,
                 "data": event.data,
             }
         )
+        if self.persistence_store is not None:
+            try:
+                event.seq = await self.persistence_store.append_event(
+                    self.session_id, event.event_type, event.data
+                )
+            except Exception as e:
+                logger.debug("Event persistence failed for %s: %s", self.session_id, e)
+
+        await self.event_queue.put(event)
+        await self._enqueue_auto_notification_requests(event)
 
         # Mid-turn heartbeat flush (owned by telemetry module).
         from agent.core.telemetry import HeartbeatSaver
+
         HeartbeatSaver.maybe_fire(self)
+
+    def _schedule_trace_message(self, message: Any) -> None:
+        """Best-effort append-only trace save for SFT/KPI export."""
+        if self.persistence_store is None:
+            return
+        try:
+            payload = message.model_dump(mode="json")
+        except Exception:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        source = str(payload.get("role") or "message")
+        loop.create_task(
+            self.persistence_store.append_trace_message(
+                self.session_id, payload, source=source
+            )
+        )
+
+    def set_notification_destinations(self, destinations: list[str]) -> None:
+        """Replace the session's opted-in auto-notification destinations."""
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for destination in destinations:
+            if destination not in seen:
+                deduped.append(destination)
+                seen.add(destination)
+        self.notification_destinations = deduped
+
+    async def send_deferred_turn_complete_notification(self, event: Event) -> None:
+        if event.event_type != "turn_complete":
+            return
+        await self._enqueue_auto_notification_requests(
+            event,
+            include_deferred_turn_complete=True,
+        )
+
+    async def _enqueue_auto_notification_requests(
+        self,
+        event: Event,
+        include_deferred_turn_complete: bool = False,
+    ) -> None:
+        if self.notification_gateway is None:
+            return
+        if not self.notification_destinations:
+            return
+        auto_events = set(self.config.messaging.auto_event_types)
+        if event.event_type not in auto_events:
+            return
+        if (
+            self.defer_turn_complete_notification
+            and event.event_type == "turn_complete"
+            and not include_deferred_turn_complete
+        ):
+            return
+
+        requests = self._build_auto_notification_requests(event)
+        for request in requests:
+            await self.notification_gateway.enqueue(request)
+
+    def _build_auto_notification_requests(
+        self, event: Event
+    ) -> list[NotificationRequest]:
+        metadata = {
+            "session_id": self.session_id,
+            "model": self.config.model_name,
+            "event_type": event.event_type,
+        }
+
+        title: str | None = None
+        message: str | None = None
+        severity = "info"
+        data = event.data or {}
+        if event.event_type == "approval_required":
+            tools = data.get("tools", [])
+            if _approval_tools_are_usage_thresholds(tools):
+                tool = tools[0]
+                args = tool.get("arguments") if isinstance(tool, dict) else {}
+                args = args if isinstance(args, dict) else {}
+                current = _format_usd(args.get("current_spend_usd"))
+                threshold = _format_usd(args.get("threshold_usd"))
+                next_threshold = _format_usd(args.get("next_threshold_usd"))
+                title = "Usage approval required"
+                message = (
+                    f"Session {self.session_id} reached {current} in current-session "
+                    f"usage, crossing the {threshold} warning threshold."
+                )
+                if next_threshold:
+                    message += f" The next warning is at {next_threshold}."
+                severity = "warning"
+            else:
+                tools = data.get("tools", [])
+                tool_names = []
+                for tool in tools if isinstance(tools, list) else []:
+                    if isinstance(tool, dict):
+                        tool_name = str(tool.get("tool") or "").strip()
+                        if tool_name and tool_name not in tool_names:
+                            tool_names.append(tool_name)
+                count = len(tools) if isinstance(tools, list) else 0
+                title = "Agent approval required"
+                message = (
+                    f"Session {self.session_id} is waiting for approval "
+                    f"for {count} tool call(s)."
+                )
+                if tool_names:
+                    message += " Tools: " + ", ".join(tool_names)
+                severity = "warning"
+        elif event.event_type == "error":
+            title = "Agent error"
+            error = str(data.get("error") or "Unknown error")
+            message = f"Session {self.session_id} hit an error.\n{error[:500]}"
+            severity = "error"
+        elif event.event_type == "turn_complete":
+            title = "Agent task complete"
+            summary = str(data.get("final_response") or "").strip()
+            if summary:
+                summary = summary[:_TURN_COMPLETE_NOTIFICATION_CHARS]
+                message = (
+                    f"Session {self.session_id} completed successfully.\n{summary}"
+                )
+            else:
+                message = f"Session {self.session_id} completed successfully."
+            severity = "success"
+
+        if message is None:
+            return []
+
+        requests: list[NotificationRequest] = []
+        for destination in self.notification_destinations:
+            if not self.config.messaging.can_auto_send(destination):
+                continue
+            requests.append(
+                NotificationRequest(
+                    destination=destination,
+                    title=title,
+                    message=message,
+                    severity=severity,
+                    metadata=metadata,
+                    event_type=event.event_type,
+                )
+            )
+        return requests
 
     def cancel(self) -> None:
         """Signal cancellation to the running agent loop."""
@@ -155,8 +373,45 @@ class Session:
 
     def update_model(self, model_name: str) -> None:
         """Switch the active model and update the context window limit."""
-        self.config.model_name = model_name
-        self.context_manager.model_max_tokens = _get_max_tokens_safe(model_name)
+        from agent.core.model_ids import strip_huggingface_model_prefix
+
+        normalized = strip_huggingface_model_prefix(model_name) or model_name
+        self.config.model_name = normalized
+        self.context_manager.model_max_tokens = _get_max_tokens_safe(normalized)
+
+    def set_auto_approval_policy(
+        self, *, enabled: bool, cost_cap_usd: float | None
+    ) -> None:
+        self.auto_approval_enabled = bool(enabled)
+        self.auto_approval_cost_cap_usd = cost_cap_usd
+
+    def add_auto_approval_estimated_spend(self, amount_usd: float | None) -> None:
+        if amount_usd is None or amount_usd <= 0:
+            return
+        self.auto_approval_estimated_spend_usd = round(
+            self.auto_approval_estimated_spend_usd + float(amount_usd), 4
+        )
+
+    @property
+    def auto_approval_remaining_usd(self) -> float | None:
+        if self.auto_approval_cost_cap_usd is None:
+            return None
+        return round(
+            max(
+                0.0,
+                self.auto_approval_cost_cap_usd
+                - self.auto_approval_estimated_spend_usd,
+            ),
+            4,
+        )
+
+    def auto_approval_policy_summary(self) -> dict[str, Any]:
+        return {
+            "enabled": self.auto_approval_enabled,
+            "cost_cap_usd": self.auto_approval_cost_cap_usd,
+            "estimated_spend_usd": round(self.auto_approval_estimated_spend_usd, 4),
+            "remaining_usd": self.auto_approval_remaining_usd,
+        }
 
     def effective_effort_for(self, model_name: str) -> str | None:
         """Resolve the effort level to actually send for ``model_name``.
@@ -174,6 +429,88 @@ class Session:
     def increment_turn(self) -> None:
         """Increment turn counter (called after each user interaction)"""
         self.turn_count += 1
+
+    def start_new_conversation(self) -> dict[str, Any]:
+        """Rotate this runtime into a fresh conversation.
+
+        The tool router, model/config choices, user identity, and external
+        resources stay attached to the CLI process. Conversation-specific state
+        gets reset so later saves do not merge with the prior chat. Warm runtime
+        resources such as the sandbox, in-flight job tracking, and probed
+        model-effort cache are deliberately preserved.
+        """
+        previous_session_id = self.session_id
+        previous_turn_count = self.turn_count
+        previous_message_count = len(self.context_manager.items)
+        previous_non_system_count = sum(
+            1
+            for item in self.context_manager.items
+            if getattr(item, "role", None) != "system"
+        )
+
+        saved_path: str | None = None
+        if self.config.save_sessions and previous_non_system_count:
+            saved_path = self.save_and_upload_detached(self.config.session_dataset_repo)
+
+        from agent.tools.plan_tool import reset_current_plan
+
+        self.current_plan = []
+        reset_current_plan()
+
+        system_msg = self._fresh_system_message()
+        self.context_manager.items = [system_msg] if system_msg is not None else []
+        self.context_manager.running_context_usage = 0
+
+        self.session_id = str(uuid.uuid4())
+        self.inference_billing_session_id = None
+        self.session_start_time = datetime.now().astimezone().isoformat()
+        self.turn_count = 0
+        self.last_auto_save_turn = 0
+        self.logged_events = []
+        self._local_save_path = None
+        self._last_heartbeat_ts = None
+        self.pending_approval = None
+        self.auto_approval_estimated_spend_usd = 0.0
+        self._yolo_budget_reservations = {}
+        self.usage_hf_billing_snapshot = None
+        self.usage_metrics = None
+        self.reset_cancel()
+
+        # Previous-session metadata is intentionally included for event
+        # consumers and telemetry, even though the CLI currently prints only
+        # the optional save path.
+        return {
+            "session_id": self.session_id,
+            "previous_session_id": previous_session_id,
+            "previous_turn_count": previous_turn_count,
+            "previous_message_count": previous_message_count,
+            "saved_path": saved_path,
+        }
+
+    def _fresh_system_message(self) -> Message | None:
+        existing = (
+            self.context_manager.items[0]
+            if self.context_manager.items
+            and getattr(self.context_manager.items[0], "role", None) == "system"
+            else None
+        )
+        refresh = getattr(self.context_manager, "refresh_system_prompt", None)
+        if refresh is None:
+            return existing
+        try:
+            tool_specs = (
+                self.tool_router.get_tool_specs_for_llm() if self.tool_router else []
+            )
+            return refresh(
+                tool_specs=tool_specs,
+                hf_token=self.hf_token,
+                hf_username=self.hf_username,
+                local_mode=self.local_mode,
+                autonomous_mode=self.autonomous_mode,
+            )
+        except Exception as e:
+            logger.warning("Failed to refresh system prompt for new chat: %s", e)
+            return existing
 
     async def auto_save_if_needed(self) -> None:
         """Check if auto-save should trigger and save if so (completely non-blocking)"""
@@ -199,11 +536,35 @@ class Session:
                 tools = self.tool_router.get_tool_specs_for_llm() or []
             except Exception:
                 tools = []
+        # Sum per-call cost from llm_call events so analyzers don't have to
+        # walk the events array themselves. Each `llm_call` event already
+        # carries cost_usd from `agent.core.telemetry.record_llm_call`.
+        total_cost_usd = sum(
+            float((e.get("data") or {}).get("cost_usd") or 0.0)
+            for e in self.logged_events
+            if e.get("event_type") == "llm_call"
+        )
+        try:
+            from agent.core.usage_metrics import summarize_usage_events
+
+            usage_metrics = summarize_usage_events(
+                self.logged_events,
+                session_id=self.session_id,
+                hf_billing_snapshot=self.usage_hf_billing_snapshot,
+            )
+            self.usage_metrics = usage_metrics
+        except Exception as e:
+            logger.debug("Usage metrics summary failed for %s: %s", self.session_id, e)
+            usage_metrics = self.usage_metrics or {}
         return {
             "session_id": self.session_id,
+            "user_id": self.user_id,
+            "hf_username": self.hf_username,
             "session_start_time": self.session_start_time,
             "session_end_time": datetime.now().isoformat(),
             "model_name": self.config.model_name,
+            "total_cost_usd": total_cost_usd,
+            "usage_metrics": usage_metrics,
             "messages": [msg.model_dump() for msg in self.context_manager.items],
             "events": self.logged_events,
             "tools": tools,
@@ -211,7 +572,7 @@ class Session:
 
     def save_trajectory_local(
         self,
-        directory: str = "session_logs",
+        directory: str = str(DEFAULT_SESSION_LOG_DIR),
         upload_status: str = "pending",
         dataset_url: Optional[str] = None,
     ) -> Optional[str]:
@@ -237,6 +598,7 @@ class Session:
             # snapshot between heartbeats would otherwise leak them.
             try:
                 from agent.core.redact import scrub
+
                 for key in ("messages", "events", "tools"):
                     if key in trajectory:
                         trajectory[key] = scrub(trajectory[key])
@@ -274,82 +636,174 @@ class Session:
             logger.error(f"Failed to save session locally: {e}")
             return None
 
-    def update_local_save_status(
-        self, filepath: str, upload_status: str, dataset_url: Optional[str] = None
-    ) -> bool:
-        """Update the upload status of an existing local save file"""
+    def _personal_trace_repo_id(self) -> Optional[str]:
+        """Resolve the per-user trace repo id from config + HF username.
+
+        Returns ``None`` when sharing is disabled, the user is anonymous,
+        or the template is missing — caller skips the personal upload in
+        those cases.
+        """
+        if not getattr(self.config, "share_traces", False):
+            return None
+        hf_user = self.hf_username or self.user_id
+        if not hf_user:
+            return None
+        template = getattr(self.config, "personal_trace_repo_template", None)
+        if not template:
+            return None
         try:
-            with open(filepath, "r") as f:
-                data = json.load(f)
-
-            data["upload_status"] = upload_status
-            data["upload_url"] = dataset_url
-            data["last_save_time"] = datetime.now().isoformat()
-
-            with open(filepath, "w") as f:
-                json.dump(data, f, indent=2)
-
-            return True
-        except Exception as e:
-            logger.error(f"Failed to update local save status: {e}")
-            return False
-
-    def save_and_upload_detached(self, repo_id: str) -> Optional[str]:
-        """
-        Save session locally and spawn detached subprocess for upload (fire-and-forget)
-
-        Args:
-            repo_id: HuggingFace dataset repo ID
-
-        Returns:
-            Path to local save file
-        """
-        # Save locally first (fast, synchronous)
-        local_path = self.save_trajectory_local(upload_status="pending")
-        if not local_path:
+            return template.format(hf_user=hf_user)
+        except (KeyError, IndexError):
+            logger.debug("personal_trace_repo_template format failed: %r", template)
             return None
 
-        # Spawn detached subprocess for upload (fire-and-forget)
+    def _spawn_uploader(
+        self,
+        action: str,
+        target: str,
+        repo_id: str,
+        *,
+        format: str,
+        token_env: Optional[str],
+        private: bool,
+        token_value: Optional[str] = None,
+    ) -> None:
+        """Fire-and-forget spawn of ``session_uploader.py`` with the given args."""
         try:
             uploader_script = Path(__file__).parent / "session_uploader.py"
+            cmd = [
+                sys.executable,
+                str(uploader_script),
+                action,
+                target,
+                repo_id,
+                "--format",
+                format,
+                "--private",
+                "true" if private else "false",
+            ]
+            if token_env:
+                cmd.extend(["--token-env", token_env])
 
-            # Use Popen with detached process
+            env = os.environ.copy()
+            if token_value:
+                env["_ML_INTERN_PERSONAL_TOKEN"] = token_value
+
             subprocess.Popen(
-                [sys.executable, str(uploader_script), "upload", local_path, repo_id],
+                cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=env,
                 start_new_session=True,  # Detach from parent
             )
         except Exception as e:
             logger.warning(f"Failed to spawn upload subprocess: {e}")
 
+    def save_and_upload_detached(self, repo_id: str) -> Optional[str]:
+        """
+        Save session locally and spawn detached subprocess(es) for upload
+        (fire-and-forget).
+
+        Always uploads to the shared org dataset (``repo_id``) in the
+        single-row format used by the KPI scheduler. When
+        ``config.share_traces`` is enabled and a username is known, also
+        uploads to the user's personal private dataset in Claude Code JSONL
+        format so the HF Agent Trace Viewer auto-renders it.
+
+        Args:
+            repo_id: HuggingFace dataset repo ID for the org/KPI upload.
+
+        Returns:
+            Path to local save file
+        """
+        local_path = self.save_trajectory_local(upload_status="pending")
+        if not local_path:
+            return None
+
+        self._spawn_uploader(
+            "upload",
+            local_path,
+            repo_id,
+            format="row",
+            token_env=None,  # default org token chain
+            private=False,
+        )
+
+        personal_repo = self._personal_trace_repo_id()
+        if personal_repo:
+            # User's own HF_TOKEN write-scoped to their namespace.
+            self._spawn_uploader(
+                "upload",
+                local_path,
+                personal_repo,
+                format="claude_code",
+                token_env="HF_TOKEN",
+                token_value=self.hf_token,
+                private=True,
+            )
+
         return local_path
 
     @staticmethod
     def retry_failed_uploads_detached(
-        directory: str = "session_logs", repo_id: Optional[str] = None
+        directory: str = str(DEFAULT_SESSION_LOG_DIR),
+        repo_id: Optional[str] = None,
+        *,
+        personal_repo_id: Optional[str] = None,
     ) -> None:
         """
-        Spawn detached subprocess to retry failed/pending uploads (fire-and-forget)
+        Spawn detached subprocess(es) to retry failed/pending uploads
+        (fire-and-forget).
 
         Args:
             directory: Directory containing session logs
-            repo_id: Target dataset repo ID
+            repo_id: Target dataset repo ID for the shared org/KPI upload.
+            personal_repo_id: Per-user dataset for Claude-Code-format
+                retries. ``None`` skips the personal retry pass.
         """
-        if not repo_id:
+        if not repo_id and not personal_repo_id:
             return
 
         try:
             uploader_script = Path(__file__).parent / "session_uploader.py"
 
-            # Spawn detached subprocess for retry
-            subprocess.Popen(
-                [sys.executable, str(uploader_script), "retry", directory, repo_id],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,  # Detach from parent
-            )
+            if repo_id:
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(uploader_script),
+                        "retry",
+                        directory,
+                        repo_id,
+                        "--format",
+                        "row",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+
+            if personal_repo_id:
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(uploader_script),
+                        "retry",
+                        directory,
+                        personal_repo_id,
+                        "--format",
+                        "claude_code",
+                        "--token-env",
+                        "HF_TOKEN",
+                        "--private",
+                        "true",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
         except Exception as e:
             logger.warning(f"Failed to spawn retry subprocess: {e}")

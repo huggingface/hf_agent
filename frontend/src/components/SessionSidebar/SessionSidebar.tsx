@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Box,
@@ -18,6 +18,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { useSessionStore } from '@/store/sessionStore';
 import { useAgentStore } from '@/store/agentStore';
+import { useUsageStore } from '@/store/usageStore';
 import { apiFetch } from '@/utils/api';
 
 interface SessionSidebarProps {
@@ -25,12 +26,29 @@ interface SessionSidebarProps {
 }
 
 export default function SessionSidebar({ onClose }: SessionSidebarProps) {
-  const { sessions, activeSessionId, createSession, deleteSession, switchSession } =
+  const { sessions, activeSessionId, createSession, deleteSession, switchSession, mergeServerSessions } =
     useSessionStore();
   const { setPlan, clearPanel } =
     useAgentStore();
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [capacityError, setCapacityError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await apiFetch('/api/sessions');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!cancelled && Array.isArray(data)) {
+          mergeServerSessions(data);
+        }
+      } catch {
+        /* local sidebar metadata is still usable */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mergeServerSessions]);
 
   // -- Handlers -----------------------------------------------------------
 
@@ -46,7 +64,8 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
         return;
       }
       const data = await response.json();
-      createSession(data.session_id);
+      createSession(data.session_id, data.model);
+      void useUsageStore.getState().fetchUsage(data.session_id);
       setPlan([]);
       clearPanel();
       onClose?.();
@@ -90,7 +109,8 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
         const response = await apiFetch('/api/session', { method: 'POST' });
         if (response.ok) {
           const data = await response.json();
-          createSession(data.session_id);
+          createSession(data.session_id, data.model);
+          void useUsageStore.getState().fetchUsage(data.session_id);
           setPlan([]);
           clearPanel();
         }
@@ -105,12 +125,28 @@ export default function SessionSidebar({ onClose }: SessionSidebarProps) {
 
   const handleSelect = useCallback(
     (sessionId: string) => {
+      const shouldActivateSession = sessionId !== activeSessionId;
       switchSession(sessionId);
+      if (shouldActivateSession) {
+        void (async () => {
+          try {
+            const response = await apiFetch(`/api/session/${sessionId}/activate`, {
+              method: 'POST',
+            });
+            if (!response.ok) return;
+            const info = await response.json();
+            mergeServerSessions([info]);
+            void useUsageStore.getState().fetchUsage(sessionId);
+          } catch {
+            /* best effort: usage falls back to the existing session metadata */
+          }
+        })();
+      }
       // Per-session state (plan, panel, activity) is restored automatically
       // by SessionChat's useEffect when isActive flips to true.
       onClose?.();
     },
-    [switchSession, onClose],
+    [activeSessionId, mergeServerSessions, switchSession, onClose],
   );
 
   const formatTime = (d: string) =>

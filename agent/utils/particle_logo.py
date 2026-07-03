@@ -23,7 +23,9 @@ from agent.utils.boot_timing import settle_curve, warm_gold_from_white
 class Particle:
     __slots__ = ("x", "y", "target_x", "target_y", "vx", "vy", "phase", "delay")
 
-    def __init__(self, x: float, y: float, target_x: float, target_y: float, delay: float = 0):
+    def __init__(
+        self, x: float, y: float, target_x: float, target_y: float, delay: float = 0
+    ):
         self.x = x
         self.y = y
         self.target_x = target_x
@@ -56,10 +58,6 @@ class Particle:
         self.vy *= damping
         self.x += self.vx
         self.y += self.vy
-
-    @property
-    def at_target(self) -> bool:
-        return abs(self.x - self.target_x) < 1.5 and abs(self.y - self.target_y) < 1.5
 
 
 def run_particle_logo(console: Console, hold_seconds: float = 1.5) -> None:

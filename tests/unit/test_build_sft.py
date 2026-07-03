@@ -19,28 +19,55 @@ def _session_row():
         "session_id": "abc",
         "session_start_time": "2026-04-24T10:00:00",
         "session_end_time": "2026-04-24T10:05:00",
-        "model_name": "claude-opus-4-6",
+        "model_name": "anthropic/claude-opus-4.8:fal-ai",
         "messages": [
             {"role": "system", "content": "You are an agent"},
             {"role": "user", "content": "fine-tune llama"},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "type": "function",
-                 "function": {"name": "hf_jobs", "arguments": '{"script":"from trl import SFTTrainer"}'}},
-            ]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "hf_jobs",
+                            "arguments": '{"script":"from trl import SFTTrainer"}',
+                        },
+                    },
+                ],
+            },
             {"role": "tool", "tool_call_id": "c1", "content": "ok"},
             {"role": "assistant", "content": "done"},
         ],
         "events": [
-            {"timestamp": "2026-04-24T10:00:05", "event_type": "tool_call",
-             "data": {"tool": "hf_jobs",
-                      "arguments": {"script": "from trl import SFTTrainer"}}},
-            {"timestamp": "2026-04-24T10:00:06", "event_type": "hf_job_submit",
-             "data": {"flavor": "a100-large", "push_to_hub": True}},
-            {"timestamp": "2026-04-24T10:45:00", "event_type": "hf_job_complete",
-             "data": {"flavor": "a100-large", "final_status": "COMPLETED",
-                      "wall_time_s": 2700}},
-            {"timestamp": "2026-04-24T10:45:05", "event_type": "turn_complete",
-             "data": {}},
+            {
+                "timestamp": "2026-04-24T10:00:05",
+                "event_type": "tool_call",
+                "data": {
+                    "tool": "hf_jobs",
+                    "arguments": {"script": "from trl import SFTTrainer"},
+                },
+            },
+            {
+                "timestamp": "2026-04-24T10:00:06",
+                "event_type": "hf_job_submit",
+                "data": {"flavor": "a100-large", "push_to_hub": True},
+            },
+            {
+                "timestamp": "2026-04-24T10:45:00",
+                "event_type": "hf_job_complete",
+                "data": {
+                    "flavor": "a100-large",
+                    "final_status": "COMPLETED",
+                    "wall_time_s": 2700,
+                },
+            },
+            {
+                "timestamp": "2026-04-24T10:45:05",
+                "event_type": "turn_complete",
+                "data": {},
+            },
         ],
         "tools": [{"type": "function", "function": {"name": "hf_jobs"}}],
     }
@@ -50,7 +77,7 @@ def test_reshape_preserves_messages_and_tools_and_adds_tags():
     mod = _load()
     row = mod._reshape_to_sft(_session_row())
     assert row["session_id"] == "abc"
-    assert row["model"] == "claude-opus-4-6"
+    assert row["model"] == "anthropic/claude-opus-4.8:fal-ai"
     assert row["timestamp"] == "2026-04-24T10:00:00"
     # Messages preserved verbatim, in order, with tool_calls + tool role rows.
     assert len(row["messages"]) == 5

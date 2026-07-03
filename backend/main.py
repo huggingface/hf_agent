@@ -1,5 +1,6 @@
 """FastAPI application for HF Agent web interface."""
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -9,11 +10,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from routes.agent import router as agent_router
-from routes.auth import router as auth_router
 
-# Load .env from project root (parent directory)
+# Load .env before importing routes/session_manager so persistence and model
+# modules see local settings during startup.
 load_dotenv(Path(__file__).parent.parent / ".env")
+
+from routes.agent import router as agent_router  # noqa: E402
+from routes.auth import router as auth_router  # noqa: E402
+from session_manager import session_manager  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -21,50 +25,77 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+SHUTDOWN_USAGE_REFRESH_CONCURRENCY = 32
+
+
+async def _flush_session_on_shutdown(sid: str, agent_session, semaphore) -> None:
+    sess = agent_session.session
+    if not sess.config.save_sessions:
+        return
+    try:
+        async with semaphore:
+            await session_manager.refresh_session_usage_metrics(
+                agent_session,
+                error_code="lifespan_billing_snapshot_error",
+            )
+            sess.save_and_upload_detached(sess.config.session_dataset_repo)
+            logger.info("Flushed session %s on shutdown", sid)
+    except Exception as e:
+        logger.warning("Failed to flush session %s: %s", sid, e)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info("Starting HF Agent backend...")
+    await session_manager.start()
     # Start in-process hourly KPI rollup. Replaces an external cron so the
     # rollup lives next to the data and reuses the Space's HF token.
     try:
         import kpis_scheduler
+
         kpis_scheduler.start()
     except Exception as e:
         logger.warning("KPI scheduler failed to start: %s", e)
-
     yield
 
     logger.info("Shutting down HF Agent backend...")
     try:
         import kpis_scheduler
+
         await kpis_scheduler.shutdown()
     except Exception as e:
         logger.warning("KPI scheduler shutdown failed: %s", e)
 
     # Final-flush: save every still-active session so we don't lose traces on
-    # server restart. Uploads are detached subprocesses — this is fast.
+    # server restart. Billing refreshes are timeboxed and bounded; uploads are
+    # detached subprocesses.
     try:
-        from session_manager import session_manager
-        for sid, agent_session in list(session_manager.sessions.items()):
-            sess = agent_session.session
-            if sess.config.save_sessions:
-                try:
-                    sess.save_and_upload_detached(sess.config.session_dataset_repo)
-                    logger.info("Flushed session %s on shutdown", sid)
-                except Exception as e:
-                    logger.warning("Failed to flush session %s: %s", sid, e)
+        semaphore = asyncio.Semaphore(SHUTDOWN_USAGE_REFRESH_CONCURRENCY)
+        await asyncio.gather(
+            *(
+                _flush_session_on_shutdown(sid, agent_session, semaphore)
+                for sid, agent_session in list(session_manager.sessions.items())
+            )
+        )
     except Exception as e:
         logger.warning("Lifespan final-flush skipped: %s", e)
+    await session_manager.close()
 
+
+# Disable FastAPI auto-docs when running on HF Spaces (SPACE_ID is set by the
+# platform) to avoid exposing the full API surface to anonymous visitors. Local
+# dev keeps /docs and /redoc available.
+_DOCS_DISABLED = os.environ.get("SPACE_ID") is not None
 
 app = FastAPI(
     title="HF Agent",
     description="ML Engineering Assistant API",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None if _DOCS_DISABLED else "/docs",
+    redoc_url=None if _DOCS_DISABLED else "/redoc",
+    openapi_url=None if _DOCS_DISABLED else "/openapi.json",
 )
 
 # CORS middleware for development

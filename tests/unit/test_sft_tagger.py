@@ -7,7 +7,7 @@ def _ev(event_type, data=None, ts="2026-04-24T10:00:00"):
     return {"timestamp": ts, "event_type": event_type, "data": data or {}}
 
 
-def _traj(events=None, messages=None, model="claude-opus-4-6"):
+def _traj(events=None, messages=None, model="anthropic/claude-opus-4.8:fal-ai"):
     return {
         "session_id": "sess-1",
         "model_name": model,
@@ -20,9 +20,8 @@ def _traj(events=None, messages=None, model="claude-opus-4-6"):
 
 
 def test_model_family():
-    assert "model:opus" in tag_session(_traj(model="claude-opus-4-6"))
-    assert "model:sonnet" in tag_session(_traj(model="bedrock/claude-sonnet-4-5"))
-    assert "model:kimi" in tag_session(_traj(model="moonshotai/Kimi-K2.6"))
+    assert "model:opus" in tag_session(_traj(model="anthropic/claude-opus-4.8:fal-ai"))
+    assert "model:kimi" in tag_session(_traj(model="moonshotai/Kimi-K2.7-Code"))
     assert "model:other" in tag_session(_traj(model="unknown-model-xyz"))
 
 
@@ -79,7 +78,7 @@ def test_outcome_ongoing():
 
 def test_outcome_doom_loop_and_context():
     events = [
-        _ev("tool_log", {"tool": "system", "log": "Doom loop detected — injecting corrective prompt"}),
+        _ev("tool_log", {"tool": "system", "log": "Doom loop detected"}),
         _ev("compacted", {"old_tokens": 100, "new_tokens": 50}),
         _ev("turn_complete", {"history_size": 10}),
     ]
@@ -90,11 +89,22 @@ def test_outcome_doom_loop_and_context():
 
 def test_hf_job_tags():
     events = [
-        _ev("tool_call", {"tool": "hf_jobs", "arguments": {"script": "from trl import SFTTrainer"}}),
-        _ev("hf_job_submit", {
-            "flavor": "a100-large", "push_to_hub": True, "job_id": "j1",
-        }),
-        _ev("hf_job_complete", {"flavor": "a100-large", "final_status": "COMPLETED", "wall_time_s": 3600}),
+        _ev(
+            "tool_call",
+            {"tool": "hf_jobs", "arguments": {"script": "from trl import SFTTrainer"}},
+        ),
+        _ev(
+            "hf_job_submit",
+            {
+                "flavor": "a100-large",
+                "push_to_hub": True,
+                "job_id": "j1",
+            },
+        ),
+        _ev(
+            "hf_job_complete",
+            {"flavor": "a100-large", "final_status": "COMPLETED", "wall_time_s": 3600},
+        ),
         _ev("hf_job_submit", {"flavor": "a100x4", "push_to_hub": False}),
         _ev("hf_job_complete", {"flavor": "a100x4", "final_status": "FAILED"}),
     ]
@@ -112,7 +122,13 @@ def test_hf_job_oom():
     events = [
         _ev("tool_call", {"tool": "hf_jobs", "arguments": {}}),
         _ev("hf_job_submit", {"flavor": "a100-large"}),
-        _ev("tool_output", {"success": False, "output": "RuntimeError: CUDA out of memory. Tried to allocate..."}),
+        _ev(
+            "tool_output",
+            {
+                "success": False,
+                "output": "RuntimeError: CUDA out of memory. Tried to allocate...",
+            },
+        ),
     ]
     tags = tag_session(_traj(events))
     assert "hf_job:oom" in tags
@@ -120,7 +136,10 @@ def test_hf_job_oom():
 
 def test_sandbox_tags():
     events = [
-        _ev("sandbox_create", {"hardware": "t4-small", "sandbox_id": "s1", "create_latency_s": 5}),
+        _ev(
+            "sandbox_create",
+            {"hardware": "t4-small", "sandbox_id": "s1", "create_latency_s": 5},
+        ),
         _ev("sandbox_destroy", {"sandbox_id": "s1", "lifetime_s": 3600}),
     ]
     tags = tag_session(_traj(events))
@@ -142,7 +161,9 @@ def test_sandbox_cpu_short():
 def test_feedback_tags():
     up_only = _traj(events=[_ev("feedback", {"rating": "up"})])
     down_only = _traj(events=[_ev("feedback", {"rating": "down"})])
-    mixed = _traj(events=[_ev("feedback", {"rating": "up"}), _ev("feedback", {"rating": "down"})])
+    mixed = _traj(
+        events=[_ev("feedback", {"rating": "up"}), _ev("feedback", {"rating": "down"})]
+    )
     none = _traj()
     assert "feedback:up" in tag_session(up_only)
     assert "feedback:down" in tag_session(down_only)
@@ -152,9 +173,15 @@ def test_feedback_tags():
 
 def test_task_training():
     events = [
-        _ev("tool_call", {"tool": "hf_jobs", "arguments": {
-            "script": "from trl import SFTTrainer\ntrainer = SFTTrainer(...)"
-        }}),
+        _ev(
+            "tool_call",
+            {
+                "tool": "hf_jobs",
+                "arguments": {
+                    "script": "from trl import SFTTrainer\ntrainer = SFTTrainer(...)"
+                },
+            },
+        ),
         _ev("hf_job_submit", {"flavor": "a100-large"}),
     ]
     assert "task:training" in tag_session(_traj(events))
