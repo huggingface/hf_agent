@@ -349,10 +349,14 @@ def _update_upload_status(
     The org and personal uploaders run as separate processes against the same
     local session JSON file. Re-read under an exclusive lock so one uploader
     cannot clobber fields written by the other.
+
+    Uses a temp-file + os.replace pattern to prevent file corruption if
+    json.dump crashes mid-write (previously used seek→dump→truncate which
+    left a truncated file on failure).
     """
     import fcntl
 
-    with open(session_file, "r+") as f:
+    with open(session_file, "r") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             data = json.load(f)
@@ -360,13 +364,22 @@ def _update_upload_status(
             if dataset_url is not None:
                 data[url_key] = dataset_url
             data["last_save_time"] = datetime.now().isoformat()
-            f.seek(0)
-            json.dump(data, f, indent=2)
-            f.truncate()
-            f.flush()
-            os.fsync(f.fileno())
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+    tmp_path = session_file + ".tmp"
+    try:
+        with open(tmp_path, "w") as tmp:
+            json.dump(data, tmp, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, session_file)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def dataset_card_readme(repo_id: str) -> str:
