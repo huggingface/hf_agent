@@ -21,56 +21,22 @@ from agent.core.prompt_caching import (
 
 logger = logging.getLogger(__name__)
 
-_HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
-_HF_WHOAMI_TIMEOUT = 5  # seconds
-
 
 def _get_hf_username(hf_token: str | None = None) -> str:
-    """Return the HF username for the given token.
-
-    Uses subprocess + curl to avoid Python HTTP client IPv6 issues that
-    cause 40+ second hangs (httpx/urllib try IPv6 first which times out
-    at OS level before falling back to IPv4 — the "Happy Eyeballs" problem).
-    """
-    import json
-    import subprocess
-    import time as _t
+    """Return the HF username for the given token via huggingface_hub SDK."""
+    from huggingface_hub import HfApi
 
     if not hf_token:
         logger.warning("No hf_token provided, using 'unknown' as username")
         return "unknown"
 
-    t0 = _t.monotonic()
     try:
-        result = subprocess.run(
-            [
-                "curl",
-                "-s",
-                "-4",  # force IPv4
-                "-m",
-                str(_HF_WHOAMI_TIMEOUT),  # max time
-                "-H",
-                f"Authorization: Bearer {hf_token}",
-                _HF_WHOAMI_URL,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=_HF_WHOAMI_TIMEOUT + 2,
-        )
-        t1 = _t.monotonic()
-        if result.returncode == 0 and result.stdout:
-            data = json.loads(result.stdout)
-            username = data.get("name", "unknown")
-            logger.info(f"HF username resolved to '{username}' in {t1 - t0:.2f}s")
-            return username
-        else:
-            logger.warning(
-                f"curl whoami failed (rc={result.returncode}) in {t1 - t0:.2f}s"
-            )
-            return "unknown"
+        whoami = HfApi().whoami(token=hf_token)
+        username = whoami.get("name", "unknown")
+        logger.info(f"HF username resolved to '{username}'")
+        return username
     except Exception as e:
-        t1 = _t.monotonic()
-        logger.warning(f"HF whoami failed in {t1 - t0:.2f}s: {e}")
+        logger.warning(f"HF whoami failed: {e}")
         return "unknown"
 
 
