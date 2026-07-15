@@ -24,6 +24,7 @@ export type EventType =
   | 'shutdown'
   | 'interrupted'
   | 'undo_complete'
+  | 'session_terminated'
   | 'plan_update';
 
 export interface AgentEvent {
