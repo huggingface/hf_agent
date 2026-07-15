@@ -42,6 +42,7 @@ export interface SideChannelCallbacks {
   onUsageEvent: (eventType: 'llm_call' | 'hf_job_complete' | 'sandbox_destroy', data: Record<string, unknown>) => void;
   onSessionUpdate: (data: Record<string, unknown>) => void;
   onInterrupted: () => void;
+  onSessionTerminated: (reason: string, userMessage: string) => void;
   onRecoverMessages: (context: MessageRecoveryContext) => Promise<boolean>;
 }
 
@@ -454,6 +455,18 @@ function createEventToChunkStream(sideChannel: SideChannelCallbacks): TransformS
           controller.enqueue({ type: 'finish-step' });
           controller.enqueue({ type: 'finish', finishReason: 'error' });
           sideChannel.onError(errorMsg);
+          sideChannel.onProcessingDone();
+          break;
+        }
+
+        case 'session_terminated': {
+          const reason = (event.data?.reason as string) || 'unknown';
+          const userMessage = (event.data?.user_message as string) || 'Session terminated unexpectedly.';
+          endTextPart(controller);
+          controller.enqueue({ type: 'finish-step' });
+          controller.enqueue({ type: 'finish', finishReason: 'error' });
+          sideChannel.onSessionTerminated(reason, userMessage);
+          sideChannel.onError(userMessage);
           sideChannel.onProcessingDone();
           break;
         }
