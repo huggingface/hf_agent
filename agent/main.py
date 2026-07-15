@@ -846,7 +846,22 @@ async def event_listener(
                 )
                 await submission_queue.put(approval_submission)
                 console.print()  # spacing after approval
-            # Silently ignore other events
+            elif event.event_type == "session_terminated":
+                shimmer.stop()
+                stream_buf.discard()
+                data = event.data or {}
+                user_message = data.get(
+                    "user_message", "Session terminated unexpectedly."
+                )
+                reason = data.get("reason", "unknown")
+                print_error(f"{user_message} (reason: {reason})")
+                turn_complete_event.set()
+            else:
+                logger.warning(
+                    "Unhandled event type %r with data: %s",
+                    event.event_type,
+                    event.data,
+                )
 
         except asyncio.CancelledError:
             break

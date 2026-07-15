@@ -416,6 +416,9 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
         }
       },
       onInterrupted: () => { /* no-op — handled by stop() caller */ },
+      onSessionTerminated: (reason: string, userMessage: string) => {
+        logger.warn(`Session terminated (reason: ${reason}): ${userMessage}`);
+      },
       onRecoverMessages: async ({
         submittedText,
         currentMessageCount,
@@ -777,6 +780,25 @@ export function useAgentChat({ sessionId, isActive, isProcessing = false, onRead
                 remaining_usd?: number | null;
               });
             }
+          } else if (et === 'session_terminated') {
+            const userMessage = (event.data?.user_message as string) || 'Session terminated unexpectedly.';
+            sideChannel.onError(userMessage);
+            sideChannel.onProcessingDone();
+            stopReconnect();
+            const result = await hydrateMessages();
+            if (result) {
+              const uiMsgs = llmMessagesToUIMessages(
+                result.data,
+                result.pendingIds,
+                chatActionsRef.current.messages,
+                result.pendingItems,
+              );
+              if (uiMsgs.length > 0) {
+                chat.setMessages(uiMsgs);
+                saveMessages(sessionId, uiMsgs);
+              }
+            }
+            return true;
           } else if (et === 'turn_complete' || et === 'error' || et === 'interrupted') {
             sideChannel.onProcessingDone();
             stopReconnect();
