@@ -1,0 +1,7 @@
+{
+  "model_name": "moonshot/kimi-k2.7-code-highspeed",
+  "tool_runtime": "local",
+  "save_sessions": true,
+  "upload_sessions": false,
+  "share_traces": false
+}

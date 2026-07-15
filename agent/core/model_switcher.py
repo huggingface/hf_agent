@@ -21,11 +21,7 @@ from litellm import acompletion
 
 from agent.core.effort_probe import ProbeInconclusive, probe_effort
 from agent.core.llm_params import _resolve_llm_params
-from agent.core.local_models import (
-    LOCAL_MODEL_PREFIXES,
-    is_local_model_id,
-    is_reserved_local_model_id,
-)
+from agent.core.local_models import is_local_model_id
 from agent.core.model_ids import (
     CLAUDE_OPUS_48_MODEL_ID,
     DEEPSEEK_V4_PRO_MODEL_ID,
@@ -33,8 +29,8 @@ from agent.core.model_ids import (
     GPT_55_MODEL_ID,
     KIMI_K27_CODE_MODEL_ID,
     MINIMAX_M3_MODEL_ID,
-    strip_huggingface_model_prefix,
 )
+from agent.core.model_routing import ModelProvider, resolve_model_route
 
 
 # Suggested models shown by `/model` (not a gate). Users can paste any HF
@@ -56,30 +52,12 @@ _LOCAL_PROBE_TIMEOUT = 15.0
 
 
 def is_valid_model_id(model_id: str) -> bool:
-    """Loose format check — lets users pick any model id.
-
-    Accepts:
-      • ollama/<model>, vllm/<model>, lm_studio/<model>, llamacpp/<model>
-      • <org>/<model>[:<tag>]            (HF router; tag = provider or policy)
-      • huggingface/<org>/<model>[:<tag>] (same, optional LiteLLM prefix)
-
-    Actual availability is verified against the HF router catalog on
-    switch, and by the provider on the probe's ping call.
-    """
-    if not model_id:
+    """Loose format check — lets users pick any supported provider namespace."""
+    try:
+        resolve_model_route(model_id)
+    except ValueError:
         return False
-    normalized_model_id = strip_huggingface_model_prefix(model_id) or model_id
-    if is_local_model_id(normalized_model_id):
-        return True
-    if is_reserved_local_model_id(normalized_model_id):
-        return False
-    if any(normalized_model_id.startswith(prefix) for prefix in LOCAL_MODEL_PREFIXES):
-        return False
-    if "/" not in normalized_model_id:
-        return False
-    head = normalized_model_id.split(":", 1)[0]
-    parts = head.split("/")
-    return len(parts) >= 2 and all(parts)
+    return True
 
 
 def _print_hf_routing_info(model_id: str, console) -> bool:
@@ -92,12 +70,18 @@ def _print_hf_routing_info(model_id: str, console) -> bool:
     against the router catalog when possible; the probe below covers provider
     availability for uncataloged ids.
     """
-    if is_local_model_id(model_id):
+    route = resolve_model_route(model_id)
+    if route.is_local_provider:
+        return True
+    if route.provider is not ModelProvider.HUGGINGFACE:
+        console.print(
+            f"  [dim]provider: {route.provider.value} (direct; no HF Router catalog)[/dim]"
+        )
         return True
 
     from agent.core import hf_router_catalog as cat
 
-    bare, _, tag = model_id.partition(":")
+    bare, _, tag = route.provider_model_id.partition(":")
     info = cat.lookup(bare)
     if info is None:
         console.print(

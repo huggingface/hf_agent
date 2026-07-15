@@ -31,11 +31,15 @@ ml-intern
 Create a `.env` file in the project root (or export these in your shell):
 
 ```bash
-HF_TOKEN=<your-hugging-face-token> # HF Router inference + Hub actions
+HF_TOKEN=<your-hugging-face-token> # only required for HF Router inference, Hub actions, or sandbox tools
+OPENAI_API_KEY=<your-openai-key>    # optional: direct openai/... routes
+OPENROUTER_API_KEY=<your-openrouter-key> # optional: direct openrouter/... routes
+MOONSHOT_API_KEY=<your-moonshot-key> # optional: direct moonshot/... routes
+GEMINI_API_KEY=<your-google-ai-studio-key> # optional: direct gemini/... routes
 GITHUB_TOKEN=<github-personal-access-token>
 ```
 
-All API-based model calls go through Hugging Face [Inference Providers](https://huggingface.co/docs/inference-providers/en/index), so your `HF_TOKEN` must be allowed to make Inference Provider calls. If no `HF_TOKEN` is set, the CLI will prompt you to paste one on first launch unless you start on a local model. To get a `GITHUB_TOKEN` follow the tutorial [here](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token). See the [local models section below](#local-models) for instructions on using agents that run on your hardware.
+Model routing is provider-aware. `huggingface/<org>/<model>[:routing-tag]` uses the Hugging Face Router at `https://router.huggingface.co/v1` and requires an HF token. Direct `openai/`, `openai/responses/`, `openrouter/`, `moonshot/`, `gemini/`, and `vertex_ai/` model ids are sent to LiteLLM without the HF Router base URL or HF token; their credentials are read from provider-native environment variables. Bare `<org>/<model>[:tag]` ids still work as a deprecated HF Router fallback, but new configs should use the explicit `huggingface/...` namespace. To get a `GITHUB_TOKEN` follow the tutorial [here](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token). See the [local models section below](#local-models) for instructions on using agents that run on your hardware.
 
 ### Usage
 
@@ -58,15 +62,29 @@ ml-intern --sandbox-tools "your prompt"                         # use HF Space s
 ml-intern --max-iterations 100 "your prompt"
 ml-intern --no-stream "your prompt"
 # Change model
-ml-intern --model moonshotai/Kimi-K2.7-Code:novita "your prompt"
-ml-intern --model openai/gpt-5.5:fal-ai "your prompt"
+ml-intern --model huggingface/zai-org/GLM-5.2:novita "your prompt"
+ml-intern --model openai/responses/gpt-5.6 "your prompt"
+ml-intern --model openrouter/<valid-openrouter-model-id> "your prompt"
+ml-intern --model moonshot/kimi-k2.7-code-highspeed "your prompt"
+ml-intern --model gemini/gemini-2.5-pro "your prompt"
+ml-intern --model vertex_ai/gemini-2.5-pro "your prompt"
 ```
 
-Run `ml-intern` then `/model` to see the full list of suggested model ids
-(Claude, GPT, HF Router models like MiniMax, Kimi, GLM, DeepSeek, and local
-model prefixes).
+Run `ml-intern` then `/model` to see suggested provider-aware model ids and switching help. HF Router routing tags such as `:novita`, `:fal-ai`, `:fastest`, and `:cheapest` are preserved after `huggingface/`.
 
-Hosted inference is billed to the active Hugging Face user. See below on how to run `ml-intern` with local models.
+Hosted HF Router inference is billed to the active Hugging Face user. Direct-provider inference is billed through that provider's API key. See below on how to run `ml-intern` with local models.
+
+
+#### Provider config examples
+
+Example config files live in `configs/providers/`:
+
+- `configs/providers/openai.json` uses `openai/responses/gpt-5.6`.
+- `configs/providers/openrouter.json` uses `openrouter/<valid-openrouter-model-id>`.
+- `configs/providers/moonshot.json` uses `moonshot/kimi-k2.7-code-highspeed`.
+- `configs/providers/huggingface-router.json` uses `huggingface/zai-org/GLM-5.2:novita`.
+
+For direct-provider local operation without HF uploads, set `tool_runtime` to `local`, keep `save_sessions` enabled for local JSON logs, and set `upload_sessions` and `share_traces` to `false`.
 
 #### Local models
 

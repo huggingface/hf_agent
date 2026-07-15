@@ -12,11 +12,8 @@ from typing import Any, Optional
 
 from agent.config import load_config
 from agent.core.agent_loop import process_submission
-from agent.core.model_ids import (
-    GLM_52_MODEL_ID,
-    is_known_router_model_id,
-    strip_huggingface_model_prefix,
-)
+from agent.core.model_ids import GLM_52_MODEL_ID
+from agent.core.model_routing import resolve_model_route
 from agent.core.session import Event, OpType, Session
 from agent.core.session_persistence import get_session_store
 from agent.core.tools import ToolRouter
@@ -205,9 +202,7 @@ class SessionManager:
 
     def __init__(self, config_path: str | None = None) -> None:
         self.config = load_config(config_path or DEFAULT_CONFIG_PATH)
-        normalized_default = strip_huggingface_model_prefix(self.config.model_name)
-        if normalized_default:
-            self.config.model_name = normalized_default
+        resolve_model_route(self.config.model_name)
         self.messaging_gateway = NotificationGateway(self.config.messaging)
         self.sessions: dict[str, AgentSession] = {}
         self._lock = asyncio.Lock()
@@ -265,9 +260,12 @@ class SessionManager:
     def _model_from_saved_metadata(
         model: str | None,
     ) -> str:
-        normalized = strip_huggingface_model_prefix(model)
-        if normalized and is_known_router_model_id(normalized):
-            return normalized
+        if model:
+            try:
+                resolve_model_route(model)
+                return model
+            except ValueError:
+                pass
 
         fallback_model = GLM_52_MODEL_ID
         logger.warning(
@@ -297,9 +295,8 @@ class SessionManager:
         # Deep-copy config so each session's model switches independently —
         # tab A picking GLM doesn't flip tab B off the default model.
         session_config = self.config.model_copy(deep=True)
-        normalized_model = strip_huggingface_model_prefix(model)
-        if normalized_model:
-            session_config.model_name = normalized_model
+        if model:
+            session_config.model_name = model
         session = Session(
             event_queue=event_queue,
             config=session_config,

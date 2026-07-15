@@ -17,7 +17,7 @@ from litellm import Message, acompletion
 from agent.core import telemetry
 from agent.core.doom_loop import check_for_doom_loop
 from agent.core.llm_params import _resolve_llm_params
-from agent.core.model_ids import strip_huggingface_model_prefix
+from agent.core.model_routing import resolve_model_route
 from agent.core.prompt_caching import (
     router_session_id_for,
     with_prompt_cache_params,
@@ -270,9 +270,31 @@ RESEARCH_TOOL_SPEC = {
 }
 
 
-def _get_research_model(main_model: str) -> str:
-    """Normalize the main model id for the research sub-call."""
-    return strip_huggingface_model_prefix(main_model) or main_model
+def _get_research_model(
+    main_model: str, configured_research_model: str | None = None
+) -> str:
+    """Return the configured research model without destructively normalizing providers."""
+    return configured_research_model or main_model
+
+
+def _reasoning_from_message(message: Any) -> str | None:
+    value = getattr(message, "reasoning_content", None)
+    if value:
+        return value
+    fields = getattr(message, "provider_specific_fields", None)
+    if isinstance(fields, dict):
+        value = fields.get("reasoning_content") or fields.get("reasoning")
+        if value:
+            return str(value)
+    return None
+
+
+def _assistant_message_for_replay(research_model: str, msg: Any) -> Message:
+    replay = Message(role="assistant", content=msg.content, tool_calls=msg.tool_calls)
+    reasoning = _reasoning_from_message(msg)
+    if reasoning and resolve_model_route(research_model).supports_reasoning_replay:
+        replay.reasoning_content = reasoning
+    return replay
 
 
 async def research_handler(
@@ -299,7 +321,9 @@ async def research_handler(
 
     # Use the normalized router model for research
     main_model = session.config.model_name
-    research_model = _get_research_model(main_model)
+    research_model = _get_research_model(
+        main_model, getattr(session.config, "research_model_name", None)
+    )
     # Research is a cheap sub-call — cap the main session's effort at "high".
     # We also haven't probed this sub-call's model so we don't know its ceiling.
     _pref = getattr(session.config, "reasoning_effort", None)
@@ -484,13 +508,7 @@ async def research_handler(
         # LiteLLM's raw Message carries `provider_specific_fields` and
         # `reasoning_content`, which the HF router's OpenAI schema rejects
         # if we echo them back in the next request.
-        messages.append(
-            Message(
-                role="assistant",
-                content=msg.content,
-                tool_calls=msg.tool_calls,
-            )
-        )
+        messages.append(_assistant_message_for_replay(research_model, msg))
         for tc in msg.tool_calls:
             try:
                 tool_args = json.loads(tc.function.arguments)

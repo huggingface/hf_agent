@@ -717,18 +717,22 @@ class Session:
         Returns:
             Path to local save file
         """
-        local_path = self.save_trajectory_local(upload_status="pending")
+        should_upload_sessions = getattr(self.config, "upload_sessions", True)
+        local_path = self.save_trajectory_local(
+            upload_status="pending" if should_upload_sessions else "disabled"
+        )
         if not local_path:
             return None
 
-        self._spawn_uploader(
-            "upload",
-            local_path,
-            repo_id,
-            format="row",
-            token_env=None,  # default org token chain
-            private=False,
-        )
+        if should_upload_sessions:
+            self._spawn_uploader(
+                "upload",
+                local_path,
+                repo_id,
+                format="row",
+                token_env=None,  # default org token chain
+                private=False,
+            )
 
         personal_repo = self._personal_trace_repo_id()
         if personal_repo:

@@ -230,3 +230,47 @@ def test_hf_request_token_does_not_use_cached_login(monkeypatch):
     monkeypatch.setattr(huggingface_hub, "get_token", lambda: "cached-token")
 
     assert resolve_hf_request_token(Request()) is None
+
+
+def test_direct_openai_params_do_not_use_hf_router():
+    params = _resolve_llm_params("openai/gpt-5.5", "hf-token", reasoning_effort="high")
+
+    assert params == {"model": "openai/gpt-5.5", "reasoning_effort": "high"}
+
+
+def test_openai_responses_params_preserve_route():
+    params = _resolve_llm_params("openai/responses/gpt-5.6", "hf-token")
+
+    assert params == {"model": "openai/responses/gpt-5.6"}
+
+
+def test_openrouter_params_use_optional_env_headers(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_SITE_URL", "https://example.com")
+    monkeypatch.setenv("OPENROUTER_APP_NAME", "ML Intern")
+
+    params = _resolve_llm_params("openrouter/openai/gpt-4o", "hf-token")
+
+    assert params["model"] == "openrouter/openai/gpt-4o"
+    assert "api_base" not in params
+    assert "api_key" not in params
+    assert params["extra_headers"] == {
+        "HTTP-Referer": "https://example.com",
+        "X-Title": "ML Intern",
+    }
+
+
+def test_moonshot_params_do_not_forward_generic_reasoning():
+    params = _resolve_llm_params(
+        "moonshot/kimi-k2.7-code-highspeed", "hf-token", reasoning_effort="high"
+    )
+
+    assert params == {"model": "moonshot/kimi-k2.7-code-highspeed"}
+
+
+def test_gemini_and_vertex_params_are_native_litellm_routes():
+    assert _resolve_llm_params("gemini/gemini-2.5-pro", "hf-token") == {
+        "model": "gemini/gemini-2.5-pro"
+    }
+    assert _resolve_llm_params("vertex_ai/gemini-2.5-pro", "hf-token") == {
+        "model": "vertex_ai/gemini-2.5-pro"
+    }
