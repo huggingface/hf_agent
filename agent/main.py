@@ -28,8 +28,7 @@ from agent.core.agent_loop import submission_loop
 from agent.core import model_switcher
 from agent.core.hf_access import fetch_whoami_v2, normalize_hf_user_plan
 from agent.core.hf_tokens import resolve_hf_token
-from agent.core.local_models import is_local_model_id
-from agent.core.model_ids import strip_huggingface_model_prefix
+from agent.core.model_routing import resolve_model_route
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
 from agent.messaging.gateway import NotificationGateway
@@ -77,18 +76,19 @@ def _tool_runtime_label(local_mode: bool) -> str:
 
 
 def _normalize_config_model(config: Any) -> None:
-    normalized = strip_huggingface_model_prefix(getattr(config, "model_name", None))
-    if normalized:
-        config.model_name = normalized
+    # Provider prefixes are semantically significant; validate without rewriting.
+    resolve_model_route(getattr(config, "model_name", ""))
 
 
 def _validate_cli_model_override(model: str) -> str:
     if not model_switcher.is_valid_model_id(model):
         raise ValueError(
-            "Invalid model id. Use an HF Router id like "
-            "'zai-org/GLM-5.2:novita' or a supported local prefix."
+            "Invalid model id. Use a provider-prefixed id such as "
+            "'huggingface/zai-org/GLM-5.2:novita', 'openai/gpt-5.5', "
+            "'openrouter/<model>', 'moonshot/<model>', 'gemini/<model>', "
+            "'vertex_ai/<model>', or a supported local prefix."
         )
-    return model.removeprefix("huggingface/")
+    return model
 
 
 async def _wait_for_initial_sandbox_preload(session_holder: list | None) -> None:
@@ -1194,8 +1194,15 @@ async def main(model: str | None = None, sandbox_tools: bool = False):
 
     # HF token — required for Hub-backed models/tools and sandbox tools, but
     # not for local LLMs using only local filesystem tools.
+    route = resolve_model_route(config.model_name)
+    needs_hf_token = (
+        route.requires_hf_token
+        or not local_mode
+        or getattr(config, "upload_sessions", False)
+        or getattr(config, "share_traces", False)
+    )
     hf_token = resolve_hf_token()
-    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
+    if not hf_token and needs_hf_token:
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
     # Resolve username and plan from one whoami-v2 request for banner and CTAs.
@@ -1207,11 +1214,11 @@ async def main(model: str | None = None, sandbox_tools: bool = False):
         tool_runtime=_tool_runtime_label(local_mode),
     )
 
-    # Pre-warm the HF router catalog in the background so /model switches
-    # don't block on a network fetch.
-    from agent.core import hf_router_catalog
+    # Pre-warm the HF router catalog only for HF Router sessions.
+    if route.uses_hf_catalog:
+        from agent.core import hf_router_catalog
 
-    asyncio.create_task(asyncio.to_thread(hf_router_catalog.prewarm))
+        asyncio.create_task(asyncio.to_thread(hf_router_catalog.prewarm))
 
     # Create queues for communication
     submission_queue = asyncio.Queue()
@@ -1446,10 +1453,17 @@ async def headless_main(
     _apply_tool_runtime_override(config, sandbox_tools=sandbox_tools)
     local_mode = _is_local_tool_runtime(config)
 
+    route = resolve_model_route(config.model_name)
+    needs_hf_token = (
+        route.requires_hf_token
+        or not local_mode
+        or getattr(config, "upload_sessions", False)
+        or getattr(config, "share_traces", False)
+    )
     hf_token = resolve_hf_token()
-    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
+    if not hf_token and needs_hf_token:
         print(
-            "ERROR: No HF token found. Set HF_TOKEN or run `hf auth login`.",
+            "ERROR: No HF token found for the selected HF Router/Hub-backed operation. Set HF_TOKEN or run `hf auth login`.",
             file=sys.stderr,
         )
         sys.exit(1)

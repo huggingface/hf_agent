@@ -1,0 +1,7 @@
+{
+  "model_name": "openrouter/<valid-openrouter-model-id>",
+  "tool_runtime": "local",
+  "save_sessions": true,
+  "upload_sessions": false,
+  "share_traces": false
+}

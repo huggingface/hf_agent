@@ -32,6 +32,7 @@ from agent.core.hf_access import (
     is_inference_billing_error,
 )
 from agent.core.llm_params import _resolve_llm_params
+from agent.core.model_routing import resolve_model_route
 from agent.core.prompt_caching import (
     router_session_id_for,
     with_prompt_cache_params,
@@ -790,6 +791,7 @@ class LLMResult:
     tool_calls_acc: dict[int, dict]
     token_count: int
     finish_reason: str | None
+    reasoning_content: str | None = None
     usage: dict = field(default_factory=dict)
 
 
@@ -919,19 +921,45 @@ async def _maybe_heal_invalid_thinking_signature(
     return True
 
 
+def _reasoning_from_message(message: Any) -> str | None:
+    value = getattr(message, "reasoning_content", None)
+    if value:
+        return value
+    fields = getattr(message, "provider_specific_fields", None)
+    if isinstance(fields, dict):
+        value = fields.get("reasoning_content") or fields.get("reasoning")
+        if value:
+            return str(value)
+    return None
+
+
+def _reasoning_from_delta(delta: Any) -> str | None:
+    value = getattr(delta, "reasoning_content", None)
+    if value:
+        return value
+    fields = getattr(delta, "provider_specific_fields", None)
+    if isinstance(fields, dict):
+        value = fields.get("reasoning_content") or fields.get("reasoning")
+        if value:
+            return str(value)
+    return None
+
+
 def _assistant_message_from_result(
     llm_result: LLMResult,
     *,
     tool_calls: list[ToolCall] | None = None,
+    model_id: str | None = None,
 ) -> Message:
-    """Build an assistant history message for HF Router-compatible replay."""
-    kwargs: dict[str, Any] = {
-        "role": "assistant",
-        "content": llm_result.content,
-    }
+    """Build an assistant history message with provider-aware reasoning replay."""
+    kwargs: dict[str, Any] = {"role": "assistant", "content": llm_result.content}
     if tool_calls is not None:
         kwargs["tool_calls"] = tool_calls
-    return Message(**kwargs)
+    msg = Message(**kwargs)
+    if model_id and llm_result.reasoning_content:
+        if resolve_model_route(model_id).supports_reasoning_replay:
+            msg.reasoning_content = llm_result.reasoning_content
+    return msg
 
 
 async def _call_llm_streaming(
@@ -950,6 +978,7 @@ async def _call_llm_streaming(
                 finish_reason=None,
             )
         full_content = ""
+        reasoning_content = ""
         tool_calls_acc: dict[int, dict] = {}
         token_count = 0
         finish_reason = None
@@ -987,6 +1016,10 @@ async def _call_llm_streaming(
                 delta = choice.delta
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
+
+                delta_reasoning = _reasoning_from_delta(delta)
+                if delta_reasoning:
+                    reasoning_content += delta_reasoning
 
                 if delta.content:
                     full_content += delta.content
@@ -1034,6 +1067,7 @@ async def _call_llm_streaming(
                 tool_calls_acc=tool_calls_acc,
                 token_count=token_count,
                 finish_reason=finish_reason,
+                reasoning_content=reasoning_content or None,
                 usage=usage,
             )
         except ContextWindowExceededError:
@@ -1204,6 +1238,7 @@ async def _call_llm_non_streaming(
     choice = response.choices[0]
     message = choice.message
     content = message.content or None
+    reasoning_content = _reasoning_from_message(message)
     finish_reason = choice.finish_reason
     token_count = response.usage.total_tokens if response.usage else 0
 
@@ -1239,6 +1274,7 @@ async def _call_llm_non_streaming(
         tool_calls_acc=tool_calls_acc,
         token_count=token_count,
         finish_reason=finish_reason,
+        reasoning_content=reasoning_content,
         usage=usage,
     )
 
@@ -1467,7 +1503,9 @@ class Handlers:
                         "  • For other tools: reduce the size of your arguments or use bash."
                     )
                     if content:
-                        assistant_msg = _assistant_message_from_result(llm_result)
+                        assistant_msg = _assistant_message_from_result(
+                            llm_result, model_id=session.config.model_name
+                        )
                         session.context_manager.add_message(assistant_msg, token_count)
                     session.context_manager.add_message(
                         Message(role="user", content=f"[SYSTEM: {truncation_hint}]")
@@ -1530,7 +1568,9 @@ class Handlers:
                             _NO_TOOL_INCOMPLETE_PLAN_RETRY_LIMIT,
                         )
                         if content:
-                            assistant_msg = _assistant_message_from_result(llm_result)
+                            assistant_msg = _assistant_message_from_result(
+                                llm_result, model_id=session.config.model_name
+                            )
                             session.context_manager.add_message(
                                 assistant_msg, token_count
                             )
@@ -1574,7 +1614,9 @@ class Handlers:
                         (content or "")[:500],
                     )
                     if content:
-                        assistant_msg = _assistant_message_from_result(llm_result)
+                        assistant_msg = _assistant_message_from_result(
+                            llm_result, model_id=session.config.model_name
+                        )
                         session.context_manager.add_message(assistant_msg, token_count)
                         final_response = content
                     if await maybe_pause_yolo_after_spend(
@@ -1619,6 +1661,7 @@ class Handlers:
                 assistant_msg = _assistant_message_from_result(
                     llm_result,
                     tool_calls=tool_calls,
+                    model_id=session.config.model_name,
                 )
                 session.context_manager.add_message(assistant_msg, token_count)
 
@@ -2671,7 +2714,9 @@ async def submission_loop(
     if config and config.save_sessions:
         Session.retry_failed_uploads_detached(
             directory=str(DEFAULT_SESSION_LOG_DIR),
-            repo_id=config.session_dataset_repo,
+            repo_id=config.session_dataset_repo
+            if getattr(config, "upload_sessions", True)
+            else None,
             personal_repo_id=session._personal_trace_repo_id(),
         )
 

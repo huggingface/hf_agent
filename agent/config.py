@@ -24,15 +24,19 @@ class Config(BaseModel):
     """Configuration manager"""
 
     model_name: str
+    research_model_name: str | None = None
+    compaction_model_name: str | None = None
+    title_model_name: str | None = None
     mcpServers: dict[str, MCPServerConfig] = {}
     save_sessions: bool = True
+    upload_sessions: bool = False
     session_dataset_repo: str = "smolagents/ml-intern-sessions"
     # Per-user private dataset that mirrors each session in Claude Code JSONL
     # format so the HF Agent Trace Viewer auto-renders it
     # (https://huggingface.co/changelog/agent-trace-viewer). Created private
     # on first use; user flips it public via /share-traces. ``{hf_user}`` is
     # substituted at upload time from the authenticated HF username.
-    share_traces: bool = True
+    share_traces: bool = False
     personal_trace_repo_template: str = "{hf_user}/ml-intern-sessions"
     auto_save_interval: int = 1  # Save every N user turns (0 = disabled)
     # Mid-turn heartbeat: save + upload every N seconds while events are being
