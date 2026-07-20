@@ -48,17 +48,6 @@ import httpx
 from huggingface_hub import CommitOperationAdd, HfApi
 
 TEMPLATE_SPACE = "burtenshaw/sandbox"
-HARDWARE_OPTIONS = [
-    "cpu-basic",
-    "cpu-upgrade",
-    "t4-small",
-    "t4-medium",
-    "a10g-small",
-    "a10g-large",
-    "a100-large",
-]
-OUTPUT_LIMIT = 25000
-LINE_LIMIT = 4000
 DEFAULT_READ_LIMIT = 2000
 DEFAULT_TIMEOUT = 240
 MAX_TIMEOUT = 1200
@@ -497,9 +486,6 @@ class ToolResult:
             return self.output or "(no output)"
         return f"ERROR: {self.error}"
 
-    def to_dict(self) -> dict:
-        return {"success": self.success, "output": self.output, "error": self.error}
-
 
 @dataclass
 class Sandbox:
@@ -776,30 +762,23 @@ class Sandbox:
             f"Last status: {last_status}, last error: {last_err}"
         )
 
-    def delete(self):
+    def delete(self, log: Callable[[str], object] | None = None):
         """Delete the Space. Only works if this Sandbox created it."""
         if not self._owns_space:
             raise RuntimeError(
                 f"This Sandbox did not create {self.space_id}. "
                 f"Use self._hf_api.delete_repo() directly if you're sure."
             )
-        print(f"Deleting sandbox: {self.space_id}...")
+        if log:
+            log(f"Deleting sandbox: {self.space_id}...")
         self._hf_api.delete_repo(self.space_id, repo_type="space")
         # Clear ownership so a second cleanup call (e.g. delete_session +
         # _run_session.finally both fire) early-returns instead of retrying
         # a 404 delete and emitting a spurious ERROR log.
         self._owns_space = False
         self._client.close()
-        print("Deleted.")
-
-    def pause(self):
-        """Pause the Space (stops billing, preserves state)."""
-        self._hf_api.pause_space(self.space_id)
-
-    def restart(self):
-        """Restart the Space."""
-        self._hf_api.restart_space(self.space_id)
-        self._wait_for_api()
+        if log:
+            log("Deleted.")
 
     @property
     def url(self) -> str:
@@ -1128,10 +1107,6 @@ class Sandbox:
             },
         },
     }
-
-    @classmethod
-    def tool_definitions(cls) -> list[dict]:
-        return [{"name": name, **spec} for name, spec in cls.TOOLS.items()]
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         dispatch = {

@@ -11,7 +11,7 @@ class DummyToolRouter:
 
 def _session(*, user_id: str | None, hf_username: str | None) -> Session:
     config = SimpleNamespace(
-        model_name="moonshotai/Kimi-K2.6",
+        model_name="moonshotai/Kimi-K2.7-Code",
         save_sessions=True,
         share_traces=True,
         personal_trace_repo_template="{hf_user}/ml-intern-sessions",

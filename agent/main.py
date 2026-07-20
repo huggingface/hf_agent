@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -25,8 +26,10 @@ from agent.config import load_config
 from agent.core.approval_policy import is_scheduled_operation
 from agent.core.agent_loop import submission_loop
 from agent.core import model_switcher
+from agent.core.hf_access import fetch_whoami_v2, normalize_hf_user_plan
 from agent.core.hf_tokens import resolve_hf_token
 from agent.core.local_models import is_local_model_id
+from agent.core.model_ids import strip_huggingface_model_prefix
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
 from agent.messaging.gateway import NotificationGateway
@@ -59,6 +62,49 @@ CLI_CONFIG_PATH = Path(__file__).parent.parent / "configs" / "cli_agent_config.j
 logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_tool_runtime_override(config: Any, *, sandbox_tools: bool) -> str:
+    if sandbox_tools:
+        config.tool_runtime = "sandbox"
+    return getattr(config, "tool_runtime", "local")
+
+
+def _is_local_tool_runtime(config: Any) -> bool:
+    return getattr(config, "tool_runtime", "local") == "local"
+
+
+def _tool_runtime_label(local_mode: bool) -> str:
+    return "local filesystem" if local_mode else "HF sandbox"
+
+
+def _normalize_config_model(config: Any) -> None:
+    normalized = strip_huggingface_model_prefix(getattr(config, "model_name", None))
+    if normalized:
+        config.model_name = normalized
+
+
+def _validate_cli_model_override(model: str) -> str:
+    if not model_switcher.is_valid_model_id(model):
+        raise ValueError(
+            "Invalid model id. Use an HF Router id like "
+            "'zai-org/GLM-5.2:novita' or a supported local prefix."
+        )
+    return model.removeprefix("huggingface/")
+
+
+async def _wait_for_initial_sandbox_preload(session_holder: list | None) -> None:
+    session = session_holder[0] if session_holder else None
+    task = getattr(session, "sandbox_preload_task", None)
+    if not task:
+        return
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The sandbox tool will surface the stored preload error on first use.
+        return
 
 
 def _is_scheduled_hf_job_tool(tool_info: dict[str, Any]) -> bool:
@@ -103,6 +149,25 @@ def _get_hf_user(token: str | None) -> str | None:
     except Exception:
         logger.exception("HF whoami failed while resolving username for token")
         return None
+
+
+def _get_hf_user_from_whoami(whoami: dict[str, Any] | None) -> str | None:
+    if not isinstance(whoami, dict):
+        return None
+    for key in ("name", "user", "preferred_username"):
+        value = whoami.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+async def _get_hf_identity(token: str | None) -> tuple[str | None, str]:
+    if not token:
+        return None, "unknown"
+    whoami = await fetch_whoami_v2(token)
+    if whoami is None:
+        return _get_hf_user(token), "unknown"
+    return _get_hf_user_from_whoami(whoami), normalize_hf_user_plan(whoami) or "unknown"
 
 
 async def _prompt_and_save_hf_token(prompt_session: PromptSession) -> str:
@@ -168,6 +233,14 @@ class Submission:
 def _create_rich_console():
     """Get the shared rich Console."""
     return get_console()
+
+
+def _clear_terminal() -> None:
+    command = ["cmd", "/c", "cls"] if os.name == "nt" else ["clear"]
+    try:
+        subprocess.run(command, check=False)
+    except OSError:
+        pass
 
 
 class _ThinkingShimmer:
@@ -372,6 +445,18 @@ async def event_listener(
                 turn_complete_event.set()
             elif event.event_type == "undo_complete":
                 console.print("[dim]Undone.[/dim]")
+                turn_complete_event.set()
+            elif event.event_type == "new_complete":
+                data = event.data or {}
+                if data.get("clear_screen"):
+                    _clear_terminal()
+                saved_path = data.get("saved_path")
+                if saved_path:
+                    console.print(
+                        f"[dim]Started new chat. Prior chat saved to {saved_path}.[/dim]"
+                    )
+                else:
+                    console.print("[dim]Started new chat.[/dim]")
                 turn_complete_event.set()
             elif event.event_type == "resume_complete":
                 data = event.data or {}
@@ -877,6 +962,20 @@ async def _handle_slash_command(
             operation=Operation(op_type=OpType.COMPACT),
         )
 
+    if command in {"/new", "/clear"}:
+        session = session_holder[0] if session_holder else None
+        if session is None:
+            get_console().print("[bold red]No active session to reset.[/bold red]")
+            return None
+        submission_id[0] += 1
+        return Submission(
+            id=f"sub_{submission_id[0]}",
+            operation=Operation(
+                op_type=OpType.NEW,
+                data={"clear_screen": command == "/clear"},
+            ),
+        )
+
     if command == "/resume":
         session = session_holder[0] if session_holder else None
         if session is None:
@@ -933,9 +1032,9 @@ async def _handle_slash_command(
                     console.print(f"  [dim]{m}: {eff or 'off'}[/dim]")
             console.print(
                 "[dim]Set with '/effort minimal|low|medium|high|xhigh|max|off'. "
-                "'max' is Anthropic-only; 'xhigh' is also supported by current "
-                "OpenAI GPT-5 models. The cascade falls back to whatever the "
-                "model actually accepts.[/dim]"
+                "HF Router accepts low|medium|high generically; higher preferences "
+                "are probed and the cascade falls back to whatever the selected "
+                "provider accepts.[/dim]"
             )
             return None
         level = arg.lower()
@@ -960,6 +1059,7 @@ async def _handle_slash_command(
         session = session_holder[0] if session_holder else None
         print(f"Model: {config.model_name}")
         print(f"Reasoning effort: {config.reasoning_effort or 'off'}")
+        print(f"Tool runtime: {_tool_runtime_label(_is_local_tool_runtime(config))}")
         if session:
             print(f"Turns: {session.turn_count}")
             print(f"Context items: {len(session.context_manager.items)}")
@@ -1079,28 +1179,36 @@ async def _handle_share_traces_command(arg: str, config, session) -> None:
     console.print(f"[green]Dataset is now {label}.[/green] {url}")
 
 
-async def main(model: str | None = None):
+async def main(model: str | None = None, sandbox_tools: bool = False):
     """Interactive chat with the agent"""
 
     # Clear screen
-    os.system("clear" if os.name != "nt" else "cls")
+    _clear_terminal()
 
     # Create prompt session for input (needed early for token prompt)
     prompt_session = PromptSession()
 
     config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
+    _normalize_config_model(config)
     if model:
-        config.model_name = model
+        config.model_name = _validate_cli_model_override(model)
+    _apply_tool_runtime_override(config, sandbox_tools=sandbox_tools)
+    local_mode = _is_local_tool_runtime(config)
 
-    # HF token — required for Hub-backed models/tools, but not for local LLMs.
+    # HF token — required for Hub-backed models/tools and sandbox tools, but
+    # not for local LLMs using only local filesystem tools.
     hf_token = resolve_hf_token()
-    if not hf_token and not is_local_model_id(config.model_name):
+    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
-    # Resolve username for banner
-    hf_user = _get_hf_user(hf_token)
+    # Resolve username and plan from one whoami-v2 request for banner and CTAs.
+    hf_user, hf_user_plan = await _get_hf_identity(hf_token)
 
-    print_banner(model=config.model_name, hf_user=hf_user)
+    print_banner(
+        model=config.model_name,
+        hf_user=hf_user,
+        tool_runtime=_tool_runtime_label(local_mode),
+    )
 
     # Pre-warm the HF router catalog in the background so /model switches
     # don't block on a network fetch.
@@ -1119,8 +1227,10 @@ async def main(model: str | None = None):
 
     notification_gateway = NotificationGateway(config.messaging)
     await notification_gateway.start()
-    # Create tool router with local mode
-    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    # Create tool router with the selected CLI tool runtime.
+    tool_router = ToolRouter(
+        config.mcpServers, hf_token=hf_token, local_mode=local_mode
+    )
 
     # Session holder for interrupt/model/status access
     session_holder = [None]
@@ -1134,7 +1244,10 @@ async def main(model: str | None = None):
             session_holder=session_holder,
             hf_token=hf_token,
             user_id=hf_user,
-            local_mode=True,
+            hf_username=hf_user,
+            user_plan=hf_user_plan,
+            local_mode=local_mode,
+            autonomous_mode=False,
             stream=True,
             notification_gateway=notification_gateway,
             notification_destinations=config.messaging.default_auto_destinations(),
@@ -1156,6 +1269,8 @@ async def main(model: str | None = None):
     )
 
     await ready_event.wait()
+    if not local_mode:
+        await _wait_for_initial_sandbox_preload(session_holder)
 
     submission_id = [0]
     # Mirrors codex-rs/tui/src/bottom_pane/mod.rs:137
@@ -1313,6 +1428,7 @@ async def headless_main(
     model: str | None = None,
     max_iterations: int | None = None,
     stream: bool = True,
+    sandbox_tools: bool = False,
 ) -> None:
     """Run a single prompt headlessly and exit."""
     import logging
@@ -1321,15 +1437,22 @@ async def headless_main(
     _configure_runtime_logging()
 
     config = load_config(CLI_CONFIG_PATH, include_user_defaults=True)
+    _normalize_config_model(config)
     config.yolo_mode = True  # Auto-approve everything in headless mode
 
     if model:
-        config.model_name = model
+        try:
+            config.model_name = _validate_cli_model_override(model)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+    _apply_tool_runtime_override(config, sandbox_tools=sandbox_tools)
+    local_mode = _is_local_tool_runtime(config)
 
     hf_token = resolve_hf_token()
-    if not hf_token and not is_local_model_id(config.model_name):
+    if not hf_token and (not is_local_model_id(config.model_name) or not local_mode):
         print(
-            "ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.",
+            "ERROR: No HF token found. Set HF_TOKEN or run `hf auth login`.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1339,12 +1462,13 @@ async def headless_main(
 
     notification_gateway = NotificationGateway(config.messaging)
     await notification_gateway.start()
-    hf_user = _get_hf_user(hf_token)
+    hf_user, hf_user_plan = await _get_hf_identity(hf_token)
 
     if max_iterations is not None:
         config.max_iterations = max_iterations
 
     print(f"Model: {config.model_name}", file=sys.stderr)
+    print(f"Tool runtime: {_tool_runtime_label(local_mode)}", file=sys.stderr)
     print(f"Max iterations: {config.max_iterations}", file=sys.stderr)
     print(f"Prompt: {prompt}", file=sys.stderr)
     print("---", file=sys.stderr)
@@ -1352,7 +1476,9 @@ async def headless_main(
     submission_queue: asyncio.Queue = asyncio.Queue()
     event_queue: asyncio.Queue = asyncio.Queue()
 
-    tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
+    tool_router = ToolRouter(
+        config.mcpServers, hf_token=hf_token, local_mode=local_mode
+    )
     session_holder: list = [None]
 
     agent_task = asyncio.create_task(
@@ -1364,7 +1490,10 @@ async def headless_main(
             session_holder=session_holder,
             hf_token=hf_token,
             user_id=hf_user,
-            local_mode=True,
+            hf_username=hf_user,
+            user_plan=hf_user_plan,
+            local_mode=local_mode,
+            autonomous_mode=True,
             stream=stream,
             notification_gateway=notification_gateway,
             notification_destinations=config.messaging.default_auto_destinations(),
@@ -1559,6 +1688,11 @@ def cli():
         action="store_true",
         help="Disable token streaming (use non-streaming LLM calls)",
     )
+    parser.add_argument(
+        "--sandbox-tools",
+        action="store_true",
+        help="Use HF Space sandbox tools instead of local filesystem tools",
+    )
     args = parser.parse_args()
 
     try:
@@ -1572,10 +1706,11 @@ def cli():
                     model=args.model,
                     max_iterations=max_iter,
                     stream=not args.no_stream,
+                    sandbox_tools=args.sandbox_tools,
                 )
             )
         else:
-            asyncio.run(main(model=args.model))
+            asyncio.run(main(model=args.model, sandbox_tools=args.sandbox_tools))
     except KeyboardInterrupt:
         print("\n\nGoodbye!")
 

@@ -10,7 +10,7 @@ import http.client
 import logging
 import re
 import shlex
-from typing import Any, Awaitable, Callable, Dict, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import httpx
 from huggingface_hub import HfApi
@@ -63,24 +63,6 @@ GPU_FLAVORS_DESC = (
     "l4x1(8vCPU/30GB/GPU 24GB), l4x4(48vCPU/186GB/GPU 96GB), "
     "l40sx1(8vCPU/62GB/GPU 48GB), l40sx4(48vCPU/382GB/GPU 192GB), l40sx8(192vCPU/1534GB/GPU 384GB)"
 )
-SPECIALIZED_FLAVORS = ["inf2x6"]
-ALL_FLAVORS = CPU_FLAVORS + GPU_FLAVORS + SPECIALIZED_FLAVORS
-
-# Operation names
-OperationType = Literal[
-    "run",
-    "ps",
-    "logs",
-    "inspect",
-    "cancel",
-    "scheduled run",
-    "scheduled ps",
-    "scheduled inspect",
-    "scheduled delete",
-    "scheduled suspend",
-    "scheduled resume",
-]
-
 # Constants
 UV_DEFAULT_IMAGE = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
@@ -711,13 +693,24 @@ class HfJobsTool:
             if self.session and submit_ts is not None:
                 from agent.core import telemetry
 
-                await telemetry.record_hf_job_complete(
+                usage = await telemetry.record_hf_job_complete(
                     self.session,
                     job,
                     flavor=flavor,
                     final_status=final_status,
                     submit_ts=submit_ts,
                 )
+                if self.tool_call_id:
+                    from agent.core.yolo_budget import reconcile_budget_reservation
+
+                    reconcile_budget_reservation(
+                        self.session,
+                        self.tool_call_id,
+                        usage.get("estimated_cost_usd")
+                        if isinstance(usage, dict)
+                        else None,
+                        allow_zero_actual=True,
+                    )
 
             # Untrack job ID (completed or failed, no longer needs cancellation)
             if self.session:
@@ -1112,11 +1105,41 @@ HF_JOBS_TOOL_SPEC = {
         "- You MUST have called github_find_examples + github_read_file to find a working reference implementation. "
         "Scripts based on your internal knowledge WILL use outdated APIs and fail.\n"
         "- You MUST have validated dataset format via hf_inspect_dataset or hub_repo_details.\n"
+        "- For non-trivial scripts, write the script in the session sandbox, run syntax/import validation, "
+        "run a tiny smoke test, and for training scripts make sure one training step succeeds, plus one "
+        "evaluation step when the final workflow includes evaluation or an eval split is available, then "
+        "submit the exact tested script source or exact tested sandbox file. "
+        "Do NOT reconstruct a similar script from memory.\n"
+        "- If the job runs on GPU, or the script loads a model, uses CUDA, bf16/fp16, quantization, flash attention, "
+        "or torch.compile, you MUST create a GPU sandbox with sandbox_create first, run a tiny smoke test there, "
+        "and fix failures before submitting. If skipped, state why before calling hf_jobs.\n"
+        "- Do NOT install compiled flash-attn or use attn_implementation='flash_attention_2'. "
+        "For accelerated attention, use the HF kernels package with a Hub kernel such as "
+        "kernels-community/flash-attn2, and smoke-test the exact same attn_implementation. "
+        "Flash-attention Hub kernels require Ampere-or-newer GPUs unless their docs say otherwise: "
+        "never choose T4 sandboxes or T4 HF Jobs for scripts that use a flash-attention kernel, "
+        "because T4 is pre-Ampere. Use A10G, A100, H100, or another compatible newer GPU.\n"
+        "- Do NOT rely on preinstalled ML packages. Install/upgrade the latest compatible core stack "
+        "in the sandbox and include the same packages in dependencies: torch, transformers, trl, "
+        "accelerate, datasets, trackio, and kernels~=0.12.0 when using Hub kernels. "
+        "Use unpinned latest stable versions by default for the rest of the core stack; constrain "
+        "kernels to kernels~=0.12.0. Pin other versions only when current docs/examples require a specific "
+        "compatibility set or a smoke test shows latest is incompatible. Print installed versions "
+        "before model loading. If kernels and transformers are incompatible, fix the package set "
+        "or choose another compatible Hub kernel, then rerun the smoke test.\n"
         "- Training config MUST include push_to_hub=True and hub_model_id. "
         "Job storage is EPHEMERAL — all files are deleted when the job ends. Without push_to_hub, trained models are lost permanently.\n"
+        "- Training scripts MUST fail fast on missing dataset columns, placeholder repo IDs, placeholder Trackio IDs, "
+        "missing hub_model_id, or missing push_to_hub=True.\n"
+        "- Do NOT leave placeholders such as <username>, <model-name>, <project>, TODO, "
+        "or similar unfinished values in scripts or job arguments.\n"
+        "- dependencies MUST include every imported third-party package, including the core ML stack "
+        "torch, transformers, trl, accelerate, datasets, trackio, kernels~=0.12.0 when using Hub kernels, "
+        "and extras such as peft, bitsandbytes, sentencepiece, or protobuf when used.\n"
         "- Include trackio monitoring and provide the dashboard URL to the user. "
         "When the script uses report_to='trackio', also pass `trackio_space_id` "
-        "(e.g. '<username>/ml-intern-<8char>') and `trackio_project` as tool args — "
+        "(pattern only: '<username>/ml-intern-<8char>'; replace <username>, e.g. 'alice/ml-intern-a1b2c3d4') "
+        "and `trackio_project` as tool args — "
         "they are injected as TRACKIO_SPACE_ID/TRACKIO_PROJECT env vars and let the UI embed the live dashboard.\n\n"
         "BATCH/ABLATION JOBS: Submit ONE job first. Check logs to confirm it starts training successfully. "
         "Only then submit the remaining jobs. Never submit all at once — if there's a bug, all jobs fail.\n\n"
@@ -1130,8 +1153,8 @@ HF_JOBS_TOOL_SPEC = {
         "3. Upgrade to larger GPU (a10g→a100→h100)\n"
         "Do NOT switch training methods (e.g. full SFT to LoRA) or reduce max_length — those change what the user gets and require explicit approval.\n\n"
         "Examples:\n"
-        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['transformers', 'trl', 'torch', 'datasets', 'trackio'], 'hardware_flavor': 'a100-large', 'timeout': '8h'}\n"
-        "Monitor: {'operation': 'ps'}, {'operation': 'logs', 'job_id': 'xxx'}, {'operation': 'cancel', 'job_id': 'xxx'}"
+        "Training: {'operation': 'run', 'script': '/app/train.py', 'dependencies': ['torch', 'transformers', 'trl', 'accelerate', 'datasets', 'trackio', 'kernels~=0.12.0'], 'hardware_flavor': 'a100-large', 'timeout': '8h'}\n"
+        "Monitor: {'operation': 'ps'}, {'operation': 'logs', 'job_id': 'xxx'}, {'operation': 'cancel', 'job_id': 'xxx'}\n"
         "Docker: {'operation': 'run', 'command': ['duckdb', '-c', 'select 1 + 2'], 'image': 'duckdb/duckdb', 'hardware_flavor': 'cpu-basic', 'timeout': '1h'}\n"
     ),
     "parameters": {
@@ -1157,8 +1180,11 @@ HF_JOBS_TOOL_SPEC = {
             "script": {
                 "type": "string",
                 "description": (
-                    "Python code or sandbox file path (e.g. '/app/train.py') or URL. "
+                    "Python code, sandbox file path (e.g. '/app/train.py', './train.py', or bare 'train.py'), or URL. "
                     "Triggers Python mode. For ML training: base this on a working example found via github_find_examples, not on internal knowledge. "
+                    "For non-trivial scripts, submit the exact tested script source or exact tested sandbox file. "
+                    "For GPU/model-loading training scripts, smoke-test in a GPU sandbox before submission. "
+                    "Do not leave placeholders such as <username>, <model-name>, <project>, or TODO. "
                     "Mutually exclusive with 'command'."
                 ),
             },
@@ -1167,7 +1193,10 @@ HF_JOBS_TOOL_SPEC = {
                 "items": {"type": "string"},
                 "description": (
                     "Pip packages to install. Include ALL required packages. "
-                    "Common training set: ['transformers', 'trl', 'torch', 'datasets', 'trackio', 'accelerate']. "
+                    "Common training set: ['torch', 'transformers', 'trl', 'accelerate', 'datasets', 'trackio', 'kernels~=0.12.0']. "
+                    "Use unpinned latest stable versions by default for the rest of the core stack; constrain kernels to kernels~=0.12.0. "
+                    "Pin other versions only when current docs/examples require a compatibility set or a smoke test shows latest is incompatible. "
+                    "Must include every imported third-party package and any used extras such as peft, bitsandbytes, sentencepiece, or protobuf. "
                     "Only used with 'script'."
                 ),
             },
@@ -1204,7 +1233,7 @@ HF_JOBS_TOOL_SPEC = {
                 "type": "string",
                 "description": (
                     "Optional. The HF Space hosting the trackio dashboard for this run "
-                    "(e.g. '<username>/ml-intern-<8char>', under YOUR HF namespace). "
+                    "(pattern only: '<username>/ml-intern-<8char>'; replace <username>, e.g. 'alice/ml-intern-a1b2c3d4'). "
                     "Injected as TRACKIO_SPACE_ID env var and used by the UI to embed "
                     "the live dashboard. Set this whenever the script uses "
                     "report_to='trackio'. The Space is auto-created and seeded with the "
