@@ -257,9 +257,9 @@ class ContextManager:
             f"Tools={len(tool_specs)}]"
         )
 
-    def add_message(self, message: Message, token_count: int = None) -> None:
+    def add_message(self, message: Message, token_count: int | None = None) -> None:
         """Add a message to the history"""
-        if token_count:
+        if token_count is not None:
             self.running_context_usage = token_count
         self.items.append(message)
         if self.on_message_added:
