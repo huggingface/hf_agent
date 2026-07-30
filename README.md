@@ -68,6 +68,38 @@ model prefixes).
 
 Hosted inference is billed to the active Hugging Face user. See below on how to run `ml-intern` with local models.
 
+#### OpenAI authentication through Codex
+
+The local CLI can use an existing Codex login instead of sending model calls
+through Hugging Face Router:
+
+```bash
+codex login
+ml-intern --model codex/default
+```
+
+`codex/default` lets Codex select the current default model for the signed-in
+account. To request a specific model available to that account:
+
+```bash
+ml-intern --model codex/<model-id>
+```
+
+This mode starts the local `codex app-server`; ML Intern never reads or copies
+Codex's cached credentials. If `codex login` used **Sign in with ChatGPT**,
+Codex usage follows that ChatGPT plan's Codex allowance. If Codex was logged in
+with an OpenAI API key, standard API billing applies instead.
+
+Codex supplies the main agent loop and local repository tools. ML Intern's
+Hugging Face documentation, papers, datasets, Hub, Jobs, web research, and
+optional sandbox tools are exposed to Codex under the `ml_intern` tool
+namespace. `HF_TOKEN` is optional for the Codex model itself, but individual
+Hub/Jobs tools and `--sandbox-tools` still require Hugging Face authentication.
+
+OpenAI-authenticated Codex mode currently targets the local CLI. The hosted web
+app continues to use Hugging Face OAuth/Router because a local Codex login is a
+device credential and must not be forwarded to the server.
+
 #### Local models
 
 Local model support uses OpenAI-compatible HTTP endpoints through LiteLLM. The
