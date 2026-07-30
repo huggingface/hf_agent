@@ -10,8 +10,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from codex_web import CodexWebRuntime
+
 from agent.config import load_config
 from agent.core.agent_loop import process_submission
+from agent.core.codex_models import is_codex_model_id
 from agent.core.model_ids import (
     GLM_52_MODEL_ID,
     is_known_router_model_id,
@@ -135,6 +138,8 @@ class AgentSession:
     inference_billing_session_id: str | None = None
     usage_warning_next_threshold_usd: float = USAGE_WARNING_FIRST_THRESHOLD_USD
     usage_warning_spend_cache: dict[str, Any] = field(default_factory=dict)
+    codex_runtime: CodexWebRuntime | None = None
+    codex_runtime_model: str | None = None
 
     def __post_init__(self) -> None:
         if self.usage_window_started_at is None:
@@ -266,7 +271,9 @@ class SessionManager:
         model: str | None,
     ) -> str:
         normalized = strip_huggingface_model_prefix(model)
-        if normalized and is_known_router_model_id(normalized):
+        if normalized and (
+            is_known_router_model_id(normalized) or is_codex_model_id(normalized)
+        ):
             return normalized
 
         fallback_model = GLM_52_MODEL_ID
@@ -592,9 +599,23 @@ class SessionManager:
             normalize_hf_billing_snapshot,
             summarize_usage_events,
         )
-        from usage import build_hf_billing_snapshot
 
         session = agent_session.session
+        if is_codex_model_id(session.config.model_name):
+            hf_billing_snapshot = normalize_hf_billing_snapshot(
+                self._fallback_hf_billing_snapshot("codex_uses_chatgpt_allowance")
+            )
+            session.usage_hf_billing_snapshot = hf_billing_snapshot
+            metrics = summarize_usage_events(
+                getattr(session, "logged_events", []) or [],
+                session_id=agent_session.session_id,
+                hf_billing_snapshot=hf_billing_snapshot,
+            )
+            session.usage_metrics = metrics
+            return metrics
+
+        from usage import build_hf_billing_snapshot
+
         try:
             billing_snapshot = build_hf_billing_snapshot(
                 self,
@@ -829,6 +850,8 @@ class SessionManager:
     @staticmethod
     def _start_cpu_sandbox_preload(agent_session: AgentSession) -> None:
         """Kick off a best-effort cpu-basic sandbox for the session."""
+        if is_codex_model_id(agent_session.session.config.model_name):
+            return
         try:
             from agent.tools.sandbox_tool import start_cpu_sandbox_preload
 
@@ -1656,6 +1679,41 @@ class SessionManager:
             await self._cleanup_sandbox(session)
         return True
 
+    async def _close_codex_runtime(self, agent_session: AgentSession) -> None:
+        runtime = agent_session.codex_runtime
+        agent_session.codex_runtime = None
+        agent_session.codex_runtime_model = None
+        if runtime is not None:
+            try:
+                await runtime.close()
+            except Exception:
+                logger.warning(
+                    "Failed to close Codex runtime for %s",
+                    agent_session.session_id,
+                    exc_info=True,
+                )
+
+    async def _ensure_codex_runtime(
+        self,
+        agent_session: AgentSession,
+    ) -> CodexWebRuntime:
+        model_id = agent_session.session.config.model_name
+        if (
+            agent_session.codex_runtime is not None
+            and agent_session.codex_runtime_model == model_id
+        ):
+            return agent_session.codex_runtime
+
+        await self._close_codex_runtime(agent_session)
+        runtime = CodexWebRuntime(
+            agent_session=agent_session,
+            project_root=PROJECT_ROOT,
+        )
+        await runtime.start()
+        agent_session.codex_runtime = runtime
+        agent_session.codex_runtime_model = model_id
+        return runtime
+
     async def _run_session(
         self,
         session_id: str,
@@ -1692,9 +1750,24 @@ class SessionManager:
                         agent_session.is_processing = True
                         self._touch(agent_session)
                         try:
-                            should_continue = await process_submission(
-                                session, submission
-                            )
+                            if (
+                                submission.operation.op_type == OpType.USER_INPUT
+                                and is_codex_model_id(session.config.model_name)
+                            ):
+                                codex_runtime = await self._ensure_codex_runtime(
+                                    agent_session
+                                )
+                                text = (
+                                    submission.operation.data.get("text", "")
+                                    if submission.operation.data
+                                    else ""
+                                )
+                                await codex_runtime.run_user_input(text)
+                                should_continue = True
+                            else:
+                                should_continue = await process_submission(
+                                    session, submission
+                                )
                         finally:
                             agent_session.is_processing = False
                             # Stamp on turn finish too: a turn that ran longer
@@ -1718,6 +1791,7 @@ class SessionManager:
                         )
 
         finally:
+            await self._close_codex_runtime(agent_session)
             broadcast_task.cancel()
             try:
                 await broadcast_task
@@ -1795,6 +1869,8 @@ class SessionManager:
         if not agent_session or not agent_session.is_active:
             return False
         agent_session.session.cancel()
+        if agent_session.codex_runtime is not None:
+            await agent_session.codex_runtime.interrupt()
         return True
 
     async def undo(self, session_id: str) -> bool:
@@ -1886,6 +1962,12 @@ class SessionManager:
         if not agent_session or not agent_session.is_active:
             return False
         agent_session.session.update_model(model_id)
+        if (
+            not agent_session.is_processing
+            and agent_session.codex_runtime is not None
+            and agent_session.codex_runtime_model != model_id
+        ):
+            await self._close_codex_runtime(agent_session)
         self._touch(agent_session)
         await self.persist_session_snapshot(agent_session, runtime_state="idle")
         return True

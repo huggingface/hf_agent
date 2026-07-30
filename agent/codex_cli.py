@@ -72,6 +72,7 @@ async def run_codex_interactive(
         arguments: dict[str, Any],
         output: str | None,
         success: bool | None,
+        _tool_call_id: str,
     ) -> None:
         if output is None:
             print_tool_call(name, json.dumps(arguments)[:120])
@@ -85,7 +86,11 @@ async def run_codex_interactive(
                 str(event.data.get("log") or ""),
             )
 
-    async def approve_tool(name: str, arguments: dict[str, Any]) -> bool:
+    async def approve_tool(
+        name: str,
+        arguments: dict[str, Any],
+        _tool_call_id: str,
+    ) -> bool:
         console.print(f"\n[bold yellow]Approval required:[/bold yellow] {name}")
         console.print_json(data=arguments)
         answer = await prompt_session.prompt_async("Approve this tool call? [y/N] ")
@@ -177,13 +182,18 @@ async def run_codex_headless(
         arguments: dict[str, Any],
         output: str | None,
         success: bool | None,
+        _tool_call_id: str,
     ) -> None:
         if output is None:
             print_tool_call(name, json.dumps(arguments)[:120])
         else:
             print_tool_output(output, bool(success), truncate=True)
 
-    async def approve_tool(name: str, arguments: dict[str, Any]) -> bool:
+    async def approve_tool(
+        name: str,
+        arguments: dict[str, Any],
+        _tool_call_id: str,
+    ) -> bool:
         # Match the existing headless policy: scheduled Jobs never receive
         # automatic approval because they can create recurring spend.
         return not _is_scheduled_job(name, arguments)

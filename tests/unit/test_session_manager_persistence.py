@@ -17,6 +17,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / "backend"
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+from agent.core.codex_models import CODEX_DEFAULT_MODEL_ID  # noqa: E402
 from agent.core.model_ids import GLM_52_MODEL_ID  # noqa: E402
 from agent.core.session_persistence import NoopSessionStore  # noqa: E402
 from agent.core.usage_thresholds import USAGE_THRESHOLD_TOOL_NAME  # noqa: E402
@@ -458,6 +459,27 @@ async def test_refresh_usage_metrics_missing_token_falls_back_to_app_telemetry()
 
 
 @pytest.mark.asyncio
+async def test_codex_usage_refresh_never_queries_hf_billing(monkeypatch):
+    manager = _manager_with_store(NoopSessionStore())
+    agent_session = _runtime_agent_session("s1", hf_token="owner-token")
+    agent_session.session.config.model_name = CODEX_DEFAULT_MODEL_ID
+
+    async def fail_billing_snapshot(*_args, **_kwargs):
+        raise AssertionError("Codex usage must not query Hugging Face billing")
+
+    monkeypatch.setattr("usage.build_hf_billing_snapshot", fail_billing_snapshot)
+
+    metrics = await manager.refresh_session_usage_metrics(agent_session)
+
+    assert metrics["hf_billing"] == {
+        "source": "hf_billing_usage_v2",
+        "available": False,
+        "error": "codex_uses_chatgpt_allowance",
+        "current_session": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_refresh_usage_metrics_failure_records_error_code(monkeypatch):
     manager = _manager_with_store(NoopSessionStore())
     agent_session = _runtime_agent_session("s1", hf_token="owner-token")
@@ -859,6 +881,10 @@ def test_unknown_saved_model_defaults_to_glm():
     assert model == GLM_52_MODEL_ID
 
 
+def test_saved_codex_model_is_preserved():
+    assert SessionManager._model_from_saved_metadata("codex/default") == "codex/default"
+
+
 @pytest.mark.asyncio
 async def test_update_session_auto_approval_defaults_to_five_dollars():
     manager = _manager_with_store(NoopSessionStore())
@@ -1185,6 +1211,21 @@ async def test_create_session_schedules_cpu_sandbox_preload():
     finally:
         stop.set()
         await _cancel_runtime_tasks(manager)
+
+
+def test_codex_session_does_not_preload_hf_cpu_sandbox(monkeypatch):
+    agent_session = _runtime_agent_session("s1", hf_token="owner-token")
+    agent_session.session.config.model_name = CODEX_DEFAULT_MODEL_ID
+
+    def fail_preload(_session):
+        raise AssertionError("Codex session must not preload an HF sandbox")
+
+    monkeypatch.setattr(
+        "agent.tools.sandbox_tool.start_cpu_sandbox_preload",
+        fail_preload,
+    )
+
+    SessionManager._start_cpu_sandbox_preload(agent_session)
 
 
 @pytest.mark.asyncio

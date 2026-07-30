@@ -143,3 +143,44 @@ async def test_dynamic_tool_failure_is_returned_to_codex(tmp_path):
     assert responses[0]["id"] == 7
     assert responses[0]["result"]["success"] is False
     assert "probe failed" in responses[0]["result"]["contentItems"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_builtin_command_item_uses_tool_callback(tmp_path):
+    calls = []
+
+    async def on_tool(name, arguments, output, success, tool_call_id):
+        calls.append((name, arguments, output, success, tool_call_id))
+
+    runtime = CodexAppServerRuntime(
+        config=SimpleNamespace(model_name="codex/default"),
+        tool_router=SimpleNamespace(),
+        hf_token=None,
+        local_mode=False,
+        cwd=tmp_path,
+        autonomous_mode=False,
+        on_tool=on_tool,
+    )
+
+    item = {
+        "id": "cmd-1",
+        "type": "commandExecution",
+        "command": "pwd",
+        "cwd": str(tmp_path),
+        "status": "completed",
+        "exitCode": 0,
+        "aggregatedOutput": str(tmp_path),
+    }
+    await runtime._emit_builtin_item(item, completed=False)
+    await runtime._emit_builtin_item(item, completed=True)
+
+    assert calls[0] == (
+        "codex_command",
+        {"command": "pwd", "cwd": str(tmp_path)},
+        None,
+        None,
+        "cmd-1",
+    )
+    assert calls[1][0] == "codex_command"
+    assert calls[1][2] == str(tmp_path)
+    assert calls[1][3] is True

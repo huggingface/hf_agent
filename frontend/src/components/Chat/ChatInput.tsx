@@ -25,6 +25,7 @@ import { useAgentStore } from '@/store/agentStore';
 import { useSessionStore } from '@/store/sessionStore';
 import {
   CLAUDE_OPUS_48_MODEL_PATH,
+  CODEX_DEFAULT_MODEL_PATH,
   DEEPSEEK_V4_PRO_MODEL_PATH,
   GLM_52_MODEL_PATH,
   GPT_55_MODEL_PATH,
@@ -124,14 +125,18 @@ const modelOptionId = (modelPath: string) => (
 const modelOptionFromApi = (model: {
   id?: string;
   label?: string;
+  provider?: string;
   recommended?: boolean;
 }): ModelOption | null => {
   if (!model.id) return null;
+  const avatarUrl = model.provider === 'codex' || model.id === CODEX_DEFAULT_MODEL_PATH
+    ? getHfAvatarUrl('openai')
+    : getHfAvatarUrl(model.id.replace(/^huggingface\//, ''));
   return {
     id: modelOptionId(model.id),
     name: model.label ?? model.id,
     modelPath: model.id,
-    avatarUrl: getHfAvatarUrl(model.id.replace(/^huggingface\//, '')),
+    avatarUrl,
     recommended: Boolean(model.recommended),
   };
 };

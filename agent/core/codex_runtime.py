@@ -41,10 +41,13 @@ _UNSUPPORTED_CODEX_TOOLS = {
     "research",
 }
 
-ToolApprovalCallback = Callable[[str, dict[str, Any]], Awaitable[bool] | bool]
+ToolApprovalCallback = Callable[
+    [str, dict[str, Any], str],
+    Awaitable[bool] | bool,
+]
 DeltaCallback = Callable[[str], Awaitable[None] | None]
 ToolCallback = Callable[
-    [str, dict[str, Any], str | None, bool | None],
+    [str, dict[str, Any], str | None, bool | None, str],
     Awaitable[None] | None,
 ]
 EventCallback = Callable[[Event], Awaitable[None] | None]
@@ -151,6 +154,8 @@ class CodexAppServerRuntime:
         on_tool: ToolCallback | None = None,
         on_event: EventCallback | None = None,
         codex_bin: str = "codex",
+        manage_tool_router: bool = True,
+        tool_session: Session | None = None,
     ) -> None:
         self.config = config
         self.tool_router = tool_router
@@ -163,6 +168,8 @@ class CodexAppServerRuntime:
         self.on_tool = on_tool
         self.on_event = on_event
         self.codex_bin = codex_bin
+        self.manage_tool_router = manage_tool_router
+        self._provided_tool_session = tool_session
 
         self.auth_status: str | None = None
         self.thread_id: str | None = None
@@ -200,18 +207,22 @@ class CodexAppServerRuntime:
         assert resolved is not None
 
         try:
-            await self.tool_router.__aenter__()
-            self._tool_router_entered = True
-            self._tool_session = Session(
-                self._session_events,
-                self.config,
-                tool_router=self.tool_router,
-                hf_token=self.hf_token,
-                hf_username="unknown",
-                local_mode=self.local_mode,
-                autonomous_mode=self.autonomous_mode,
-                stream=True,
-            )
+            if self.manage_tool_router:
+                await self.tool_router.__aenter__()
+                self._tool_router_entered = True
+            if self._provided_tool_session is not None:
+                self._tool_session = self._provided_tool_session
+            else:
+                self._tool_session = Session(
+                    self._session_events,
+                    self.config,
+                    tool_router=self.tool_router,
+                    hf_token=self.hf_token,
+                    hf_username="unknown",
+                    local_mode=self.local_mode,
+                    autonomous_mode=self.autonomous_mode,
+                    stream=True,
+                )
 
             namespace, self._dispatch = build_dynamic_tool_namespace(
                 self.tool_router,
@@ -228,7 +239,8 @@ class CodexAppServerRuntime:
             )
             self._reader_task = asyncio.create_task(self._read_loop())
             self._stderr_task = asyncio.create_task(self._read_stderr())
-            self._event_task = asyncio.create_task(self._drain_session_events())
+            if self._provided_tool_session is None:
+                self._event_task = asyncio.create_task(self._drain_session_events())
 
             await self._request(
                 "initialize",
@@ -249,16 +261,7 @@ class CodexAppServerRuntime:
                 "approvalPolicy": "never",
                 "sandbox": "workspace-write" if self.local_mode else "read-only",
                 "serviceName": "ml-intern",
-                "developerInstructions": (
-                    "You are the OpenAI-authenticated Codex runtime inside ML "
-                    "Intern. Use your built-in Codex tools for local repository "
-                    "work. Use the ml_intern namespace for Hugging Face docs, "
-                    "papers, datasets, Hub repositories, Jobs, web research, and "
-                    "remote sandbox operations. Never claim that a ChatGPT login "
-                    "is an OpenAI API key. If an ML Intern tool is denied or fails, "
-                    "report that result instead of silently retrying a billable or "
-                    "destructive operation."
-                ),
+                "developerInstructions": self._developer_instructions(),
             }
             requested_model = codex_model_name(self.config.model_name)
             if requested_model is not None:
@@ -320,6 +323,24 @@ class CodexAppServerRuntime:
         self.active_turn_id = None
         self._tool_session = None
 
+    def _developer_instructions(self) -> str:
+        if self.local_mode:
+            tool_guidance = "Use your built-in Codex tools for local repository work. "
+        else:
+            tool_guidance = (
+                "The host repository is read-only. Use the ml_intern namespace "
+                "for remote sandbox execution and ML research tools. "
+            )
+        return (
+            "You are the OpenAI-authenticated Codex runtime inside ML Intern. "
+            f"{tool_guidance}"
+            "Use the ml_intern namespace for Hugging Face docs, papers, datasets, "
+            "Hub repositories, Jobs, and web research. Never claim that a ChatGPT "
+            "login is an OpenAI API key. If an ML Intern tool is denied or fails, "
+            "report that result instead of silently retrying a billable or "
+            "destructive operation."
+        )
+
     async def new_thread(self) -> None:
         """Start a fresh ephemeral Codex thread with the same runtime."""
         if self._process is None:
@@ -379,12 +400,19 @@ class CodexAppServerRuntime:
                     delta = str(params.get("delta") or "")
                     if delta:
                         await _call_maybe_async(self.on_delta, delta)
+                elif method == "item/started":
+                    await self._emit_builtin_item(
+                        params.get("item") or {},
+                        completed=False,
+                    )
                 elif method == "item/completed":
                     item = params.get("item") or {}
                     if item.get("type") == "agentMessage":
                         text = str(item.get("text") or "")
                         if item.get("phase") == "final_answer" or not final_text:
                             final_text = text
+                    else:
+                        await self._emit_builtin_item(item, completed=True)
                 elif method == "turn/completed":
                     completed_turn = params.get("turn") or {}
                     if (
@@ -399,6 +427,58 @@ class CodexAppServerRuntime:
                     return final_text
         finally:
             self.active_turn_id = None
+
+    async def _emit_builtin_item(
+        self,
+        item: dict[str, Any],
+        *,
+        completed: bool,
+    ) -> None:
+        """Surface Codex built-in tools through the same callback as ML tools."""
+        item_type = str(item.get("type") or "")
+        if item_type == "commandExecution":
+            name = "codex_command"
+            arguments = {
+                "command": item.get("command"),
+                "cwd": item.get("cwd"),
+            }
+            output = str(item.get("aggregatedOutput") or "") if completed else None
+            success = (
+                item.get("status") == "completed" and item.get("exitCode") in {None, 0}
+                if completed
+                else None
+            )
+        elif item_type == "fileChange":
+            name = "codex_file_change"
+            arguments = {"changes": item.get("changes") or []}
+            output = json.dumps(item.get("changes") or [], ensure_ascii=False)
+            success = item.get("status") == "completed" if completed else None
+            if not completed:
+                output = None
+        elif item_type == "mcpToolCall":
+            name = f"mcp:{item.get('server')}.{item.get('tool')}"
+            arguments = item.get("arguments") or {}
+            result = item.get("result")
+            error = item.get("error")
+            output = (
+                json.dumps(result if result is not None else error, ensure_ascii=False)
+                if completed
+                else None
+            )
+            success = (
+                item.get("status") == "completed" and not error if completed else None
+            )
+        else:
+            return
+
+        await _call_maybe_async(
+            self.on_tool,
+            name,
+            arguments,
+            output,
+            success,
+            str(item.get("id") or f"codex-{self._request_id}"),
+        )
 
     async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         process = self._process
@@ -516,6 +596,7 @@ class CodexAppServerRuntime:
         codex_tool_name = str(params.get("tool") or "")
         tool_name = self._dispatch.get(codex_tool_name)
         arguments = params.get("arguments") or {}
+        tool_call_id = str(params.get("callId") or request_id)
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
@@ -530,11 +611,23 @@ class CodexAppServerRuntime:
             )
             return
 
-        await _call_maybe_async(self.on_tool, tool_name, arguments, None, None)
+        await _call_maybe_async(
+            self.on_tool,
+            tool_name,
+            arguments,
+            None,
+            None,
+            tool_call_id,
+        )
 
         if _base_needs_approval(tool_name, arguments, self.config):
             approved = bool(
-                await _call_maybe_async(self.approve_tool, tool_name, arguments)
+                await _call_maybe_async(
+                    self.approve_tool,
+                    tool_name,
+                    arguments,
+                    tool_call_id,
+                )
             )
             if not approved:
                 output = f"User denied ML Intern tool call: {tool_name}"
@@ -544,6 +637,7 @@ class CodexAppServerRuntime:
                     arguments,
                     output,
                     False,
+                    tool_call_id,
                 )
                 await self._dynamic_tool_response(request_id, output, False)
                 return
@@ -554,7 +648,7 @@ class CodexAppServerRuntime:
                 tool_name,
                 arguments,
                 session=self._tool_session,
-                tool_call_id=str(params.get("callId") or request_id),
+                tool_call_id=tool_call_id,
             )
         except Exception as exc:
             logger.exception("ML Intern tool failed in Codex runtime: %s", tool_name)
@@ -566,6 +660,7 @@ class CodexAppServerRuntime:
             arguments,
             output,
             success,
+            tool_call_id,
         )
         await self._dynamic_tool_response(request_id, output, success)
 

@@ -50,7 +50,10 @@ from session_manager import (
     SessionCapacityError,
     session_manager,
 )
+from codex_web import codex_web_enabled
 
+from agent.core.codex_models import CODEX_DEFAULT_MODEL_ID, is_codex_model_id
+from agent.core.codex_runtime import CodexRuntimeError, codex_login_status
 from agent.core.hf_access import get_jobs_access
 from agent.core.hf_tokens import resolve_hf_request_token
 from agent.core.local_models import local_model_provider
@@ -116,7 +119,11 @@ def _schedule_usage_refresh_and_upload(
     task.add_done_callback(_background_route_tasks.discard)
 
 
-def _available_models() -> list[dict[str, Any]]:
+def _available_models(
+    *,
+    include_codex: bool | None = None,
+) -> list[dict[str, Any]]:
+    include_codex = codex_web_enabled() if include_codex is None else include_codex
     models = [
         {
             "id": CLAUDE_OPUS_48_MODEL_ID,
@@ -144,14 +151,26 @@ def _available_models() -> list[dict[str, Any]]:
             "label": "DeepSeek V4 Pro",
         },
     ]
+    if include_codex:
+        for model in models:
+            model.pop("recommended", None)
+        models.insert(
+            0,
+            {
+                "id": CODEX_DEFAULT_MODEL_ID,
+                "label": "Codex (ChatGPT)",
+                "provider": "codex",
+                "recommended": True,
+            },
+        )
     return models
 
 
-AVAILABLE_MODELS = _available_models()
+AVAILABLE_MODELS = _available_models(include_codex=False)
 
 
 def _valid_model_ids() -> set[str]:
-    return {m["id"] for m in AVAILABLE_MODELS}
+    return {m["id"] for m in _available_models()}
 
 
 def _validate_model_id(model_id: str | None) -> None:
@@ -161,13 +180,16 @@ def _validate_model_id(model_id: str | None) -> None:
 
 
 def _default_model() -> str:
+    if codex_web_enabled():
+        return CODEX_DEFAULT_MODEL_ID
     return DEFAULT_MODEL_ID
 
 
 def _model_override_for_new_session(requested_model: str | None) -> str | None:
     """Return the model override to use when creating a new session.
 
-    Explicit model requests are honored. Empty web requests default to GLM 5.2.
+    Explicit model requests are honored. Empty requests use the active web
+    default (Codex for an enabled local Codex runtime, otherwise GLM 5.2).
     """
     return requested_model or _default_model()
 
@@ -180,7 +202,9 @@ def _user_hf_token(user: dict[str, Any] | None) -> str | None:
 
 def _model_requires_hf_router_token(model_id: str | None) -> bool:
     normalized = strip_huggingface_model_prefix(model_id) or model_id or ""
-    return local_model_provider(normalized) is None
+    return (
+        not is_codex_model_id(normalized) and local_model_provider(normalized) is None
+    )
 
 
 def _reject_oversize_dataset_upload(request: Request) -> None:
@@ -297,6 +321,18 @@ async def llm_health_check(
     - timeout / network → provider unreachable
     """
     model = _default_model()
+    if is_codex_model_id(model):
+        try:
+            await codex_login_status()
+            return LLMHealthResponse(status="ok", model=model)
+        except CodexRuntimeError as e:
+            return LLMHealthResponse(
+                status="error",
+                model=model,
+                error=str(e)[:500],
+                error_type="auth",
+            )
+
     hf_token = resolve_hf_request_token(request)
     if _model_requires_hf_router_token(model) and not hf_token:
         return LLMHealthResponse(status="skipped", model=model)
@@ -351,8 +387,8 @@ async def llm_health_check(
 async def get_model() -> dict:
     """Get current model and available models. No auth required."""
     return {
-        "current": session_manager.config.model_name,
-        "available": AVAILABLE_MODELS,
+        "current": _default_model(),
+        "available": _available_models(),
     }
 
 
@@ -365,14 +401,18 @@ async def generate_title(
 ) -> dict:
     """Generate a short title for a chat session based on the first user message.
 
-    Always uses gpt-oss-120b via Cerebras on the HF router. The tab headline
-    renders as plain text, so the model is told to avoid markdown and any
-    stray formatting characters are stripped before returning. gpt-oss is a
-    reasoning model — reasoning_effort=low keeps the reasoning budget small
-    so the 60-token output budget isn't consumed before the title is written.
+    Codex sessions use a deterministic local title so they never invoke HF
+    Router. Other sessions use gpt-oss-120b via Cerebras on HF Router. The tab
+    headline renders as plain text, so formatting characters are stripped.
     """
     try:
-        await _check_session_access(request.session_id, user)
+        agent_session = await _check_session_access(request.session_id, user)
+        if is_codex_model_id(agent_session.session.config.model_name):
+            fallback = request.text.strip()
+            title = fallback[:40].rstrip() + "…" if len(fallback) > 40 else fallback
+            await session_manager.update_session_title(request.session_id, title)
+            return {"title": title}
+
         llm_params = _resolve_llm_params(
             "openai/gpt-oss-120b:cerebras",
             _user_hf_token(user),

@@ -90,15 +90,22 @@ Codex's cached credentials. If `codex login` used **Sign in with ChatGPT**,
 Codex usage follows that ChatGPT plan's Codex allowance. If Codex was logged in
 with an OpenAI API key, standard API billing applies instead.
 
-Codex supplies the main agent loop and local repository tools. ML Intern's
-Hugging Face documentation, papers, datasets, Hub, Jobs, web research, and
-optional sandbox tools are exposed to Codex under the `ml_intern` tool
-namespace. `HF_TOKEN` is optional for the Codex model itself, but individual
-Hub/Jobs tools and `--sandbox-tools` still require Hugging Face authentication.
+To expose the same signed-in Codex runtime in the local Web UI:
 
-OpenAI-authenticated Codex mode currently targets the local CLI. The hosted web
-app continues to use Hugging Face OAuth/Router because a local Codex login is a
-device credential and must not be forwarded to the server.
+```bash
+ML_INTERN_ENABLE_CODEX_WEB=1 uv run uvicorn backend.main:app --host ::1 --port 7860
+```
+
+`Codex (ChatGPT)` then appears as the recommended/default Web model. This flag
+is deliberately disabled when the backend detects Hugging Face Spaces or OAuth:
+a developer's local ChatGPT allowance must never be shared with hosted visitors.
+
+Codex supplies the main agent loop. In the CLI it also has local repository
+tools; in the Web UI the host repository stays read-only. ML Intern's Hugging
+Face documentation, papers, datasets, Hub, Jobs, web research, and optional
+sandbox tools are exposed to Codex under the `ml_intern` namespace. `HF_TOKEN`
+is optional for the Codex model itself, but individual Hub/Jobs and sandbox
+tools still require Hugging Face authentication.
 
 #### Local models
 
