@@ -58,6 +58,43 @@ def test_local_codex_web_is_listed_and_becomes_default(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_model_config_uses_live_codex_catalog(monkeypatch):
+    async def fake_codex_models():
+        return [
+            {
+                "id": agent.CODEX_DEFAULT_MODEL_ID,
+                "label": "Codex Auto (GPT-5.6-Sol)",
+                "provider": "codex",
+                "recommended": True,
+                "default_reasoning_effort": "low",
+                "reasoning_efforts": [
+                    {"id": "low", "description": "Fast"},
+                    {"id": "max", "description": "Deep"},
+                ],
+            },
+            {
+                "id": "codex/gpt-5.6-terra",
+                "label": "Codex · GPT-5.6-Terra",
+                "provider": "codex",
+                "default_reasoning_effort": "medium",
+                "reasoning_efforts": [{"id": "medium", "description": "Balanced"}],
+            },
+        ]
+
+    monkeypatch.setattr(agent, "codex_web_enabled", lambda: True)
+    monkeypatch.setattr(agent, "codex_web_models", fake_codex_models)
+
+    payload = await agent.get_model()
+
+    assert payload["current"] == agent.CODEX_DEFAULT_MODEL_ID
+    assert [model["id"] for model in payload["available"][:2]] == [
+        agent.CODEX_DEFAULT_MODEL_ID,
+        "codex/gpt-5.6-terra",
+    ]
+    assert payload["available"][0]["reasoning_efforts"][1]["id"] == "max"
+
+
+@pytest.mark.asyncio
 async def test_llm_health_uses_default_and_request_hf_token(monkeypatch):
     class Request:
         headers = {"Authorization": "Bearer user-token"}
@@ -312,6 +349,88 @@ async def test_switching_to_gpt_is_allowed_for_free_user(monkeypatch):
 
     assert response == {"session_id": "s1", "model": agent.DEFAULT_GPT_MODEL_ID}
     assert updated == [("s1", agent.DEFAULT_GPT_MODEL_ID)]
+
+
+@pytest.mark.asyncio
+async def test_switching_codex_model_and_reasoning_effort(monkeypatch):
+    updated = []
+    codex_models = [
+        {
+            "id": "codex/gpt-5.6-sol",
+            "label": "Codex · GPT-5.6-Sol",
+            "provider": "codex",
+            "default_reasoning_effort": "low",
+            "reasoning_efforts": [
+                {"id": "low", "description": "Fast"},
+                {"id": "max", "description": "Deep"},
+            ],
+        }
+    ]
+
+    async def fake_live_models():
+        return codex_models
+
+    async def fake_check_session_access(_session_id, _user, _request=None):
+        return SimpleNamespace(
+            session=SimpleNamespace(
+                config=SimpleNamespace(
+                    model_name=agent.CODEX_DEFAULT_MODEL_ID,
+                    reasoning_effort="low",
+                )
+            )
+        )
+
+    async def fake_update_session_model(session_id, model_id, **kwargs):
+        updated.append((session_id, model_id, kwargs))
+
+    monkeypatch.setattr(agent, "_live_available_models", fake_live_models)
+    monkeypatch.setattr(agent, "_check_session_access", fake_check_session_access)
+    monkeypatch.setattr(
+        agent.session_manager,
+        "update_session_model",
+        fake_update_session_model,
+    )
+
+    response = await agent.set_session_model(
+        "s1",
+        {
+            "model": "codex/gpt-5.6-sol",
+            "reasoning_effort": "max",
+        },
+        request=None,
+        user={"user_id": "u1"},
+    )
+
+    assert response == {
+        "session_id": "s1",
+        "model": "codex/gpt-5.6-sol",
+        "reasoning_effort": "max",
+    }
+    assert updated == [
+        (
+            "s1",
+            "codex/gpt-5.6-sol",
+            {"reasoning_effort": "max"},
+        )
+    ]
+
+
+def test_codex_rejects_unsupported_reasoning_effort():
+    with pytest.raises(HTTPException) as exc_info:
+        agent._resolve_codex_reasoning_effort(
+            "codex/gpt-5.6-sol",
+            "ultra",
+            [
+                {
+                    "id": "codex/gpt-5.6-sol",
+                    "reasoning_efforts": [{"id": "low"}],
+                    "default_reasoning_effort": "low",
+                }
+            ],
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Unsupported reasoning effort" in exc_info.value.detail
 
 
 @pytest.mark.asyncio

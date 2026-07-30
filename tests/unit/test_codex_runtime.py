@@ -8,6 +8,7 @@ from agent.core.codex_runtime import (
     CodexRuntimeError,
     build_dynamic_tool_namespace,
     codex_login_status,
+    codex_model_catalog,
 )
 from agent.core.tools import ToolSpec
 
@@ -103,6 +104,142 @@ async def test_codex_login_status_uses_public_cli_status(monkeypatch):
     )
 
     assert await codex_login_status() == "Logged in using ChatGPT"
+
+
+@pytest.mark.asyncio
+async def test_codex_model_catalog_uses_account_visible_models(monkeypatch):
+    writes = []
+
+    class Stdin:
+        def write(self, payload):
+            writes.append(payload.decode())
+
+        async def drain(self):
+            return None
+
+    class Stdout:
+        def __init__(self):
+            self.lines = [
+                b'{"id":1,"result":{"userAgent":"Codex"}}\n',
+                b'{"method":"remoteControl/status/changed","params":{}}\n',
+                (
+                    b'{"id":2,"result":{"data":[{"id":"gpt-5.6-sol",'
+                    b'"model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol",'
+                    b'"defaultReasoningEffort":"low",'
+                    b'"supportedReasoningEfforts":[{"reasoningEffort":"low"}],'
+                    b'"isDefault":true}],"nextCursor":null}}\n'
+                ),
+            ]
+
+        async def readline(self):
+            return self.lines.pop(0)
+
+    class Stderr:
+        async def read(self):
+            return b""
+
+    class Process:
+        def __init__(self):
+            self.stdin = Stdin()
+            self.stdout = Stdout()
+            self.stderr = Stderr()
+            self.returncode = None
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_login_status(_codex_bin):
+        return "Logged in using ChatGPT"
+
+    async def fake_subprocess(*_args, **_kwargs):
+        return Process()
+
+    monkeypatch.setattr(
+        "agent.core.codex_runtime.codex_login_status",
+        fake_login_status,
+    )
+    monkeypatch.setattr(
+        "agent.core.codex_runtime.shutil.which",
+        lambda _binary: "/usr/local/bin/codex",
+    )
+    monkeypatch.setattr(
+        "agent.core.codex_runtime.asyncio.create_subprocess_exec",
+        fake_subprocess,
+    )
+
+    models = await codex_model_catalog()
+
+    assert models[0]["model"] == "gpt-5.6-sol"
+    assert models[0]["defaultReasoningEffort"] == "low"
+    assert '"method":"model/list"' in writes[-1]
+    assert '"includeHidden":false' in writes[-1]
+
+
+@pytest.mark.asyncio
+async def test_run_turn_sends_selected_reasoning_effort(tmp_path):
+    requests = []
+    runtime = CodexAppServerRuntime(
+        config=SimpleNamespace(
+            model_name="codex/gpt-5.6-sol",
+            reasoning_effort="max",
+        ),
+        tool_router=SimpleNamespace(),
+        hf_token=None,
+        local_mode=False,
+        cwd=tmp_path,
+        autonomous_mode=False,
+    )
+    runtime.thread_id = "thread-1"
+
+    async def fake_request(method, params):
+        requests.append((method, params))
+        return {"turn": {"id": "turn-1"}}
+
+    runtime._request = fake_request
+    await runtime._notifications.put(
+        {
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "done",
+                },
+            },
+        }
+    )
+    await runtime._notifications.put(
+        {
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "turn": {"id": "turn-1", "status": "completed"},
+            },
+        }
+    )
+
+    result = await runtime.run_turn("hello")
+
+    assert result == "done"
+    assert requests == [
+        (
+            "turn/start",
+            {
+                "threadId": "thread-1",
+                "input": [{"type": "text", "text": "hello"}],
+                "effort": "max",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

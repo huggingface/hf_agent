@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
 from litellm import Message
 
-from agent.core.codex_runtime import CodexAppServerRuntime
+from agent.core.codex_models import CODEX_DEFAULT_MODEL_ID
+from agent.core.codex_runtime import CodexAppServerRuntime, codex_model_catalog
 from agent.core.session import Event
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _MAX_SEED_CHARS = 24_000
+_MODEL_CATALOG_TTL_S = 300.0
+_model_catalog_cache: tuple[float, list[dict[str, Any]]] | None = None
+_model_catalog_lock = asyncio.Lock()
 
 
 def codex_web_enabled() -> bool:
@@ -29,6 +35,87 @@ def codex_web_enabled() -> bool:
     if os.environ.get("SPACE_ID") or os.environ.get("OAUTH_CLIENT_ID"):
         return False
     return shutil.which("codex") is not None
+
+
+def _reasoning_options(model: dict[str, Any]) -> list[dict[str, str]]:
+    options = []
+    for item in model.get("supportedReasoningEfforts") or []:
+        effort = item.get("reasoningEffort") if isinstance(item, dict) else None
+        if not isinstance(effort, str) or not effort:
+            continue
+        options.append(
+            {
+                "id": effort,
+                "description": str(item.get("description") or ""),
+            }
+        )
+    return options
+
+
+def _catalog_to_web_models(catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    visible = [model for model in catalog if not model.get("hidden")]
+    default = next((model for model in visible if model.get("isDefault")), None)
+    models: list[dict[str, Any]] = []
+
+    auto: dict[str, Any] = {
+        "id": CODEX_DEFAULT_MODEL_ID,
+        "label": "Codex Auto",
+        "provider": "codex",
+        "recommended": True,
+    }
+    if default is not None:
+        display_name = str(default.get("displayName") or default.get("id") or "")
+        if display_name:
+            auto["label"] = f"Codex Auto ({display_name})"
+        auto["description"] = str(default.get("description") or "")
+        auto["default_reasoning_effort"] = default.get("defaultReasoningEffort")
+        auto["reasoning_efforts"] = _reasoning_options(default)
+    models.append(auto)
+
+    for model in visible:
+        model_id = model.get("model") or model.get("id")
+        if not isinstance(model_id, str) or not model_id:
+            continue
+        models.append(
+            {
+                "id": f"codex/{model_id}",
+                "label": f"Codex · {model.get('displayName') or model_id}",
+                "provider": "codex",
+                "description": str(model.get("description") or ""),
+                "default_reasoning_effort": model.get("defaultReasoningEffort"),
+                "reasoning_efforts": _reasoning_options(model),
+                "upgrade": model.get("upgrade"),
+            }
+        )
+    return models
+
+
+async def codex_web_models(*, force_refresh: bool = False) -> list[dict[str, Any]]:
+    """Return a short-lived cached model catalog for the local Codex login."""
+    global _model_catalog_cache
+
+    if not codex_web_enabled():
+        return []
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _model_catalog_cache is not None
+        and _model_catalog_cache[0] > now
+    ):
+        return _model_catalog_cache[1]
+
+    async with _model_catalog_lock:
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and _model_catalog_cache is not None
+            and _model_catalog_cache[0] > now
+        ):
+            return _model_catalog_cache[1]
+        catalog = await codex_model_catalog()
+        models = _catalog_to_web_models(catalog)
+        _model_catalog_cache = (now + _MODEL_CATALOG_TTL_S, models)
+        return models
 
 
 def _seeded_prompt(session, current_text: str) -> str:

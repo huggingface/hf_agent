@@ -96,9 +96,12 @@ To expose the same signed-in Codex runtime in the local Web UI:
 ML_INTERN_ENABLE_CODEX_WEB=1 uv run uvicorn backend.main:app --host ::1 --port 7860
 ```
 
-`Codex (ChatGPT)` then appears as the recommended/default Web model. This flag
-is deliberately disabled when the backend detects Hugging Face Spaces or OAuth:
-a developer's local ChatGPT allowance must never be shared with hosted visitors.
+The Web picker then loads the models available to the active Codex account and
+their supported reasoning levels directly from `codex app-server`. `Codex Auto`
+is the recommended/default choice; explicit Codex models and Thinking levels
+can be changed per session. This flag is deliberately disabled when the backend
+detects Hugging Face Spaces or OAuth: a developer's local ChatGPT allowance
+must never be shared with hosted visitors.
 
 Codex supplies the main agent loop. In the CLI it also has local repository
 tools; in the Web UI the host repository stays read-only. ML Intern's Hugging

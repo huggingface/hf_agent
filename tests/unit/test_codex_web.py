@@ -8,7 +8,11 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / "backend"
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from codex_web import CodexWebRuntime, codex_web_enabled  # noqa: E402
+from codex_web import (  # noqa: E402
+    CodexWebRuntime,
+    _catalog_to_web_models,
+    codex_web_enabled,
+)
 
 
 class StubContextManager:
@@ -50,6 +54,47 @@ def test_codex_web_requires_explicit_local_only_flag(monkeypatch):
 
     monkeypatch.setenv("SPACE_ID", "owner/space")
     assert codex_web_enabled() is False
+
+
+def test_codex_catalog_maps_models_and_reasoning_options():
+    models = _catalog_to_web_models(
+        [
+            {
+                "id": "gpt-5.6-sol",
+                "model": "gpt-5.6-sol",
+                "displayName": "GPT-5.6-Sol",
+                "description": "Latest frontier model",
+                "isDefault": True,
+                "defaultReasoningEffort": "low",
+                "supportedReasoningEfforts": [
+                    {
+                        "reasoningEffort": "low",
+                        "description": "Fast responses",
+                    },
+                    {
+                        "reasoningEffort": "max",
+                        "description": "Maximum reasoning",
+                    },
+                ],
+            },
+            {
+                "id": "hidden-model",
+                "model": "hidden-model",
+                "hidden": True,
+            },
+        ]
+    )
+
+    assert [model["id"] for model in models] == [
+        "codex/default",
+        "codex/gpt-5.6-sol",
+    ]
+    assert models[0]["label"] == "Codex Auto (GPT-5.6-Sol)"
+    assert models[0]["default_reasoning_effort"] == "low"
+    assert models[1]["reasoning_efforts"] == [
+        {"id": "low", "description": "Fast responses"},
+        {"id": "max", "description": "Maximum reasoning"},
+    ]
 
 
 @pytest.mark.asyncio

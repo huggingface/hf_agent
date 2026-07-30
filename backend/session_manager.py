@@ -140,6 +140,7 @@ class AgentSession:
     usage_warning_spend_cache: dict[str, Any] = field(default_factory=dict)
     codex_runtime: CodexWebRuntime | None = None
     codex_runtime_model: str | None = None
+    codex_runtime_effort: str | None = None
 
     def __post_init__(self) -> None:
         if self.usage_window_started_at is None:
@@ -293,6 +294,7 @@ class SessionManager:
         hf_token: str | None,
         user_plan: str | None,
         model: str | None,
+        reasoning_effort: str | None,
         event_queue: asyncio.Queue,
         notification_destinations: list[str] | None = None,
     ) -> tuple[ToolRouter, Session]:
@@ -307,6 +309,10 @@ class SessionManager:
         normalized_model = strip_huggingface_model_prefix(model)
         if normalized_model:
             session_config.model_name = normalized_model
+        if is_codex_model_id(session_config.model_name):
+            session_config.reasoning_effort = reasoning_effort
+        elif reasoning_effort is not None:
+            session_config.reasoning_effort = reasoning_effort
         session = Session(
             event_queue=event_queue,
             config=session_config,
@@ -1032,6 +1038,11 @@ class SessionManager:
                 session_id=agent_session.session_id,
                 user_id=agent_session.user_id,
                 model=agent_session.session.config.model_name,
+                reasoning_effort=getattr(
+                    agent_session.session.config,
+                    "reasoning_effort",
+                    None,
+                ),
                 title=agent_session.title,
                 messages=self._serialize_messages(agent_session.session),
                 runtime_state=runtime_state or self._runtime_state(agent_session),
@@ -1159,6 +1170,7 @@ class SessionManager:
             hf_token=hf_token,
             user_plan=user_plan,
             model=model,
+            reasoning_effort=meta.get("reasoning_effort"),
             event_queue=event_queue,
             notification_destinations=meta.get("notification_destinations") or [],
         )
@@ -1278,6 +1290,7 @@ class SessionManager:
         hf_token: str | None = None,
         user_plan: str | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
         is_pro: bool | None = None,
     ) -> str:
         """Create a new agent session and return its ID.
@@ -1294,6 +1307,8 @@ class SessionManager:
             model: Optional model override. When set, replaces ``model_name``
                 on the per-session config clone. None falls back to the
                 config default.
+            reasoning_effort: Optional per-session reasoning effort. Codex
+                sessions leave this unset to use the selected model's default.
 
         Raises:
             SessionCapacityError: If the server or user has reached the
@@ -1343,6 +1358,7 @@ class SessionManager:
                 hf_token=hf_token,
                 user_plan=user_plan,
                 model=model,
+                reasoning_effort=reasoning_effort,
                 event_queue=event_queue,
             )
 
@@ -1683,6 +1699,7 @@ class SessionManager:
         runtime = agent_session.codex_runtime
         agent_session.codex_runtime = None
         agent_session.codex_runtime_model = None
+        agent_session.codex_runtime_effort = None
         if runtime is not None:
             try:
                 await runtime.close()
@@ -1698,9 +1715,11 @@ class SessionManager:
         agent_session: AgentSession,
     ) -> CodexWebRuntime:
         model_id = agent_session.session.config.model_name
+        reasoning_effort = agent_session.session.config.reasoning_effort
         if (
             agent_session.codex_runtime is not None
             and agent_session.codex_runtime_model == model_id
+            and agent_session.codex_runtime_effort == reasoning_effort
         ):
             return agent_session.codex_runtime
 
@@ -1712,6 +1731,7 @@ class SessionManager:
         await runtime.start()
         agent_session.codex_runtime = runtime
         agent_session.codex_runtime_model = model_id
+        agent_session.codex_runtime_effort = reasoning_effort
         return runtime
 
     async def _run_session(
@@ -1957,15 +1977,26 @@ class SessionManager:
             agent_session.title = title
         await self._store().update_session_fields(session_id, title=title)
 
-    async def update_session_model(self, session_id: str, model_id: str) -> bool:
+    async def update_session_model(
+        self,
+        session_id: str,
+        model_id: str,
+        *,
+        reasoning_effort: str | None = None,
+    ) -> bool:
         agent_session = self.sessions.get(session_id)
         if not agent_session or not agent_session.is_active:
             return False
         agent_session.session.update_model(model_id)
+        if is_codex_model_id(model_id):
+            agent_session.session.config.reasoning_effort = reasoning_effort
         if (
             not agent_session.is_processing
             and agent_session.codex_runtime is not None
-            and agent_session.codex_runtime_model != model_id
+            and (
+                agent_session.codex_runtime_model != model_id
+                or agent_session.codex_runtime_effort != reasoning_effort
+            )
         ):
             await self._close_codex_runtime(agent_session)
         self._touch(agent_session)
@@ -2059,6 +2090,11 @@ class SessionManager:
             "user_id": agent_session.user_id,
             "pending_approval": pending_approval,
             "model": agent_session.session.config.model_name,
+            "reasoning_effort": getattr(
+                agent_session.session.config,
+                "reasoning_effort",
+                None,
+            ),
             "title": agent_session.title,
             "notification_destinations": list(
                 agent_session.session.notification_destinations

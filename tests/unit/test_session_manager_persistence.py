@@ -36,13 +36,17 @@ class FakeRuntimeSession:
         hf_token: str | None = None,
         user_plan: str | None = None,
         model: str = "test-model",
+        reasoning_effort: str | None = None,
     ):
         self.hf_token = hf_token
         self.user_plan = user_plan
         self.context_manager = SimpleNamespace(items=[])
         self.pending_approval = None
         self.turn_count = 0
-        self.config = SimpleNamespace(model_name=model)
+        self.config = SimpleNamespace(
+            model_name=model,
+            reasoning_effort=reasoning_effort,
+        )
         self.notification_destinations = []
         self.auto_approval_enabled = False
         self.auto_approval_cost_cap_usd = None
@@ -912,6 +916,7 @@ def _install_fake_runtime(manager: SessionManager) -> asyncio.Event:
             hf_token=kwargs.get("hf_token"),
             user_plan=kwargs.get("user_plan"),
             model=kwargs.get("model") or "test-model",
+            reasoning_effort=kwargs.get("reasoning_effort"),
         )
 
     async def fake_run_session(*_: Any) -> None:

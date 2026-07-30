@@ -91,6 +91,103 @@ async def codex_login_status(codex_bin: str = "codex") -> str:
     return text or "Codex authentication active"
 
 
+async def codex_model_catalog(
+    codex_bin: str = "codex",
+    *,
+    timeout_s: float = 10.0,
+) -> list[dict[str, Any]]:
+    """Return the picker-visible model catalog for the active Codex account."""
+    await codex_login_status(codex_bin)
+    resolved = shutil.which(codex_bin)
+    assert resolved is not None
+
+    process = await asyncio.create_subprocess_exec(
+        resolved,
+        "app-server",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stderr_task = asyncio.create_task(process.stderr.read())
+    request_id = 0
+
+    async def write(message: dict[str, Any]) -> None:
+        payload = (json.dumps(message, separators=(",", ":")) + "\n").encode()
+        process.stdin.write(payload)
+        await process.stdin.drain()
+
+    async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        nonlocal request_id
+        request_id += 1
+        current_id = request_id
+        await write({"method": method, "id": current_id, "params": params})
+        while True:
+            line = await asyncio.wait_for(process.stdout.readline(), timeout=timeout_s)
+            if not line:
+                raise CodexRuntimeError(
+                    "Codex app-server closed while loading its model catalog."
+                )
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("id") != current_id:
+                continue
+            if "error" in message:
+                error = message.get("error") or {}
+                raise CodexRuntimeError(
+                    str(error.get("message") or f"Codex {method} request failed.")
+                )
+            return message.get("result") or {}
+
+    try:
+        await request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "ml_intern",
+                    "title": "ML Intern",
+                    "version": "0.1.0",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        await write({"method": "initialized", "params": {}})
+
+        models: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {
+                "limit": 100,
+                "includeHidden": False,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            result = await request("model/list", params)
+            models.extend(
+                model for model in result.get("data") or [] if isinstance(model, dict)
+            )
+            cursor = result.get("nextCursor")
+            if not cursor:
+                return models
+    except TimeoutError as exc:
+        raise CodexRuntimeError("Timed out while loading Codex models.") from exc
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        stderr = (await stderr_task).decode(errors="replace").strip()
+        if process.returncode not in {None, 0, -15} and stderr:
+            logger.debug("Codex model catalog stderr: %s", stderr[-1000:])
+
+
 def build_dynamic_tool_namespace(
     tool_router: ToolRouter,
     *,
@@ -369,12 +466,16 @@ class CodexAppServerRuntime:
         if not self.thread_id:
             raise CodexRuntimeError("Codex runtime has not been started.")
 
+        params: dict[str, Any] = {
+            "threadId": self.thread_id,
+            "input": [{"type": "text", "text": prompt}],
+        }
+        reasoning_effort = getattr(self.config, "reasoning_effort", None)
+        if reasoning_effort:
+            params["effort"] = reasoning_effort
         response = await self._request(
             "turn/start",
-            {
-                "threadId": self.thread_id,
-                "input": [{"type": "text", "text": prompt}],
-            },
+            params,
         )
         turn = response.get("turn") or {}
         self.active_turn_id = turn.get("id")
