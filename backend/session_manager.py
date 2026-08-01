@@ -141,6 +141,7 @@ class AgentSession:
     codex_runtime: CodexWebRuntime | None = None
     codex_runtime_model: str | None = None
     codex_runtime_effort: str | None = None
+    codex_turn_task: asyncio.Task | None = None
 
     def __post_init__(self) -> None:
         if self.usage_window_started_at is None:
@@ -1774,15 +1775,42 @@ class SessionManager:
                                 submission.operation.op_type == OpType.USER_INPUT
                                 and is_codex_model_id(session.config.model_name)
                             ):
-                                codex_runtime = await self._ensure_codex_runtime(
-                                    agent_session
-                                )
                                 text = (
                                     submission.operation.data.get("text", "")
                                     if submission.operation.data
                                     else ""
                                 )
-                                await codex_runtime.run_user_input(text)
+
+                                async def run_codex_turn() -> None:
+                                    codex_runtime = await self._ensure_codex_runtime(
+                                        agent_session
+                                    )
+                                    try:
+                                        await codex_runtime.run_user_input(text)
+                                    except Exception:
+                                        await self._close_codex_runtime(agent_session)
+                                        raise
+
+                                codex_turn_task = asyncio.create_task(run_codex_turn())
+                                agent_session.codex_turn_task = codex_turn_task
+                                try:
+                                    await codex_turn_task
+                                except asyncio.CancelledError:
+                                    # A Stop request cancels only the active Codex
+                                    # turn. Cancellation of the outer session task
+                                    # must still shut the whole session down.
+                                    current_task = asyncio.current_task()
+                                    if (
+                                        current_task is not None
+                                        and current_task.cancelling()
+                                    ):
+                                        raise
+                                    await session.send_event(
+                                        Event(event_type="interrupted")
+                                    )
+                                finally:
+                                    if agent_session.codex_turn_task is codex_turn_task:
+                                        agent_session.codex_turn_task = None
                                 should_continue = True
                             else:
                                 should_continue = await process_submission(
@@ -1889,8 +1917,16 @@ class SessionManager:
         if not agent_session or not agent_session.is_active:
             return False
         agent_session.session.cancel()
+        codex_turn_task = agent_session.codex_turn_task
+        if codex_turn_task is not None and not codex_turn_task.done():
+            codex_turn_task.cancel()
         if agent_session.codex_runtime is not None:
-            await agent_session.codex_runtime.interrupt()
+            try:
+                await agent_session.codex_runtime.interrupt()
+            finally:
+                # A cancelled app-server turn can remain wedged even after the
+                # interrupt request. Recreate it for the next user message.
+                await self._close_codex_runtime(agent_session)
         return True
 
     async def undo(self, session_id: str) -> bool:

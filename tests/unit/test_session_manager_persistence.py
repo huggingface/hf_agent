@@ -61,9 +61,20 @@ class FakeRuntimeSession:
         self.sandbox_preload_cancel_event = None
         self.events = []
         self.session_id = "s1"
+        self._cancelled = False
 
     async def send_event(self, event):
         self.events.append(event)
+
+    def cancel(self):
+        self._cancelled = True
+
+    def reset_cancel(self):
+        self._cancelled = False
+
+    @property
+    def is_cancelled(self):
+        return self._cancelled
 
     def auto_approval_policy_summary(self):
         cap = self.auto_approval_cost_cap_usd
@@ -183,6 +194,37 @@ def test_agent_session_replaces_non_uuid_inference_billing_session_id():
     assert runtime_session.inference_billing_session_id == (
         agent_session.inference_billing_session_id
     )
+
+
+@pytest.mark.asyncio
+async def test_interrupt_cancels_active_codex_turn_and_closes_runtime():
+    class FakeCodexRuntime:
+        def __init__(self) -> None:
+            self.interrupted = False
+            self.closed = False
+
+        async def interrupt(self) -> None:
+            self.interrupted = True
+
+        async def close(self) -> None:
+            self.closed = True
+
+    manager = _manager_with_store(NoopSessionStore())
+    agent_session = _runtime_agent_session("codex-stop")
+    runtime = FakeCodexRuntime()
+    turn_task = asyncio.create_task(asyncio.Event().wait())
+    agent_session.codex_runtime = runtime  # type: ignore[assignment]
+    agent_session.codex_turn_task = turn_task
+    manager.sessions[agent_session.session_id] = agent_session
+
+    assert await manager.interrupt(agent_session.session_id) is True
+    await asyncio.gather(turn_task, return_exceptions=True)
+
+    assert agent_session.session.is_cancelled is True
+    assert turn_task.cancelled()
+    assert runtime.interrupted is True
+    assert runtime.closed is True
+    assert agent_session.codex_runtime is None
 
 
 @pytest.mark.asyncio

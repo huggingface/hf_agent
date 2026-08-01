@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 CODEX_TOOL_NAMESPACE = "ml_intern"
 _DYNAMIC_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _CODEX_BUILTIN_LOCAL_TOOLS = {"bash", "read", "write", "edit"}
+_CODEX_INTERRUPT_TIMEOUT_S = 3.0
+_CODEX_NOTIFICATION_POLL_S = 1.0
+_CODEX_TURN_IDLE_TIMEOUT_S = 300.0
 _UNSUPPORTED_CODEX_TOOLS = {
     # This tool creates a nested LiteLLM research loop using the active model.
     # Codex already has its own independent context and can call the underlying
@@ -454,9 +457,17 @@ class CodexAppServerRuntime:
         if not self.thread_id or not self.active_turn_id:
             return
         try:
-            await self._request(
-                "turn/interrupt",
-                {"threadId": self.thread_id, "turnId": self.active_turn_id},
+            await asyncio.wait_for(
+                self._request(
+                    "turn/interrupt",
+                    {"threadId": self.thread_id, "turnId": self.active_turn_id},
+                ),
+                timeout=_CODEX_INTERRUPT_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Codex app-server did not acknowledge interrupt within %.0fs",
+                _CODEX_INTERRUPT_TIMEOUT_S,
             )
         except Exception:
             logger.debug("Failed to interrupt Codex turn", exc_info=True)
@@ -480,10 +491,32 @@ class CodexAppServerRuntime:
         turn = response.get("turn") or {}
         self.active_turn_id = turn.get("id")
         final_text = ""
+        loop = asyncio.get_running_loop()
+        last_activity_at = loop.time()
 
         try:
             while True:
-                message = await self._notifications.get()
+                if getattr(self._tool_session, "is_cancelled", False):
+                    return final_text
+
+                idle_for = loop.time() - last_activity_at
+                remaining_idle_s = _CODEX_TURN_IDLE_TIMEOUT_S - idle_for
+                if remaining_idle_s <= 0:
+                    raise CodexRuntimeError(
+                        "Codex produced no activity for 5 minutes, so the stuck "
+                        "turn was stopped. Retry or choose a lower Thinking level."
+                    )
+                try:
+                    message = await asyncio.wait_for(
+                        self._notifications.get(),
+                        timeout=min(
+                            _CODEX_NOTIFICATION_POLL_S,
+                            remaining_idle_s,
+                        ),
+                    )
+                except TimeoutError:
+                    continue
+                last_activity_at = loop.time()
                 method = message.get("method")
                 params = message.get("params") or {}
 

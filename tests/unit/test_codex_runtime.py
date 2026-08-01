@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -240,6 +241,85 @@ async def test_run_turn_sends_selected_reasoning_effort(tmp_path):
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_turn_exits_when_session_is_cancelled(tmp_path):
+    runtime = CodexAppServerRuntime(
+        config=SimpleNamespace(model_name="codex/default"),
+        tool_router=SimpleNamespace(),
+        hf_token=None,
+        local_mode=False,
+        cwd=tmp_path,
+        autonomous_mode=False,
+    )
+    runtime.thread_id = "thread-1"
+    runtime._tool_session = SimpleNamespace(is_cancelled=True)
+
+    async def fake_request(_method, _params):
+        return {"turn": {"id": "turn-1"}}
+
+    runtime._request = fake_request
+
+    assert await runtime.run_turn("hello") == ""
+    assert runtime.active_turn_id is None
+
+
+@pytest.mark.asyncio
+async def test_run_turn_times_out_when_codex_stops_emitting_activity(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        "agent.core.codex_runtime._CODEX_NOTIFICATION_POLL_S",
+        0.005,
+    )
+    monkeypatch.setattr(
+        "agent.core.codex_runtime._CODEX_TURN_IDLE_TIMEOUT_S",
+        0.01,
+    )
+    runtime = CodexAppServerRuntime(
+        config=SimpleNamespace(model_name="codex/default"),
+        tool_router=SimpleNamespace(),
+        hf_token=None,
+        local_mode=False,
+        cwd=tmp_path,
+        autonomous_mode=False,
+    )
+    runtime.thread_id = "thread-1"
+
+    async def fake_request(_method, _params):
+        return {"turn": {"id": "turn-1"}}
+
+    runtime._request = fake_request
+
+    with pytest.raises(CodexRuntimeError, match="no activity"):
+        await runtime.run_turn("hello")
+
+
+@pytest.mark.asyncio
+async def test_interrupt_does_not_wait_forever_for_app_server(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "agent.core.codex_runtime._CODEX_INTERRUPT_TIMEOUT_S",
+        0.01,
+    )
+    runtime = CodexAppServerRuntime(
+        config=SimpleNamespace(model_name="codex/default"),
+        tool_router=SimpleNamespace(),
+        hf_token=None,
+        local_mode=False,
+        cwd=tmp_path,
+        autonomous_mode=False,
+    )
+    runtime.thread_id = "thread-1"
+    runtime.active_turn_id = "turn-1"
+
+    async def hanging_request(_method, _params):
+        await asyncio.Event().wait()
+
+    runtime._request = hanging_request
+
+    await runtime.interrupt()
 
 
 @pytest.mark.asyncio
