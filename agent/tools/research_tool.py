@@ -185,7 +185,7 @@ hf_inspect_dataset({"dataset": "org/dataset-name", "split": "train", "sample_row
 
 # 6. Now get working code for the training method
 github_find_examples({"repo": "trl", "keyword": "sft"})
-github_read_file({"repo": "huggingface/trl", "path": "examples/scripts/sft.py"})
+github_read_file({"repo": "huggingface/trl", "path": "trl/scripts/sft.py"})
 explore_hf_docs("trl")
 ```
 

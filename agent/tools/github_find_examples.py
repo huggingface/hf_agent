@@ -412,7 +412,7 @@ GITHUB_FIND_EXAMPLES_TOOL_SPEC = {
         "Sequence: github_find_examples → github_read_file (study the example) → implement based on what you found.\n\n"
         "Skip this only for: simple data queries, status checks, non-code tasks.\n\n"
         "Examples:\n"
-        "  {keyword: 'sft', repo: 'trl'} → finds examples/scripts/sft.py\n"
+        "  {keyword: 'sft', repo: 'trl'} → finds examples/sft_gemma3/sft_gemma3.py\n"
         "  {keyword: 'grpo', repo: 'trl'} → finds GRPO training examples\n"
         "  {repo: 'trl', max_results: 20} → lists all available training method examples"
     ),
